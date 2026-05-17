@@ -10,38 +10,46 @@ export function hoistRegistrations(sourceFile: ts.SourceFile, cache: Map<string,
       undefined,
       ts.factory.createStringLiteral('@webergency-utils/typechecker/runtime'),
       undefined
-    ),
-    // 2. const validators = globalThis.__WEBERGENCY_TYPECHECKER_VALIDATORS__;
-    ts.factory.createVariableStatement(
-      undefined,
-      ts.factory.createVariableDeclarationList([
-        ts.factory.createVariableDeclaration(
-          ts.factory.createIdentifier('validators'),
-          undefined,
-          undefined,
-          ts.factory.createPropertyAccessExpression(
-            ts.factory.createIdentifier('globalThis'),
-            '__WEBERGENCY_TYPECHECKER_VALIDATORS__'
-          )
-        )
-      ], ts.NodeFlags.Const)
-    ),
-    // 3. const MetadataStore = globalThis.__WEBERGENCY_TYPECHECKER_METADATA_STORE__;
-    ts.factory.createVariableStatement(
-      undefined,
-      ts.factory.createVariableDeclarationList([
-        ts.factory.createVariableDeclaration(
-          ts.factory.createIdentifier('MetadataStore'),
-          undefined,
-          undefined,
-          ts.factory.createPropertyAccessExpression(
-            ts.factory.createIdentifier('globalThis'),
-            '__WEBERGENCY_TYPECHECKER_METADATA_STORE__'
-          )
-        )
-      ], ts.NodeFlags.Const)
     )
   ];
+
+  if (!hasVariableDeclaration(sourceFile.statements, 'validators')) {
+    utilityStatements.push(
+      ts.factory.createVariableStatement(
+        undefined,
+        ts.factory.createVariableDeclarationList([
+          ts.factory.createVariableDeclaration(
+            ts.factory.createIdentifier('validators'),
+            undefined,
+            undefined,
+            ts.factory.createPropertyAccessExpression(
+              ts.factory.createIdentifier('globalThis'),
+              '__WEBERGENCY_TYPECHECKER_VALIDATORS__'
+            )
+          )
+        ], ts.NodeFlags.Const)
+      )
+    );
+  }
+
+  if (!hasVariableDeclaration(sourceFile.statements, 'MetadataStore')) {
+    utilityStatements.push(
+      ts.factory.createVariableStatement(
+        undefined,
+        ts.factory.createVariableDeclarationList([
+          ts.factory.createVariableDeclaration(
+            ts.factory.createIdentifier('MetadataStore'),
+            undefined,
+            undefined,
+            ts.factory.createPropertyAccessExpression(
+              ts.factory.createIdentifier('globalThis'),
+              '__WEBERGENCY_TYPECHECKER_METADATA_STORE__'
+            )
+          )
+        ], ts.NodeFlags.Const)
+      )
+    );
+  }
 
   const registrations: ts.Statement[] = [];
 
@@ -82,3 +90,17 @@ export function hoistRegistrations(sourceFile: ts.SourceFile, cache: Map<string,
     ...sourceFile.statements
   ]);
 }
+
+function hasVariableDeclaration(statements: readonly ts.Statement[], name: string): boolean {
+  for (const statement of statements) {
+    if (ts.isVariableStatement(statement)) {
+      for (const decl of statement.declarationList.declarations) {
+        if (ts.isIdentifier(decl.name) && decl.name.text === name) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
