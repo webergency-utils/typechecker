@@ -17,8 +17,6 @@ export declare function assert<T>(input: unknown, options?: ValidationMode | Val
 export declare function assertGuard<T>(input: unknown, options?: ValidationMode | ValidationOptions): asserts input is T;
 export declare function validate<T>(input: unknown, options?: ValidationMode | ValidationOptions): IValidation<T>;
 
-import transformer from './transformer.js';
-export { transformer };
-export default transformer;
 export * from './runtime/validators.js';
 export * from './runtime/tags.js';
+
