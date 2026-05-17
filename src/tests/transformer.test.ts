@@ -37,10 +37,10 @@ describe('Transformer Call Expression Replacements', () => {
             const res = validate<number>(x, 'relaxed');
         `;
         const compiled = compileAndTransform(code);
-        expect(compiled).toContain('mode = typeof opt === "string" ? opt : (opt?.mode || "strict")');
-        expect(compiled).toContain('tryConvert = typeof opt === "object" ? opt?.tryConvert : undefined');
-        expect(compiled).toContain('wrapArrays = typeof opt === "object" ? opt?.wrapArrays : undefined');
-        expect(compiled).toContain('mode, tryConvert, wrapArrays');
+        expect(compiled).toContain('__mode = typeof __opt === "string" ? __opt : (__opt?.mode || "strict")');
+        expect(compiled).toContain('__tryConvert = typeof __opt === "object" ? __opt?.tryConvert : undefined');
+        expect(compiled).toContain('__wrapArrays = typeof __opt === "object" ? __opt?.wrapArrays : undefined');
+        expect(compiled).toContain('mode: __mode, tryConvert: __tryConvert, wrapArrays: __wrapArrays');
     });
 
     it('should transform validate with options object', () => {
@@ -50,7 +50,7 @@ describe('Transformer Call Expression Replacements', () => {
             const res = validate<number>(x, { mode: 'relaxed', tryConvert: true, wrapArrays: true });
         `;
         const compiled = compileAndTransform(code);
-        expect(compiled).toContain('opt?.mode || "strict"');
-        expect(compiled).toContain('tryConvert = typeof opt === "object" ? opt?.tryConvert : undefined');
+        expect(compiled).toContain('__opt?.mode || "strict"');
+        expect(compiled).toContain('__tryConvert = typeof __opt === "object" ? __opt?.tryConvert : undefined');
     });
 });

@@ -41,40 +41,40 @@ export default function transformer(program: ts.Program) {
               if (fnName === 'validate') {
                   const tpl = `
                   (() => {
-                      const opt = __ARG1__;
-                      const mode = typeof opt === 'string' ? opt : (opt?.mode || 'strict');
-                      const tryConvert = typeof opt === 'object' ? opt?.tryConvert : undefined;
-                      const wrapArrays = typeof opt === 'object' ? opt?.wrapArrays : undefined;
-                      const ctx = { success: true, errors: [], mode, tryConvert, wrapArrays };
-                      const data = __GET_CALL__(__ARG0__, "", ctx);
-                      return { success: ctx.success, errors: ctx.errors, data };
+                      const __opt = __ARG1__;
+                      const __mode = typeof __opt === 'string' ? __opt : (__opt?.mode || 'strict');
+                      const __tryConvert = typeof __opt === 'object' ? __opt?.tryConvert : undefined;
+                      const __wrapArrays = typeof __opt === 'object' ? __opt?.wrapArrays : undefined;
+                      const __ctx = { success: true, errors: [], mode: __mode, tryConvert: __tryConvert, wrapArrays: __wrapArrays };
+                      const __res = __GET_CALL__(__ARG0__, "", __ctx);
+                      return { success: __ctx.success, errors: __ctx.errors, data: __res };
                   })()
                   `;
                   return injectNodes(templateToAst(tpl), { '__GET_CALL__': getCall, '__ARG0__': arg0, '__ARG1__': arg1 });
               } else if (fnName === 'is') {
                   const tpl = `
                   (() => {
-                      const opt = __ARG1__;
-                      const mode = typeof opt === 'string' ? opt : (opt?.mode || 'strict');
-                      const tryConvert = typeof opt === 'object' ? opt?.tryConvert : undefined;
-                      const wrapArrays = typeof opt === 'object' ? opt?.wrapArrays : undefined;
-                      const ctx = { success: true, errors: [], mode, tryConvert, wrapArrays };
-                      __GET_CALL__(__ARG0__, "", ctx);
-                      return ctx.success;
+                      const __opt = __ARG1__;
+                      const __mode = typeof __opt === 'string' ? __opt : (__opt?.mode || 'strict');
+                      const __tryConvert = typeof __opt === 'object' ? __opt?.tryConvert : undefined;
+                      const __wrapArrays = typeof __opt === 'object' ? __opt?.wrapArrays : undefined;
+                      const __ctx = { success: true, errors: [], mode: __mode, tryConvert: __tryConvert, wrapArrays: __wrapArrays };
+                      __GET_CALL__(__ARG0__, "", __ctx);
+                      return __ctx.success;
                   })()
                   `;
                   return injectNodes(templateToAst(tpl), { '__GET_CALL__': getCall, '__ARG0__': arg0, '__ARG1__': arg1 });
               } else if (fnName === 'assert' || fnName === 'assertGuard') {
                   const tpl = `
                   (() => {
-                      const opt = __ARG1__;
-                      const mode = typeof opt === 'string' ? opt : (opt?.mode || 'strict');
-                      const tryConvert = typeof opt === 'object' ? opt?.tryConvert : undefined;
-                      const wrapArrays = typeof opt === 'object' ? opt?.wrapArrays : undefined;
-                      const ctx = { success: true, errors: [], mode, tryConvert, wrapArrays };
-                      const data = __GET_CALL__(__ARG0__, "", ctx);
-                      if (!ctx.success) throw new Error("Validation Error: " + ctx.errors.join(', '));
-                      return data;
+                      const __opt = __ARG1__;
+                      const __mode = typeof __opt === 'string' ? __opt : (__opt?.mode || 'strict');
+                      const __tryConvert = typeof __opt === 'object' ? __opt?.tryConvert : undefined;
+                      const __wrapArrays = typeof __opt === 'object' ? __opt?.wrapArrays : undefined;
+                      const __ctx = { success: true, errors: [], mode: __mode, tryConvert: __tryConvert, wrapArrays: __wrapArrays };
+                      const __res = __GET_CALL__(__ARG0__, "", __ctx);
+                      if (!__ctx.success) throw new Error("Validation Error: " + __ctx.errors.join(', '));
+                      return __res;
                   })()
                   `;
                   return injectNodes(templateToAst(tpl), { '__GET_CALL__': getCall, '__ARG0__': arg0, '__ARG1__': arg1 });
