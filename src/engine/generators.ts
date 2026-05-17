@@ -228,7 +228,23 @@ export function createObjectCheck(props: any[], requiredUtils: Set<string>, expe
     const tpl = `
     (v, path, ctx) => {
         if (!validators.object(v, path, ctx, __KEYS__, __EXPECTED__)) return v;
-        let data = ctx.mode === 'strip' ? {} : v;
+        let data = v;
+        if (ctx.mode === 'strip') {
+            let hasAdditional = false;
+            const keys = Object.keys(v);
+            const allowed = __KEYS__;
+            if (keys.length > allowed.length) {
+                hasAdditional = true;
+            } else {
+                for (let i = 0; i < keys.length; i++) {
+                    if (!allowed.includes(keys[i])) {
+                        hasAdditional = true;
+                        break;
+                    }
+                }
+            }
+            if (hasAdditional) data = {};
+        }
         validators.props(v, data, path, ctx, __PROPS__);
         return data;
     }

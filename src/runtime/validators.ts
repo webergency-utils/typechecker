@@ -497,7 +497,22 @@ export function compileSchema(schema: any): (v: any, path: string, ctx: any) => 
             const allowedKeys = Object.keys(subSchema.properties || {});
             return (v, path, ctx) => {
                 if (!validators.object(v, path, ctx, allowedKeys, "Object")) return v;
-                let data = ctx.mode === 'strip' ? {} : v;
+                let data = v;
+                if (ctx.mode === 'strip') {
+                    let hasAdditional = false;
+                    const keys = Object.keys(v);
+                    if (keys.length > allowedKeys.length) {
+                        hasAdditional = true;
+                    } else {
+                        for (let i = 0; i < keys.length; i++) {
+                            if (!allowedKeys.includes(keys[i])) {
+                                hasAdditional = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (hasAdditional) data = {};
+                }
                 validators.props(v, data, path, ctx, propVals);
                 return data;
             };
