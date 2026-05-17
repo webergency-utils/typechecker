@@ -63,8 +63,9 @@ describe('Transformer Call Expression Replacements', () => {
                 age: number & constraint.Range<18, 99>;
                 name: string & constraint.Length<3, 10>;
                 email: string & format.Email;
+                id: string & format.ObjectId;
             }
-            const res = validate<ApiKey>({ key: "web_abc", age: 20, name: "Tom", email: "tom@web.com" });
+            const res = validate<ApiKey>({ key: "web_abc", age: 20, name: "Tom", email: "tom@web.com", id: "507f1f77bcf86cd799439011" });
         `;
         const compiled = compileAndTransform(code);
         expect(compiled).toContain('validators.custom');

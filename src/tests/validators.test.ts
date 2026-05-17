@@ -339,7 +339,8 @@ describe('Validators', () => {
                 { format: 'hostname', valid: 'google.com', invalid: '-google.com' },
                 { format: 'uri', valid: 'mailto:test@example.com', invalid: 'test@example.com' },
                 { format: 'time', valid: '19:55:00Z', invalid: '19-55-00' },
-                { format: 'duration', valid: 'P3D', invalid: 'invalid-duration' }
+                { format: 'duration', valid: 'P3D', invalid: 'invalid-duration' },
+                { format: 'objectId', valid: '507f1f77bcf86cd799439011', invalid: 'invalid-object-id' }
             ];
 
             for (const f of formats) {

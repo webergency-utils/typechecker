@@ -251,6 +251,7 @@ export const validators = {
             case 'uri': regex = /^[a-zA-Z][a-zA-Z0-9+.-]*:[^\s]*$/; break;
             case 'time': regex = /^\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[zZ]|[+-]\d{2}:\d{2})$/; break;
             case 'duration': regex = /^P(?!$)(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+S)?)?$/; break;
+            case 'objectId': regex = /^[0-9a-fA-F]{24}$/; break;
             default: break;
         }
 

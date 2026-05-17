@@ -13,7 +13,7 @@ export type Format<S extends
     | 'email' | 'uuid' | 'url' | 'ipv4' | 'ipv6' | 'date' | 'date-time'
     | 'byte' | 'password' | 'regex' | 'hostname' | 'idn-email' | 'idn-hostname'
     | 'iri' | 'iri-reference' | 'uri' | 'uri-reference' | 'uri-template'
-    | 'time' | 'duration'
+    | 'time' | 'duration' | 'objectId'
 > = { readonly __format: S };
 
 // Number Constraints
@@ -38,7 +38,7 @@ export namespace constraint {
         | 'email' | 'uuid' | 'url' | 'ipv4' | 'ipv6' | 'date' | 'date-time'
         | 'byte' | 'password' | 'regex' | 'hostname' | 'idn-email' | 'idn-hostname'
         | 'iri' | 'iri-reference' | 'uri' | 'uri-reference' | 'uri-template'
-        | 'time' | 'duration'
+        | 'time' | 'duration' | 'objectId'
     > = { readonly __format: S };
 
     // String Composite Helpers
@@ -83,6 +83,7 @@ export namespace format {
     export type Hostname = Format<'hostname'>;
     export type Time = Format<'time'>;
     export type Duration = Format<'duration'>;
+    export type ObjectId = Format<'objectId'>;
 }
 
 // Unified transform namespace
