@@ -60,7 +60,11 @@ export function createPrimitiveCheck(type: string, requiredUtils: Set<string>): 
 export function createConstrainedPrimitiveCheck(baseType: string, constraints: any[], requiredUtils: Set<string>, baseValidator?: ts.Expression): ts.Expression {
     requiredUtils.add('validators');
     
-    const constraintCode = constraints.map(c => {
+    const defaultConstraint = constraints.find(c => c.type === 'default');
+    const transformConstraints = constraints.filter(c => c.type === 'transform' || c.type === 'transform_custom');
+    const remainingConstraints = constraints.filter(c => c.type !== 'default' && c.type !== 'transform' && c.type !== 'transform_custom');
+    
+    const constraintCode = remainingConstraints.map(c => {
         const valStr = typeof c.value === 'bigint' ? `${c.value}n` : (typeof c.value === 'string' ? `"${c.value}"` : `${c.value}`);
         if (c.type === 'minLength') return `validators.minLength(v, path, ctx, ${valStr})`;
         if (c.type === 'maxLength') return `validators.maxLength(v, path, ctx, ${valStr})`;
@@ -74,14 +78,53 @@ export function createConstrainedPrimitiveCheck(baseType: string, constraints: a
         if (c.type === 'minItems') return `validators.minItems(v, path, ctx, ${valStr})`;
         if (c.type === 'maxItems') return `validators.maxItems(v, path, ctx, ${valStr})`;
         if (c.type === 'uniqueItems') return `validators.uniqueItems(v, path, ctx)`;
+        if (c.type === 'custom') return `validators.custom(v, path, ctx, ${c.value})`;
         return '';
     }).filter(c => c !== '').join(';\n            ');
+
+    let defaultInit = '';
+    if (defaultConstraint) {
+        defaultInit = `if (v === undefined) v = ${JSON.stringify(defaultConstraint.value)};\n        `;
+    }
+
+    let transformInit = '';
+    if (transformConstraints.length > 0) {
+        const statements = transformConstraints.map(tc => {
+            if (tc.type === 'transform' && tc.value === 'lowercase') {
+                return `if (typeof v === 'string') v = v.toLowerCase()`;
+            }
+            if (tc.type === 'transform' && tc.value === 'uppercase') {
+                return `if (typeof v === 'string') v = v.toUpperCase()`;
+            }
+            if (tc.type === 'transform' && tc.value === 'trim') {
+                return `if (typeof v === 'string') v = v.trim()`;
+            }
+            if (tc.type === 'transform' && tc.value === 'capitalize') {
+                return `if (typeof v === 'string' && v.length > 0) v = v.charAt(0).toUpperCase() + v.slice(1)`;
+            }
+            if (tc.type === 'transform' && tc.value === 'tonumber') {
+                return `v = Number(v)`;
+            }
+            if (tc.type === 'transform' && tc.value === 'toboolean') {
+                return `v = (v === 'true' || v === '1' || v === true || v === 1)`;
+            }
+            if (tc.type === 'transform' && tc.value === 'todate') {
+                return `v = new Date(v)`;
+            }
+            if (tc.type === 'transform_custom') {
+                return `v = ${tc.value}(v)`;
+            }
+            return '';
+        }).filter(s => s !== '').join(';\n            ');
+        
+        transformInit = `if (v !== undefined && v !== null) {\n            ${statements};\n        }\n        `;
+    }
 
     const tpl = `
     (v, path, ctx) => {
         const _s = ctx.success;
         ctx.success = true;
-        v = __BASE_CHECK__;
+        ${defaultInit}${transformInit}v = __BASE_CHECK__;
         if (ctx.success && v !== undefined && v !== null) {
             ${constraintCode};
         }

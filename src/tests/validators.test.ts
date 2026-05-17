@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { validators } from '../runtime/validators.js';
+import { validators, MetadataStore } from '../runtime/validators.js';
 
 describe('Validators', () => {
     let ctx: any;
@@ -239,5 +239,262 @@ describe('Validators', () => {
             expect(result).toEqual(input);
             expect(result).not.toBe(input); // Should be a copy
         });
+
+        it('should validate custom validations', () => {
+            const isEven = (val: number) => val % 2 === 0;
+            
+            expect(validators.custom(2, 'val', ctx, isEven)).toBe(2);
+            expect(ctx.success).toBe(true);
+
+            validators.custom(3, 'val', ctx, isEven);
+            expect(ctx.success).toBe(false);
+            expect(ctx.errors[0]).toEqual({ path: 'val', expected: 'Custom<isEven>', value: 3 });
+        });
+
+        it('should validate minLength and maxLength', () => {
+            expect(validators.minLength('abc', 'path', ctx, 2)).toBe('abc');
+            expect(ctx.success).toBe(true);
+
+            validators.minLength('abc', 'path', ctx, 4);
+            expect(ctx.success).toBe(false);
+            expect(ctx.errors[0]).toEqual({ path: 'path', expected: 'MinLength<4>', value: 'abc' });
+
+            ctx.success = true;
+            ctx.errors = [];
+            expect(validators.maxLength('abc', 'path', ctx, 4)).toBe('abc');
+            expect(ctx.success).toBe(true);
+
+            validators.maxLength('abc', 'path', ctx, 2);
+            expect(ctx.success).toBe(false);
+            expect(ctx.errors[0]).toEqual({ path: 'path', expected: 'MaxLength<2>', value: 'abc' });
+        });
+
+        it('should validate minimum, maximum, exclusiveMinimum, and exclusiveMaximum', () => {
+            // Numbers
+            expect(validators.minimum(10, 'path', ctx, 5)).toBe(10);
+            expect(ctx.success).toBe(true);
+            validators.minimum(10, 'path', ctx, 15);
+            expect(ctx.success).toBe(false);
+
+            ctx.success = true;
+            expect(validators.maximum(10, 'path', ctx, 15)).toBe(10);
+            expect(ctx.success).toBe(true);
+            validators.maximum(10, 'path', ctx, 5);
+            expect(ctx.success).toBe(false);
+
+            ctx.success = true;
+            expect(validators.exclusiveMinimum(10, 'path', ctx, 5)).toBe(10);
+            expect(ctx.success).toBe(true);
+            validators.exclusiveMinimum(10, 'path', ctx, 10);
+            expect(ctx.success).toBe(false);
+
+            ctx.success = true;
+            expect(validators.exclusiveMaximum(10, 'path', ctx, 15)).toBe(10);
+            expect(ctx.success).toBe(true);
+            validators.exclusiveMaximum(10, 'path', ctx, 10);
+            expect(ctx.success).toBe(false);
+
+            // Bigints
+            ctx.success = true;
+            expect(validators.minimum(10n, 'path', ctx, 5n)).toBe(10n);
+            expect(ctx.success).toBe(true);
+            validators.minimum(10n, 'path', ctx, 15n);
+            expect(ctx.success).toBe(false);
+        });
+
+        it('should validate multipleOf', () => {
+            expect(validators.multipleOf(10, 'path', ctx, 5)).toBe(10);
+            expect(ctx.success).toBe(true);
+            validators.multipleOf(10, 'path', ctx, 3);
+            expect(ctx.success).toBe(false);
+
+            // Bigints
+            ctx.success = true;
+            expect(validators.multipleOf(10n, 'path', ctx, 5n)).toBe(10n);
+            expect(ctx.success).toBe(true);
+            validators.multipleOf(10n, 'path', ctx, 3n);
+            expect(ctx.success).toBe(false);
+        });
+
+        it('should validate pattern', () => {
+            expect(validators.pattern('hello', 'path', ctx, /^h/, 'starts with h')).toBe('hello');
+            expect(ctx.success).toBe(true);
+
+            validators.pattern('hello', 'path', ctx, /^a/, 'starts with a');
+            expect(ctx.success).toBe(false);
+        });
+
+        it('should validate various formats', () => {
+            const formats = [
+                { format: 'email', valid: 'test@example.com', invalid: 'invalid-email' },
+                { format: 'uuid', valid: '123e4567-e89b-12d3-a456-426614174000', invalid: 'invalid-uuid' },
+                { format: 'url', valid: 'https://google.com', invalid: 'google.com' },
+                { format: 'ipv4', valid: '192.168.1.1', invalid: '999.999.999.999' },
+                { format: 'ipv6', valid: '2001:0db8:85a3:0000:0000:8a2e:0370:7334', invalid: 'invalid-ipv6' },
+                { format: 'date', valid: '2026-05-17', invalid: '17-05-2026' },
+                { format: 'date-time', valid: '2026-05-17T19:55:00.000Z', invalid: 'invalid-date-time' },
+                { format: 'byte', valid: 'Zm9vYmFy', invalid: 'invalid-base64!' },
+                { format: 'password', valid: 'anything-goes', invalid: '' }, // Password always passes
+                { format: 'regex', valid: '^[a-z]+$', invalid: '[' },
+                { format: 'hostname', valid: 'google.com', invalid: '-google.com' },
+                { format: 'uri', valid: 'mailto:test@example.com', invalid: 'test@example.com' },
+                { format: 'time', valid: '19:55:00Z', invalid: '19-55-00' },
+                { format: 'duration', valid: 'P3D', invalid: 'invalid-duration' }
+            ];
+
+            for (const f of formats) {
+                ctx.success = true;
+                ctx.errors = [];
+                expect(validators.format(f.valid, 'path', ctx, f.format)).toBe(f.valid);
+                expect(ctx.success).toBe(true);
+
+                if (f.invalid) {
+                    validators.format(f.invalid, 'path', ctx, f.format);
+                    expect(ctx.success).toBe(false);
+                }
+            }
+        });
+
+        it('should validate minItems and maxItems', () => {
+            expect(validators.minItems([1, 2], 'path', ctx, 2)).toEqual([1, 2]);
+            expect(ctx.success).toBe(true);
+            validators.minItems([1], 'path', ctx, 2);
+            expect(ctx.success).toBe(false);
+
+            ctx.success = true;
+            expect(validators.maxItems([1, 2], 'path', ctx, 2)).toEqual([1, 2]);
+            expect(ctx.success).toBe(true);
+            validators.maxItems([1, 2, 3], 'path', ctx, 2);
+            expect(ctx.success).toBe(false);
+        });
+
+        it('should validate uniqueItems', () => {
+            expect(validators.uniqueItems([1, 2, 3], 'path', ctx)).toEqual([1, 2, 3]);
+            expect(ctx.success).toBe(true);
+
+            validators.uniqueItems([1, 2, 2], 'path', ctx);
+            expect(ctx.success).toBe(false);
+
+            ctx.success = true;
+            // Objects uniqueness stringify check
+            expect(validators.uniqueItems([{ a: 1 }, { b: 2 }], 'path', ctx)).toEqual([{ a: 1 }, { b: 2 }]);
+            expect(ctx.success).toBe(true);
+
+            validators.uniqueItems([{ a: 1 }, { a: 1 }], 'path', ctx);
+            expect(ctx.success).toBe(false);
+        });
+
+        it('should support literal casting options', () => {
+            // Null to boolean false
+            ctx.tryConvert = true;
+            expect(validators.literal(null, 'path', ctx, false)).toBe(false);
+            expect(ctx.success).toBe(true);
+
+            // String to number literal
+            expect(validators.literal('123', 'path', ctx, 123)).toBe(123);
+            expect(ctx.success).toBe(true);
+
+            // String to boolean literal
+            expect(validators.literal('true', 'path', ctx, true)).toBe(true);
+            expect(validators.literal('yes', 'path', ctx, true)).toBe(true);
+            expect(validators.literal('0', 'path', ctx, false)).toBe(false);
+            expect(ctx.success).toBe(true);
+        });
+
+        it('should validate templateLiteral', () => {
+            expect(validators.templateLiteral('abc', 'path', ctx, /^[a-z]+$/, 'lowercase')).toBe('abc');
+            expect(ctx.success).toBe(true);
+
+            validators.templateLiteral('123', 'path', ctx, /^[a-z]+$/, 'lowercase');
+            expect(ctx.success).toBe(false);
+
+            ctx.success = true;
+            validators.templateLiteral(123, 'path', ctx, /^[a-z]+$/, 'lowercase');
+            expect(ctx.success).toBe(false);
+        });
+
+        it('should validate array with wrapArrays option', () => {
+            ctx.wrapArrays = true;
+            const result = validators.array(123, 'path', ctx, validators.number);
+            expect(result).toEqual([123]);
+            expect(ctx.success).toBe(true);
+        });
+
+        it('should validate any validator', () => {
+            expect(validators.any('anything')).toBe('anything');
+            expect(validators.any(123)).toBe(123);
+        });
+
+        it('should manage schema and validator registration in MetadataStore', () => {
+            // Validator
+            const dummyVal = () => {};
+            MetadataStore.registerValidator('h1', dummyVal);
+            expect(MetadataStore.getValidator('h1')).toBe(dummyVal);
+            expect(() => MetadataStore.getValidator('h2')).toThrow('Validator not found');
+
+            // Schema
+            const dummySchema = { type: 'string' };
+            MetadataStore.registerSchema('s1', dummySchema);
+            expect(MetadataStore.getSchema('s1')).toBe(dummySchema);
+            expect(() => MetadataStore.getSchema('s2')).toThrow('Schema not found');
+        });
+
+        it('should validate bigint and bigint tryConvert conversions', () => {
+            expect(validators.bigint(123n, 'path', ctx)).toBe(123n);
+            expect(ctx.success).toBe(true);
+
+            // Without tryConvert, numeric string should fail
+            validators.bigint('123', 'path', ctx);
+            expect(ctx.success).toBe(false);
+
+            // With tryConvert, numeric string should pass and cast
+            ctx.success = true;
+            ctx.errors = [];
+            ctx.tryConvert = true;
+            expect(validators.bigint('123', 'path', ctx)).toBe(123n);
+            expect(ctx.success).toBe(true);
+
+            // tryConvert fails with invalid string
+            ctx.success = true;
+            validators.bigint('invalid-bigint', 'path', ctx);
+            expect(ctx.success).toBe(false);
+        });
+
+        it('should validate regexp and regexp tryConvert conversions', () => {
+            const rx = /abc/i;
+            expect(validators.regexp(rx, 'path', ctx)).toBe(rx);
+            expect(ctx.success).toBe(true);
+
+            // Without tryConvert, string should fail
+            validators.regexp('/abc/i', 'path', ctx);
+            expect(ctx.success).toBe(false);
+
+            // With tryConvert, matching regex string `/abc/i` should parse
+            ctx.success = true;
+            ctx.errors = [];
+            ctx.tryConvert = true;
+            const parsed1 = validators.regexp('/abc/i', 'path', ctx);
+            expect(parsed1).toBeInstanceOf(RegExp);
+            expect(parsed1.source).toBe('abc');
+            expect(parsed1.flags).toBe('i');
+            expect(ctx.success).toBe(true);
+
+            // With tryConvert, plain string should compile to simple regex
+            const parsed2 = validators.regexp('abc', 'path', ctx);
+            expect(parsed2).toBeInstanceOf(RegExp);
+            expect(parsed2.source).toBe('abc');
+            expect(ctx.success).toBe(true);
+
+            // With tryConvert, invalid regex should fail
+            ctx.success = true;
+            validators.regexp('[', 'path', ctx);
+            expect(ctx.success).toBe(false);
+        });
+
+        it('should fallback on default format switch case', () => {
+            expect(validators.format('anything', 'path', ctx, 'unknown-format')).toBe('anything');
+            expect(ctx.success).toBe(true);
+        });
     });
 });
+

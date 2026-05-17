@@ -1,10 +1,10 @@
 import ts from 'typescript';
-import { buildValidator, generateHash } from './engine/resolver.js';
+import { buildValidator, generateHash, buildJsonSchema, objectToAst } from './engine/resolver.js';
 import { hoistRegistrations } from './engine/hoister.js';
 import { templateToAst, injectNodes } from './engine/generators.js';
 
 const TARGET_DECORATORS = ['Query', 'Body', 'Param'];
-const RUNTIME_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate'];
+const RUNTIME_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate', 'jsonSchema'];
 
 export default function transformer(program: ts.Program) {
   const checker = program.getTypeChecker();
@@ -12,6 +12,7 @@ export default function transformer(program: ts.Program) {
   return (context: ts.TransformationContext) => {
     return (sourceFile: ts.SourceFile) => {
       const validatorCache = new Map<string, ts.Expression>();
+      const schemasCache = new Map<string, ts.Expression>();
       const requiredUtils = new Set<string>();
 
       const visitor = (node: ts.Node): ts.Node => {
@@ -20,7 +21,7 @@ export default function transformer(program: ts.Program) {
           return node;
         }
 
-        // Handle runtime function calls (is, assert, assertGuard, validate)
+        // Handle runtime function calls (is, assert, assertGuard, validate, jsonSchema)
         if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
           const fnName = node.expression.text;
           if (RUNTIME_FUNCTIONS.includes(fnName)) {
@@ -32,13 +33,20 @@ export default function transformer(program: ts.Program) {
               if (!validatorCache.has(hash)) {
                 buildValidator(type, checker, validatorCache, requiredUtils);
               }
+              if (!schemasCache.has(hash)) {
+                const schemaObj = buildJsonSchema(type, checker);
+                schemasCache.set(hash, objectToAst(schemaObj));
+              }
 
               const mdStoreAccess = ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('MetadataStore'), 'getValidator');
               const getCall = ts.factory.createCallExpression(mdStoreAccess, undefined, [ts.factory.createStringLiteral(hash)]);
               const arg0 = node.arguments[0] || ts.factory.createIdentifier('undefined');
               const arg1 = node.arguments[1] || ts.factory.createIdentifier('undefined');
               
-              if (fnName === 'validate') {
+              if (fnName === 'jsonSchema') {
+                  const getSchemaAccess = ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('MetadataStore'), 'getSchema');
+                  return ts.factory.createCallExpression(getSchemaAccess, undefined, [ts.factory.createStringLiteral(hash)]);
+              } else if (fnName === 'validate') {
                   const tpl = `
                   (() => {
                       const __opt = __ARG1__;
@@ -99,12 +107,22 @@ export default function transformer(program: ts.Program) {
                     if (!validatorCache.has(hash)) {
                       buildValidator(type, checker, validatorCache, requiredUtils);
                     }
+                    if (!schemasCache.has(hash)) {
+                      const schemaObj = buildJsonSchema(type, checker);
+                      schemasCache.set(hash, objectToAst(schemaObj));
+                    }
 
+                    const mdStoreAccess = ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('MetadataStore'), 'getValidator');
+                    const getCall = ts.factory.createCallExpression(mdStoreAccess, undefined, [ts.factory.createStringLiteral(hash)]);
+
+                    const decoratorArgs = [...decorator.expression.arguments];
+                    decoratorArgs[1] = getCall;
+                    
                     return ts.factory.updateDecorator(decorator, 
                       ts.factory.createCallExpression(
                         decorator.expression.expression,
-                        undefined,
-                        [ts.factory.createStringLiteral(hash)]
+                        decorator.expression.typeArguments,
+                        decoratorArgs
                       )
                     );
                   }
@@ -128,7 +146,7 @@ export default function transformer(program: ts.Program) {
       };
 
       const transformedFile = ts.visitNode(sourceFile, visitor) as ts.SourceFile;
-      return hoistRegistrations(transformedFile, validatorCache, requiredUtils);
+      return hoistRegistrations(transformedFile, validatorCache, requiredUtils, schemasCache);
     };
   };
 }

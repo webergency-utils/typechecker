@@ -283,6 +283,14 @@ export const validators = {
         return v;
     },
 
+    custom: (v: any, path: string, ctx: ValidationContext, fn: Function) => {
+        if (!fn(v)) {
+            report(ctx, path, `Custom<${fn.name || 'validation'}>`, v);
+        }
+        return v;
+    },
+
+
     union: (v: any, path: string, ctx: ValidationContext, checks: Function[]) => {
         // Pass 1: No conversion
         for (const check of checks) {
@@ -331,6 +339,7 @@ export const validators = {
 
 export class MetadataStoreClass {
     private validators = new Map<string, Function>();
+    private schemas = new Map<string, any>();
 
     registerValidator(hash: string, validator: Function) {
         this.validators.set(hash, validator);
@@ -340,6 +349,16 @@ export class MetadataStoreClass {
         const val = this.validators.get(hash);
         if (!val) throw new Error(`Validator not found for hash: ${hash}`);
         return val;
+    }
+
+    registerSchema(hash: string, schema: any) {
+        this.schemas.set(hash, schema);
+    }
+
+    getSchema(hash: string): any {
+        const schema = this.schemas.get(hash);
+        if (!schema) throw new Error(`Schema not found for hash: ${hash}`);
+        return schema;
     }
 }
 

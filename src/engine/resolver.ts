@@ -56,6 +56,14 @@ export function buildValidator(
       }
       else if (sFlags & ts.TypeFlags.Number) baseName = 'number';
       else if (sFlags & ts.TypeFlags.BigInt) baseName = 'bigint';
+      else if (sFlags & ts.TypeFlags.Boolean || (sub as any).intrinsicName === 'boolean') {
+        baseName = 'boolean';
+        baseType = sub;
+      }
+      else if (sub.getSymbol()?.name === 'Date') {
+        baseName = 'date';
+        baseType = sub;
+      }
       else if (checker.isArrayType(sub)) {
         baseName = 'array';
         baseType = sub;
@@ -70,7 +78,52 @@ export function buildValidator(
           if (val === undefined && (pType.getFlags() & ts.TypeFlags.BooleanLiteral)) {
             val = (pType as any).intrinsicName === 'true';
           }
-          if (val !== undefined) {
+          if (val === undefined && (pType.getFlags() & ts.TypeFlags.Null)) {
+            val = null;
+          }
+          if (pName === '__default') {
+            constraints.push({ type: 'default', value: val });
+          } else if (pName === '__transform_lowercase') {
+            constraints.push({ type: 'transform', value: 'lowercase' });
+          } else if (pName === '__transform_uppercase') {
+            constraints.push({ type: 'transform', value: 'uppercase' });
+          } else if (pName === '__transform_trim') {
+            constraints.push({ type: 'transform', value: 'trim' });
+          } else if (pName === '__transform_capitalize') {
+            constraints.push({ type: 'transform', value: 'capitalize' });
+          } else if (pName === '__transform_tonumber') {
+            constraints.push({ type: 'transform', value: 'tonumber' });
+          } else if (pName === '__transform_toboolean') {
+            constraints.push({ type: 'transform', value: 'toboolean' });
+          } else if (pName === '__transform_todate') {
+            constraints.push({ type: 'transform', value: 'todate' });
+          } else if (pName === '__transform_custom') {
+            let fnName: string | undefined;
+            const symbol = pType.getSymbol() || pType.aliasSymbol;
+            if (symbol) {
+              fnName = symbol.getName();
+            } else {
+              const str = checker.typeToString(pType);
+              const match = str.match(/typeof\s+([a-zA-Z0-9_]+)/);
+              if (match) fnName = match[1];
+            }
+            if (fnName) {
+              constraints.push({ type: 'transform_custom', value: fnName });
+            }
+          } else if (pName === '__custom') {
+            let fnName: string | undefined;
+            const symbol = pType.getSymbol() || pType.aliasSymbol;
+            if (symbol) {
+              fnName = symbol.getName();
+            } else {
+              const str = checker.typeToString(pType);
+              const match = str.match(/typeof\s+([a-zA-Z0-9_]+)/);
+              if (match) fnName = match[1];
+            }
+            if (fnName) {
+              constraints.push({ type: 'custom', value: fnName });
+            }
+          } else if (val !== undefined) {
             if (pName === '__minLength') constraints.push({ type: 'minLength', value: val });
             else if (pName === '__maxLength') constraints.push({ type: 'maxLength', value: val });
             else if (pName === '__minimum') constraints.push({ type: 'minimum', value: val });
@@ -233,4 +286,196 @@ function buildStructuralSignature(type: ts.Type, checker: ts.TypeChecker, visite
 export function generateHash(type: ts.Type, checker: ts.TypeChecker): string {
   const structuralSig = buildStructuralSignature(type, checker);
   return createHash('sha256').update(structuralSig).digest('hex').substring(0, 16);
+}
+
+export function objectToAst(val: any): ts.Expression {
+  if (val === null) return ts.factory.createNull();
+  if (val === undefined) return ts.factory.createIdentifier('undefined');
+  if (typeof val === 'string') return ts.factory.createStringLiteral(val);
+  if (typeof val === 'number') return ts.factory.createNumericLiteral(val.toString());
+  if (typeof val === 'boolean') return val ? ts.factory.createTrue() : ts.factory.createFalse();
+  if (typeof val === 'bigint') return ts.factory.createBigIntLiteral(val.toString() + 'n');
+  if (Array.isArray(val)) {
+    return ts.factory.createArrayLiteralExpression(val.map(objectToAst));
+  }
+  if (typeof val === 'object') {
+    const properties = Object.entries(val).map(([k, v]) => 
+      ts.factory.createPropertyAssignment(ts.factory.createStringLiteral(k), objectToAst(v))
+    );
+    return ts.factory.createObjectLiteralExpression(properties, true);
+  }
+  return ts.factory.createIdentifier('undefined');
+}
+
+export function buildJsonSchema(type: ts.Type, checker: ts.TypeChecker, visited: Set<number> = new Set()): any {
+  const flags = type.getFlags();
+  const typeId = (type as any).id;
+  if (typeId && visited.has(typeId)) {
+    return { type: "object", description: "Circular reference" };
+  }
+  if (typeId) visited.add(typeId);
+
+  const isUnion = (flags & ts.TypeFlags.Union) !== 0 || type.isUnion();
+  const isIntersection = (flags & ts.TypeFlags.Intersection) !== 0 || type.isIntersection();
+
+  if (isUnion) {
+    const unionRes = {
+      anyOf: (type as ts.UnionType).types.map(t => buildJsonSchema(t, checker, visited))
+    };
+    if (typeId) visited.delete(typeId);
+    return unionRes;
+  }
+
+  if (isIntersection) {
+    const types = (type as ts.IntersectionType).types;
+    let baseSchema: any = {};
+    const constraints: Record<string, any> = {};
+
+    for (const sub of types) {
+      const sFlags = sub.getFlags();
+      if (sFlags & ts.TypeFlags.String || sFlags & ts.TypeFlags.TemplateLiteral) {
+        baseSchema = { type: "string" };
+      } else if (sFlags & ts.TypeFlags.Number) {
+        baseSchema = { type: "number" };
+      } else if (sFlags & ts.TypeFlags.BigInt) {
+        baseSchema = { type: "integer" };
+      } else if (sFlags & ts.TypeFlags.Boolean || (sub as any).intrinsicName === 'boolean') {
+        baseSchema = { type: "boolean" };
+      } else if (sub.getSymbol()?.name === 'Date') {
+        baseSchema = { type: "string", format: "date-time" };
+      } else if (checker.isArrayType(sub)) {
+        const elementType = (sub as ts.TypeReference).typeArguments?.[0] || checker.getAnyType();
+        baseSchema = { type: "array", items: buildJsonSchema(elementType, checker, visited) };
+      }
+
+      const props = checker.getPropertiesOfType(sub);
+      for (const prop of props) {
+        const pName = prop.getName();
+        if (pName.startsWith('__')) {
+          const pType = checker.getTypeOfSymbolAtLocation(prop, prop.valueDeclaration || (prop as any).declarations?.[0]);
+          let val = (pType as any).value;
+          if (val === undefined && (pType.getFlags() & ts.TypeFlags.BooleanLiteral)) {
+            val = (pType as any).intrinsicName === 'true';
+          }
+          if (val === undefined && (pType.getFlags() & ts.TypeFlags.Null)) {
+            val = null;
+          }
+          
+          if (pName === '__default') constraints.default = val;
+          else if (pName === '__minLength') constraints.minLength = val;
+          else if (pName === '__maxLength') constraints.maxLength = val;
+          else if (pName === '__minimum') constraints.minimum = val;
+          else if (pName === '__maximum') constraints.maximum = val;
+          else if (pName === '__exclusiveMinimum') constraints.exclusiveMinimum = val;
+          else if (pName === '__exclusiveMaximum') constraints.exclusiveMaximum = val;
+          else if (pName === '__multipleOf') constraints.multipleOf = val;
+          else if (pName === '__pattern') constraints.pattern = val;
+          else if (pName === '__format') constraints.format = val;
+          else if (pName === '__minItems') constraints.minItems = val;
+          else if (pName === '__maxItems') constraints.maxItems = val;
+          else if (pName === '__uniqueItems') constraints.uniqueItems = true;
+        }
+      }
+    }
+    
+    if (typeId) visited.delete(typeId);
+    return { ...baseSchema, ...constraints };
+  }
+
+  if (type.getSymbol()?.name === 'Date') {
+    if (typeId) visited.delete(typeId);
+    return { type: "string", format: "date-time" };
+  }
+  if (flags & ts.TypeFlags.Null) {
+    if (typeId) visited.delete(typeId);
+    return { type: "null" };
+  }
+  if (flags & ts.TypeFlags.Undefined || flags & ts.TypeFlags.Void) {
+    if (typeId) visited.delete(typeId);
+    return { type: "null", description: "undefined" };
+  }
+  if (flags & ts.TypeFlags.String) {
+    if (typeId) visited.delete(typeId);
+    return { type: "string" };
+  }
+  if (flags & ts.TypeFlags.Number) {
+    if (typeId) visited.delete(typeId);
+    return { type: "number" };
+  }
+  if (flags & ts.TypeFlags.BigInt) {
+    if (typeId) visited.delete(typeId);
+    return { type: "integer" };
+  }
+  if (flags & ts.TypeFlags.Boolean || (type as any).intrinsicName === 'boolean') {
+    if (typeId) visited.delete(typeId);
+    return { type: "boolean" };
+  }
+  if (type.isStringLiteral()) {
+    if (typeId) visited.delete(typeId);
+    return { type: "string", const: type.value };
+  }
+  if (type.isNumberLiteral()) {
+    if (typeId) visited.delete(typeId);
+    return { type: "number", const: type.value };
+  }
+  if (flags & ts.TypeFlags.BigIntLiteral) {
+    if (typeId) visited.delete(typeId);
+    return { type: "integer", const: (type as any).value };
+  }
+  if (flags & ts.TypeFlags.BooleanLiteral) {
+    if (typeId) visited.delete(typeId);
+    return { type: "boolean", const: (type as any).intrinsicName === 'true' };
+  }
+
+  if (checker.isArrayType(type)) {
+    const elementType = (type as ts.TypeReference).typeArguments?.[0] || checker.getAnyType();
+    if (typeId) visited.delete(typeId);
+    return {
+      type: "array",
+      items: buildJsonSchema(elementType, checker, visited)
+    };
+  }
+
+  if (checker.isTupleType(type)) {
+    const elementTypes = (type as ts.TypeReference).typeArguments || [];
+    if (typeId) visited.delete(typeId);
+    return {
+      type: "array",
+      items: elementTypes.map(t => buildJsonSchema(t, checker, visited)),
+      minItems: elementTypes.length,
+      maxItems: elementTypes.length
+    };
+  }
+
+  // Object types
+  if (flags & ts.TypeFlags.Object || type.isClassOrInterface()) {
+    const properties: Record<string, any> = {};
+    const required: string[] = [];
+    const props = checker.getPropertiesOfType(type);
+
+    for (const prop of props) {
+      const pName = prop.getName();
+      const isOptional = (prop.flags & ts.SymbolFlags.Optional) !== 0;
+      const propType = checker.getTypeOfSymbolAtLocation(prop, prop.valueDeclaration || (prop as any).declarations?.[0]);
+      
+      properties[pName] = buildJsonSchema(propType, checker, visited);
+      if (!isOptional) {
+        required.push(pName);
+      }
+    }
+
+    if (typeId) visited.delete(typeId);
+    const schemaObj: any = {
+      type: "object",
+      properties,
+      additionalProperties: false
+    };
+    if (required.length > 0) {
+      schemaObj.required = required;
+    }
+    return schemaObj;
+  }
+
+  if (typeId) visited.delete(typeId);
+  return {};
 }

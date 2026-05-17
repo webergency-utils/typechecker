@@ -1,1 +1,0 @@
-npx tsc && npx tsx tests/run.ts

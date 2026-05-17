@@ -1,6 +1,6 @@
 import ts from 'typescript';
 
-export function hoistRegistrations(sourceFile: ts.SourceFile, cache: Map<string, ts.Expression>, requiredUtils: Set<string>) {
+export function hoistRegistrations(sourceFile: ts.SourceFile, cache: Map<string, ts.Expression>, requiredUtils: Set<string>, schemasMap?: Map<string, ts.Expression>) {
   if (cache.size === 0 && requiredUtils.size === 0) return sourceFile;
 
   const utilityStatements: ts.Statement[] = [
@@ -89,6 +89,23 @@ export function hoistRegistrations(sourceFile: ts.SourceFile, cache: Map<string,
         )
       )
     );
+  }
+
+  if (schemasMap) {
+    for (const [hash, schemaExpr] of schemasMap.entries()) {
+      registrationAppends.push(
+        ts.factory.createExpressionStatement(
+          ts.factory.createCallExpression(
+            ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('MetadataStore'), 'registerSchema'),
+            undefined,
+            [
+              ts.factory.createStringLiteral(hash),
+              schemaExpr
+            ]
+          )
+        )
+      );
+    }
   }
 
   const mergedStatements = [

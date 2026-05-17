@@ -53,4 +53,79 @@ describe('Transformer Call Expression Replacements', () => {
         expect(compiled).toContain('__opt?.mode || "strict"');
         expect(compiled).toContain('__tryConvert = typeof __opt === "object" ? __opt?.tryConvert : undefined');
     });
+
+    it('should transform types with constraint and format namespace constraints and custom validations', () => {
+        const code = `
+            import { validate, constraint, format } from './src/index.js';
+            function startsWithWeb(val: string) { return val.startsWith("web_"); }
+            interface ApiKey {
+                key: string & constraint.Custom<typeof startsWithWeb>;
+                age: number & constraint.Range<18, 99>;
+                name: string & constraint.Length<3, 10>;
+                email: string & format.Email;
+            }
+            const res = validate<ApiKey>({ key: "web_abc", age: 20, name: "Tom", email: "tom@web.com" });
+        `;
+        const compiled = compileAndTransform(code);
+        expect(compiled).toContain('validators.custom');
+        expect(compiled).toContain('startsWithWeb');
+        expect(compiled).toContain('validators.minimum');
+        expect(compiled).toContain('validators.maximum');
+        expect(compiled).toContain('validators.minLength');
+        expect(compiled).toContain('validators.maxLength');
+        expect(compiled).toContain('validators.format');
+    });
+
+    it('should transform types with tag.Default initializers', () => {
+        const code = `
+            import { validate, tag } from './src/index.js';
+            interface Config {
+                port?: number & tag.Default<8080>;
+                host?: string & tag.Default<"localhost">;
+            }
+            const res = validate<Config>({});
+        `;
+        const compiled = compileAndTransform(code);
+        expect(compiled).toContain('v = 8080;');
+        expect(compiled).toContain('v = "localhost";');
+    });
+
+    it('should transform types with transform namespace and custom mappers', () => {
+        const code = `
+            import { validate, transform } from './src/index.js';
+            function customSuffix(val: string) { return val + "_suffix"; }
+            interface Member {
+                username: string & transform.Trim & transform.LowerCase;
+                joined: Date & transform.ToDate;
+                code: string & transform.Custom<typeof customSuffix>;
+            }
+            const res = validate<Member>({ username: "  TOM  ", joined: "2026-05-17T19:55:00.000Z", code: "abc" });
+        `;
+        const compiled = compileAndTransform(code);
+        expect(compiled).toContain('v = v.trim();');
+        expect(compiled).toContain('v = v.toLowerCase();');
+        expect(compiled).toContain('v = new Date(v);');
+        expect(compiled).toContain('v = customSuffix(v);');
+    });
+
+    it('should transform jsonSchema calls and pre-compile static schemas', () => {
+        const code = `
+            import { jsonSchema, constraint } from './src/index.js';
+            interface Account {
+                email: string;
+                age: number & constraint.Range<18, 99>;
+                verified: boolean;
+            }
+            const schema = jsonSchema<Account>();
+        `;
+        const compiled = compileAndTransform(code);
+        expect(compiled).toContain('MetadataStore.registerSchema');
+        expect(compiled).toContain('MetadataStore.getSchema');
+        expect(compiled).toContain('"type": "object"');
+        expect(compiled).toContain('"email"');
+        expect(compiled).toContain('"age"');
+        expect(compiled).toContain('"minimum": 18');
+        expect(compiled).toContain('"maximum": 99');
+    });
 });
+
