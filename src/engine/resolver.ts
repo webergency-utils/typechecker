@@ -319,8 +319,17 @@ export function buildJsonSchema(type: ts.Type, checker: ts.TypeChecker, visited:
   const isIntersection = (flags & ts.TypeFlags.Intersection) !== 0 || type.isIntersection();
 
   if (isUnion) {
+    const types = (type as ts.UnionType).types;
+    const isBoolUnion = types.length === 2 && 
+      types.every(t => (t.getFlags() & ts.TypeFlags.BooleanLiteral) !== 0);
+    
+    if (isBoolUnion) {
+      if (typeId) visited.delete(typeId);
+      return { type: "boolean" };
+    }
+
     const unionRes = {
-      anyOf: (type as ts.UnionType).types.map(t => buildJsonSchema(t, checker, visited))
+      anyOf: types.map(t => buildJsonSchema(t, checker, visited))
     };
     if (typeId) visited.delete(typeId);
     return unionRes;

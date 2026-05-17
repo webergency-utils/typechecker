@@ -126,6 +126,7 @@ describe('Transformer Call Expression Replacements', () => {
         expect(compiled).toContain('"age"');
         expect(compiled).toContain('"minimum": 18');
         expect(compiled).toContain('"maximum": 99');
+        expect(compiled).toContain('"type": "boolean"');
     });
 });
 

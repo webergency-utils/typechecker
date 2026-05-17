@@ -1,6 +1,6 @@
 {
   "name": "@webergency-utils/typechecker",
-  "version": "0.0.19",
+  "version": "0.0.20",
 
   "type": "module",
   "description": "TypeScript compiler plugin for runtime validation",
