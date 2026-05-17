@@ -129,5 +129,54 @@ describe('Transformer Call Expression Replacements', () => {
         expect(compiled).toContain('"maximum": 99');
         expect(compiled).toContain('"type": "boolean"');
     });
+
+    it('should handle deeply nested, circular, and highly complex types in jsonSchema', () => {
+        const code = `
+            import { jsonSchema, constraint, format } from './src/index.js';
+            
+            interface ComplexNode {
+                id: string & format.ObjectId;
+                name: string & constraint.Length<1, 100>;
+                kind: "folder" | "file";
+                tags: string[];
+                meta: {
+                    created: Date;
+                    size?: number & constraint.Minimum<0>;
+                    owner: {
+                        email: string & format.Email;
+                        active: boolean;
+                    };
+                };
+                children?: ComplexNode[];
+                tupleField: [number, string & format.UUID, boolean];
+            }
+            
+            const schema = jsonSchema<ComplexNode>();
+        `;
+        const compiled = compileAndTransform(code);
+        
+        expect(compiled).toContain('"type": "object"');
+        expect(compiled).toContain('"id"');
+        expect(compiled).toContain('"format": "objectId"');
+        expect(compiled).toContain('"name"');
+        expect(compiled).toContain('"minLength": 1');
+        expect(compiled).toContain('"maxLength": 100');
+        expect(compiled).toContain('"anyOf"');
+        expect(compiled).toContain('"const": "folder"');
+        expect(compiled).toContain('"const": "file"');
+        expect(compiled).toContain('"tags"');
+        expect(compiled).toContain('"meta"');
+        expect(compiled).toContain('"format": "date-time"');
+        expect(compiled).toContain('"minimum": 0');
+        expect(compiled).toContain('"email"');
+        expect(compiled).toContain('"format": "email"');
+        expect(compiled).toContain('"active"');
+        expect(compiled).toContain('"type": "boolean"');
+        expect(compiled).toContain('"children"');
+        expect(compiled).toContain('"description": "Circular reference"');
+        expect(compiled).toContain('"tupleField"');
+        expect(compiled).toContain('"minItems": 3');
+        expect(compiled).toContain('"maxItems": 3');
+    });
 });
 
