@@ -1,19 +1,34 @@
-# @webergency/types
+# @webergency-utils/typechecker
 
-`@webergency/types` is a powerful, zero-runtime-dependency TypeScript compiler plugin (transformer) that converts your static TypeScript types into high-performance, hashed, and hoisted runtime validators. 
+`@webergency-utils/typechecker` is a high-performance, zero-runtime-dependency TypeScript compiler plugin (transformer) that converts your static TypeScript types into optimized, hashed, and hoisted runtime validators.
 
-It is designed to work seamlessly with the `@webergency/endpoint` library, automatically enforcing strict data structures at compile time without bloating your runtime code.
+It is designed to work seamlessly with the `@webergency-utils/server` library, automatically enforcing strict data validation at compile time, and provides standard validation API wrappers matching `typia` with extended options for coercion and array handling.
+
+---
+
+## Features
+
+- **⚡ Blazing Fast**: No runtime schema parsing or generic reflection. Code is generated at compile time as highly optimized JavaScript pipelines.
+- **📦 Zero Dependency**: The generated code has absolutely zero external dependencies.
+- **🔄 Advanced Type Checking**: Full support for Unions, Intersections, Nested Objects, Tuples, and Optional Properties.
+- **🏷️ Tag-Based Validation**: Custom JSON-Schema validation tags directly inside your TypeScript types (e.g. `MinLength<8>`, `Format<'email'>`).
+- **🛡️ Multiple Validation Modes**: Easily switch between `'strict'`, `'relaxed'`, and `'strip'` modes.
+- **📈 Coercion & Coalescing**: Extended options for type conversion and single-value array wrapping (highly useful for HTTP Query parameters!).
+
+---
 
 ## Installation
 
-Since this library is a TypeScript compiler plugin, you will need a tool like `ts-patch` or `ttypescript` to hook into the compilation process.
+Since this library is a TypeScript compiler plugin, you will need a tool like `ts-patch` or `ts-node` to hook into the compilation process.
 
 ```bash
-npm install @webergency/types @webergency/endpoint
+npm install @webergency-utils/typechecker
 npm install -D ts-patch
 ```
 
 Run `ts-patch install` to patch your local TypeScript installation.
+
+---
 
 ## Configuration
 
@@ -23,22 +38,25 @@ Update your `tsconfig.json` to include the transformer in the `compilerOptions.p
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "CommonJS",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "plugins": [
-      { "transform": "@webergency/types" }
+      { "transform": "@webergency-utils/typechecker" }
     ]
   }
 }
 ```
 
+---
+
 ## Usage
 
-### 1. Decorator Transformation (Endpoints)
+### 1. Decorator-Based Validation (Server Endpoints)
 
-The transformer automatically intercepts decorators imported from `@webergency/endpoint` (`@Body`, `@Query`, `@Param`). It hashes the underlying TypeScript type, generates a highly optimized validation function, and hoists it to the top of the file using the `MetadataStore`.
+The transformer automatically intercepts decorators imported from `@webergency-utils/server` (`@Body`, `@Query`, `@Param`). It hashes the underlying TypeScript type, generates a highly optimized validation function, and hoists it to the top of the file using the `MetadataStore`.
 
 ```typescript
-import { Body, Query } from '@webergency/endpoint';
+import { Controller, Post, Body } from '@webergency-utils/server';
 
 interface UserDTO {
   id: string;
@@ -46,21 +64,25 @@ interface UserDTO {
   age?: number;
 }
 
+@Controller('/users')
 export class UserController {
-  // @webergency/types will automatically generate a validator for UserDTO,
-  // register it, and transform this to @Body("hash_id")
+  // @webergency-utils/typechecker automatically generates a validator for UserDTO,
+  // registers it, and transforms this to @Body("hash_id", "strict")
+  @Post('/')
   createUser(@Body() user: UserDTO) {
     return { success: true, user };
   }
 }
 ```
 
-### 2. Runtime Validation APIs
+---
 
-You can also manually validate unknown data anywhere in your code using the provided runtime APIs. The transformer intercepts these calls and injects the proper validation logic.
+### 2. Manual Runtime Validation APIs
+
+You can manually validate unknown data anywhere in your code. The transformer intercepts these calls and replaces them with direct, optimized validation functions.
 
 ```typescript
-import { is, assert, assertGuard, validate } from '@webergency/types';
+import { is, assert, assertGuard, validate } from '@webergency-utils/typechecker';
 
 interface Payload {
   id: string;
@@ -69,48 +91,106 @@ interface Payload {
 
 const data: unknown = JSON.parse('{"id": "123", "active": true}');
 
-// 1. is() - returns a boolean
+// 1. is() - returns a boolean (type guard)
 if (is<Payload>(data)) {
-  console.log(data.id);
+  console.log(data.id); // Narrowed to 'Payload'
 }
 
-// 2. assert() - returns the data or throws an error
+// 2. assert() - returns the narrowed value or throws an error
 const validData = assert<Payload>(data);
 
-// 3. assertGuard() - asserts the type for the current scope
+// 3. assertGuard() - asserts the type for the current scope in-place
 assertGuard<Payload>(data);
-console.log(data.id);
+console.log(data.id); // Narrowed in-place
 
-// 4. validate() - returns a detailed validation object
+// 4. validate() - returns a structured validation result with errors
 const result = validate<Payload>(data);
 if (result.success) {
   console.log(result.data);
 } else {
-  console.error(result.errors);
+  console.error(result.errors); // Array of formatted errors
 }
 ```
 
-### Validation Modes
+---
 
-All runtime validation functions accept a secondary `ValidationMode` argument:
+### 3. Extended Options & Validation Modes
 
-- `'strict'`: The input must precisely match the schema. Any additional properties not defined in the interface will cause validation to fail.
-- `'relaxed'`: The input must contain all required properties, but any additional properties are ignored.
-- `'strip'`: Validates like `'relaxed'`, but returns a new object with any unknown properties removed.
+All validation APIs accept either a string `ValidationMode` or a custom `ValidationOptions` object:
 
 ```typescript
-// Strict Mode
-if (is<Payload>(data, 'strict')) {
-  // data exactly matches Payload
-}
+export type ValidationMode = 'strict' | 'relaxed' | 'strip';
 
-// Strip Mode
-const cleanedData = assert<Payload>(data, 'strip');
+export interface ValidationOptions {
+  mode?: ValidationMode;    // default: 'strict'
+  tryConvert?: boolean;     // Converts string numbers, booleans, and dates (ideal for query parameters)
+  wrapArrays?: boolean;     // Wraps a single value into an array if the type expects an array
+}
 ```
+
+#### Examples:
+```typescript
+// Relaxed Mode (ignores additional properties)
+const user = assert<User>(data, 'relaxed');
+
+// Strip Mode (strips out any unknown properties from returned object)
+const cleanUser = assert<User>(data, 'strip');
+
+// Query-String Coercion
+const query = assert<SearchQuery>(rawQuery, {
+  mode: 'strip',
+  tryConvert: true, // Coerces "18" -> 18, "true" -> true, etc.
+  wrapArrays: true  // Coerces "tag" -> ["tag"] if tags: string[] is expected
+});
+```
+
+---
+
+## Supported JSON-Schema Validation Tags
+
+Add strict runtime metadata to your TypeScript primitives using standard intersection types:
+
+### String Tags
+- `MinLength<N>`: Minimum string length.
+- `MaxLength<N>`: Maximum string length.
+- `Pattern<RegExp>`: Regular expression validation.
+- `Format<T>`: Structural formats: `'email'`, `'uuid'`, `'date'`, `'date-time'`, `'url'`, `'ipv4'`, `'ipv6'`.
+
+### Number Tags
+- `Minimum<N>`: Minimum numeric value (inclusive).
+- `Maximum<N>`: Maximum numeric value (inclusive).
+- `ExclusiveMinimum<N>`: Greater than `N`.
+- `ExclusiveMaximum<N>`: Less than `N`.
+- `MultipleOf<N>`: Must be a multiple of `N`.
+
+### Array Tags
+- `MinItems<N>`: Minimum array items count.
+- `MaxItems<N>`: Maximum array items count.
+- `UniqueItems`: Enforces all elements in the array to be deeply unique.
+
+#### Example:
+```typescript
+import { MinLength, Minimum, Format, UniqueItems } from '@webergency-utils/typechecker';
+
+interface Profile {
+  email: string & Format<'email'>;
+  password: string & MinLength<8>;
+  age: number & Minimum<18>;
+  luckyNumbers: number[] & UniqueItems;
+}
+```
+
+---
 
 ## How it Works
 
-1. **AST Generation**: During compilation, the transformer analyzes your TS types and builds Abstract Syntax Trees (ASTs) for validation logic.
-2. **Circular References**: It uses a tracker to detect circular dependencies and generates safe lazy-lookups automatically.
-3. **Hoisting**: Generated validators are cached and pushed to the top of the file as `MetadataStore.registerValidator("hash", ...)` to ensure they are created exactly once.
-4. **Zero Dependency**: The emitted JS output does not rely on `@webergency/types`. All logic is natively baked-in or utilizes the `MetadataStore` from your endpoint layer.
+1. **AST Analysis**: The transformer scans compile-time type signatures and generates highly nested, direct runtime checks.
+2. **Circular References**: Safely handles recursive and circular types by generating self-referencing lazy functions.
+3. **Hoisting & Deduping**: Identical type validations are hoisted to top-level constants and shared, minimizing footprint.
+4. **Clean Emitted JS**: The output compiles into vanilla JS, utilizing direct, blazing-fast validation logic.
+
+---
+
+## License
+
+MIT © radixxko / [webergency-utils](https://github.com/webergency-utils)
