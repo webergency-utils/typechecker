@@ -43,15 +43,38 @@ export function hoistRegistrations(sourceFile: ts.SourceFile, cache: Map<string,
     )
   ];
 
-  const registrations = Array.from(cache.entries()).map(([hash, expr]) => 
-    ts.factory.createExpressionStatement(
-      ts.factory.createCallExpression(
-        ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('MetadataStore'), 'registerValidator'),
+  const registrations: ts.Statement[] = [];
+
+  for (const [hash, expr] of cache.entries()) {
+    // const __val_hash = expr;
+    registrations.push(
+      ts.factory.createVariableStatement(
         undefined,
-        [ts.factory.createStringLiteral(hash), expr]
+        ts.factory.createVariableDeclarationList([
+          ts.factory.createVariableDeclaration(
+            ts.factory.createIdentifier(`__val_${hash}`),
+            undefined,
+            undefined,
+            expr
+          )
+        ], ts.NodeFlags.Const)
       )
-    )
-  );
+    );
+
+    // MetadataStore.registerValidator(hash, __val_hash);
+    registrations.push(
+      ts.factory.createExpressionStatement(
+        ts.factory.createCallExpression(
+          ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('MetadataStore'), 'registerValidator'),
+          undefined,
+          [
+            ts.factory.createStringLiteral(hash),
+            ts.factory.createIdentifier(`__val_${hash}`)
+          ]
+        )
+      )
+    );
+  }
 
   return ts.factory.updateSourceFile(sourceFile, [
     ...utilityStatements,

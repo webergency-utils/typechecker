@@ -30,7 +30,7 @@ export default function transformer(program: ts.Program) {
               const hash = generateHash(type, checker);
 
               if (!validatorCache.has(hash)) {
-                validatorCache.set(hash, buildValidator(type, checker, new Map(), requiredUtils));
+                buildValidator(type, checker, validatorCache, requiredUtils);
               }
 
               const mdStoreAccess = ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('MetadataStore'), 'getValidator');
@@ -97,7 +97,7 @@ export default function transformer(program: ts.Program) {
                     const hash = generateHash(type, checker);
 
                     if (!validatorCache.has(hash)) {
-                      validatorCache.set(hash, buildValidator(type, checker, new Map(), requiredUtils));
+                      buildValidator(type, checker, validatorCache, requiredUtils);
                     }
 
                     return ts.factory.updateDecorator(decorator, 
