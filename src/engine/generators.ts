@@ -10,10 +10,6 @@ export function createRegistry(): IValidationRegistry {
     };
 }
 
-export const RUNTIME_UTILITIES: Record<string, string> = {
-    validators: 'import { validators } from "@webergency-utils/typechecker/runtime";'
-};
-
 export function templateToAst(template: string): ts.Expression {
     const source = ts.createSourceFile('template.ts', `const x = ${template};`, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
     const statement = source.statements[0];
