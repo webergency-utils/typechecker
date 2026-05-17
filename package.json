@@ -9,11 +9,15 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./runtime": {
       "types": "./dist/runtime/validators.d.ts",
-      "import": "./dist/runtime/validators.js"
+      "import": "./dist/runtime/validators.js",
+      "require": "./dist/runtime/validators.js",
+      "default": "./dist/runtime/validators.js"
     }
   },
   "files": [
