@@ -4,26 +4,42 @@ export function hoistRegistrations(sourceFile: ts.SourceFile, cache: Map<string,
   if (cache.size === 0 && requiredUtils.size === 0) return sourceFile;
 
   const utilityStatements: ts.Statement[] = [
+    // 1. import "@webergency-utils/typechecker/runtime";
     ts.factory.createImportDeclaration(
       undefined,
-      ts.factory.createImportClause(
-        false,
-        undefined,
-        ts.factory.createNamedImports([
-          ts.factory.createImportSpecifier(
-            false,
-            undefined,
-            ts.factory.createIdentifier('validators')
-          ),
-          ts.factory.createImportSpecifier(
-            false,
-            undefined,
-            ts.factory.createIdentifier('MetadataStore')
-          )
-        ])
-      ),
+      undefined,
       ts.factory.createStringLiteral('@webergency-utils/typechecker/runtime'),
       undefined
+    ),
+    // 2. const validators = globalThis.__WEBERGENCY_TYPECHECKER_VALIDATORS__;
+    ts.factory.createVariableStatement(
+      undefined,
+      ts.factory.createVariableDeclarationList([
+        ts.factory.createVariableDeclaration(
+          ts.factory.createIdentifier('validators'),
+          undefined,
+          undefined,
+          ts.factory.createPropertyAccessExpression(
+            ts.factory.createIdentifier('globalThis'),
+            '__WEBERGENCY_TYPECHECKER_VALIDATORS__'
+          )
+        )
+      ], ts.NodeFlags.Const)
+    ),
+    // 3. const MetadataStore = globalThis.__WEBERGENCY_TYPECHECKER_METADATA_STORE__;
+    ts.factory.createVariableStatement(
+      undefined,
+      ts.factory.createVariableDeclarationList([
+        ts.factory.createVariableDeclaration(
+          ts.factory.createIdentifier('MetadataStore'),
+          undefined,
+          undefined,
+          ts.factory.createPropertyAccessExpression(
+            ts.factory.createIdentifier('globalThis'),
+            '__WEBERGENCY_TYPECHECKER_METADATA_STORE__'
+          )
+        )
+      ], ts.NodeFlags.Const)
     )
   ];
 

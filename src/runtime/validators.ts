@@ -344,3 +344,6 @@ export class MetadataStoreClass {
 }
 
 export const MetadataStore = new MetadataStoreClass();
+
+(globalThis as any).__WEBERGENCY_TYPECHECKER_METADATA_STORE__ = MetadataStore;
+(globalThis as any).__WEBERGENCY_TYPECHECKER_VALIDATORS__ = validators;
