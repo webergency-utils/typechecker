@@ -497,5 +497,90 @@ describe('Validators', () => {
             expect(ctx.success).toBe(true);
         });
     });
+
+    describe('Dynamic Runtime Schema Validation', () => {
+        it('should compile and validate simple and complex schemas at runtime', () => {
+            const schema = {
+                type: "object",
+                properties: {
+                    name: { type: "string", minLength: 2 },
+                    age: { type: "number", minimum: 18 },
+                    tags: { type: "array", items: { type: "string" }, uniqueItems: true },
+                    active: { type: "boolean" },
+                    nullField: { type: "null" },
+                    kind: { const: "member" },
+                    role: { anyOf: [{ const: "admin" }, { const: "user" }] }
+                },
+                required: ["name", "age"]
+            };
+
+            const validateFn = MetadataStore.getOrCompileSchema(schema);
+
+            // Valid payload
+            ctx.success = true;
+            ctx.errors = [];
+            const validPayload = {
+                name: "Tom",
+                age: 20,
+                tags: ["web", "dev"],
+                active: true,
+                nullField: null,
+                kind: "member",
+                role: "admin"
+            };
+            const result1 = validateFn(validPayload, 'path', ctx);
+            expect(ctx.success).toBe(true);
+            expect(result1.name).toBe("Tom");
+
+            // Invalid payload
+            ctx.success = true;
+            ctx.errors = [];
+            const invalidPayload = {
+                name: "T",
+                age: 15,
+                tags: ["web", "web"],
+                active: "yes",
+                nullField: 123,
+                kind: "guest",
+                role: "superadmin"
+            };
+            validateFn(invalidPayload, 'path', ctx);
+            expect(ctx.success).toBe(false);
+            expect(ctx.errors.length).toBeGreaterThan(0);
+        });
+
+        it('should support dynamic schema validation for circular structures', () => {
+            const circularSchema = {
+                $defs: {
+                    Node: {
+                        type: "object",
+                        properties: {
+                            value: { type: "string" },
+                            next: { $ref: "#/$defs/Node" }
+                        },
+                        required: ["value"]
+                    }
+                },
+                $ref: "#/$defs/Node"
+            };
+
+            const validateFn = MetadataStore.getOrCompileSchema(circularSchema);
+
+            ctx.success = true;
+            ctx.errors = [];
+            const circularData = {
+                value: "root",
+                next: {
+                    value: "child",
+                    next: {
+                        value: "grandchild"
+                    }
+                }
+            };
+            const result = validateFn(circularData, 'path', ctx);
+            expect(ctx.success).toBe(true);
+            expect(result.next.next.value).toBe("grandchild");
+        });
+    });
 });
 

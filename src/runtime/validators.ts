@@ -341,6 +341,7 @@ export const validators = {
 export class MetadataStoreClass {
     private validators = new Map<string, Function>();
     private schemas = new Map<string, any>();
+    private compiledSchemas = new WeakMap<object, Function>();
 
     registerValidator(hash: string, validator: Function) {
         this.validators.set(hash, validator);
@@ -361,9 +362,162 @@ export class MetadataStoreClass {
         if (!schema) throw new Error(`Schema not found for hash: ${hash}`);
         return schema;
     }
+
+    getOrCompileSchema(schema: any): Function {
+        if (typeof schema !== 'object' || schema === null) {
+            throw new Error('Invalid JSON Schema: must be a non-null object');
+        }
+        let compiled = this.compiledSchemas.get(schema);
+        if (!compiled) {
+            compiled = compileSchema(schema);
+            this.compiledSchemas.set(schema, compiled);
+        }
+        return compiled;
+    }
 }
 
 export const MetadataStore = new MetadataStoreClass();
+
+export function compileSchema(schema: any): (v: any, path: string, ctx: any) => any {
+    const rootDefs = schema.$defs || schema.definitions || {};
+    const compiledDefs = new Map<string, any>();
+
+    function build(subSchema: any): (v: any, path: string, ctx: any) => any {
+        if (!subSchema || typeof subSchema !== 'object') {
+            return (v) => v;
+        }
+
+        if (subSchema.$ref) {
+            const refPath = subSchema.$ref;
+            if (compiledDefs.has(refPath)) {
+                return (v, path, ctx) => compiledDefs.get(refPath)(v, path, ctx);
+            }
+            
+            const parts = refPath.split('/');
+            const defName = parts[parts.length - 1];
+            const targetSchema = rootDefs[defName];
+            
+            if (!targetSchema) {
+                throw new Error(`Schema reference not found: ${refPath}`);
+            }
+
+            let resolved: any = null;
+            const proxy = (v: any, path: string, ctx: any) => {
+                if (!resolved) {
+                    resolved = build(targetSchema);
+                }
+                return resolved(v, path, ctx);
+            };
+            
+            compiledDefs.set(refPath, proxy);
+            return proxy;
+        }
+
+        if (subSchema.type === 'string') {
+            const minLength = subSchema.minLength;
+            const maxLength = subSchema.maxLength;
+            const pattern = subSchema.pattern ? new RegExp(subSchema.pattern) : undefined;
+            const patternStr = subSchema.pattern;
+            const format = subSchema.format;
+            
+            return (v, path, ctx) => {
+                v = validators.string(v, path, ctx);
+                if (v === undefined || v === null) return v;
+                if (minLength !== undefined) validators.minLength(v, path, ctx, minLength);
+                if (maxLength !== undefined) validators.maxLength(v, path, ctx, maxLength);
+                if (pattern !== undefined) validators.pattern(v, path, ctx, pattern, patternStr);
+                if (format !== undefined) validators.format(v, path, ctx, format);
+                return v;
+            };
+        }
+
+        if (subSchema.type === 'number' || subSchema.type === 'integer') {
+            const isInt = subSchema.type === 'integer';
+            const minimum = subSchema.minimum;
+            const maximum = subSchema.maximum;
+            const multipleOf = subSchema.multipleOf;
+            
+            return (v, path, ctx) => {
+                v = validators.number(v, path, ctx);
+                if (v === undefined || v === null) return v;
+                if (isInt && typeof v === 'number' && !Number.isInteger(v)) {
+                    report(ctx, path, "integer", v);
+                }
+                if (minimum !== undefined) validators.minimum(v, path, ctx, minimum);
+                if (maximum !== undefined) validators.maximum(v, path, ctx, maximum);
+                if (multipleOf !== undefined) validators.multipleOf(v, path, ctx, multipleOf);
+                return v;
+            };
+        }
+
+        if (subSchema.type === 'boolean') {
+            return (v, path, ctx) => validators.boolean(v, path, ctx);
+        }
+
+        if (subSchema.type === 'null') {
+            return (v, path, ctx) => validators.null(v, path, ctx);
+        }
+
+        if (subSchema.anyOf) {
+            const checks = subSchema.anyOf.map((s: any) => build(s));
+            return (v, path, ctx) => validators.union(v, path, ctx, checks);
+        }
+
+        if (subSchema.type === 'array') {
+            if (Array.isArray(subSchema.items)) {
+                const checks = subSchema.items.map((s: any) => build(s));
+                return (v, path, ctx) => validators.tuple(v, path, ctx, checks);
+            } else {
+                const check = build(subSchema.items);
+                const minItems = subSchema.minItems;
+                const maxItems = subSchema.maxItems;
+                const uniqueItems = subSchema.uniqueItems;
+                
+                return (v, path, ctx) => {
+                    v = validators.array(v, path, ctx, check);
+                    if (Array.isArray(v)) {
+                        if (minItems !== undefined) validators.minItems(v, path, ctx, minItems);
+                        if (maxItems !== undefined) validators.maxItems(v, path, ctx, maxItems);
+                        if (uniqueItems) validators.uniqueItems(v, path, ctx);
+                    }
+                    return v;
+                };
+            }
+        }
+
+        if (subSchema.type === 'object') {
+            const props = Object.entries(subSchema.properties || {});
+            const required = subSchema.required || [];
+            const propVals = props.map(([key, s]: [string, any]) => {
+                const isOptional = !required.includes(key);
+                const check = build(s);
+                return [key, isOptional, check] as [string, boolean, any];
+            });
+
+            const allowedKeys = Object.keys(subSchema.properties || {});
+            return (v, path, ctx) => {
+                if (!validators.object(v, path, ctx, allowedKeys, "Object")) return v;
+                let data = ctx.mode === 'strip' ? {} : v;
+                validators.props(v, data, path, ctx, propVals);
+                return data;
+            };
+        }
+
+        if (subSchema.const !== undefined) {
+            const expected = subSchema.const;
+            return (v, path, ctx) => {
+                if (v !== expected) {
+                    report(ctx, path, `Const<${JSON.stringify(expected)}>`, v);
+                }
+                return v;
+            };
+        }
+
+        return (v) => v;
+    }
+
+    return build(schema);
+}
 
 (globalThis as any).__WEBERGENCY_TYPECHECKER_METADATA_STORE__ = MetadataStore;
 (globalThis as any).__WEBERGENCY_TYPECHECKER_VALIDATORS__ = validators;

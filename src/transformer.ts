@@ -38,10 +38,46 @@ export default function transformer(program: ts.Program) {
                 schemasCache.set(hash, objectToAst(schemaObj));
               }
 
-              const mdStoreAccess = ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('MetadataStore'), 'getValidator');
-              const getCall = ts.factory.createCallExpression(mdStoreAccess, undefined, [ts.factory.createStringLiteral(hash)]);
+              let getCall: ts.Expression;
               const arg0 = node.arguments[0] || ts.factory.createIdentifier('undefined');
               const arg1 = node.arguments[1] || ts.factory.createIdentifier('undefined');
+
+              let hasSchema = false;
+              let schemaExpr: ts.Expression | undefined;
+
+              if (node.arguments[1]) {
+                const optArg = node.arguments[1];
+                const optType = checker.getTypeAtLocation(optArg);
+                const schemaProp = optType.getProperty('schema');
+                if (schemaProp) {
+                  hasSchema = true;
+                  if (ts.isObjectLiteralExpression(optArg)) {
+                    const prop = optArg.properties.find(p => {
+                      if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === 'schema') return true;
+                      if (ts.isShorthandPropertyAssignment(p) && p.name.text === 'schema') return true;
+                      return false;
+                    });
+                    if (prop) {
+                      if (ts.isPropertyAssignment(prop)) {
+                        schemaExpr = prop.initializer;
+                      } else if (ts.isShorthandPropertyAssignment(prop)) {
+                        schemaExpr = prop.name;
+                      }
+                    }
+                  }
+                  if (!schemaExpr) {
+                    schemaExpr = ts.factory.createPropertyAccessExpression(optArg, 'schema');
+                  }
+                }
+              }
+
+              if (hasSchema && schemaExpr) {
+                const compileAccess = ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('MetadataStore'), 'getOrCompileSchema');
+                getCall = ts.factory.createCallExpression(compileAccess, undefined, [schemaExpr]);
+              } else {
+                const mdStoreAccess = ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('MetadataStore'), 'getValidator');
+                getCall = ts.factory.createCallExpression(mdStoreAccess, undefined, [ts.factory.createStringLiteral(hash)]);
+              }
               
               if (fnName === 'jsonSchema') {
                   const getSchemaAccess = ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('MetadataStore'), 'getSchema');

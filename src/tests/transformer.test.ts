@@ -178,5 +178,22 @@ describe('Transformer Call Expression Replacements', () => {
         expect(compiled).toContain('"minItems": 3');
         expect(compiled).toContain('"maxItems": 3');
     });
+
+    it('should transform validate calls with dynamic validation schema option', () => {
+        const code = `
+            import { validate } from './src/index.js';
+            const schema = {
+                type: "object",
+                properties: {
+                    name: { type: "string" },
+                    age: { type: "number", minimum: 18 }
+                },
+                required: ["name"]
+            };
+            const res = validate<any>({ name: "Tom", age: 20 }, { schema });
+        `;
+        const compiled = compileAndTransform(code);
+        expect(compiled).toContain('MetadataStore.getOrCompileSchema(schema)');
+    });
 });
 

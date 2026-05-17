@@ -10,6 +10,7 @@ export interface ValidationOptions {
     mode?: ValidationMode;
     tryConvert?: boolean;
     wrapArrays?: boolean;
+    schema?: any;
 }
 
 export declare function is<T>(input: unknown, options?: ValidationMode | ValidationOptions): input is T;
