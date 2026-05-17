@@ -173,7 +173,7 @@ describe('Transformer Call Expression Replacements', () => {
         expect(compiled).toContain('"active"');
         expect(compiled).toContain('"type": "boolean"');
         expect(compiled).toContain('"children"');
-        expect(compiled).toContain('"description": "Circular reference"');
+        expect(compiled).toContain('"$ref": "#/$defs/ComplexNode_');
         expect(compiled).toContain('"tupleField"');
         expect(compiled).toContain('"minItems": 3');
         expect(compiled).toContain('"maxItems": 3');

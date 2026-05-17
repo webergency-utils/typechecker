@@ -307,13 +307,45 @@ export function objectToAst(val: any): ts.Expression {
   return ts.factory.createIdentifier('undefined');
 }
 
-export function buildJsonSchema(type: ts.Type, checker: ts.TypeChecker, visited: Set<number> = new Set()): any {
+export function buildJsonSchema(type: ts.Type, checker: ts.TypeChecker): any {
+  const defs: Record<string, any> = {};
+  const visited = new Map<number, string>();
+  const rootSchema = buildJsonSchemaInternal(type, checker, defs, visited);
+
+  if (Object.keys(defs).length > 0) {
+    const rootSymbol = type.getSymbol() || type.aliasSymbol;
+    const rootName = rootSymbol ? rootSymbol.getName() : 'Root';
+    const rootHash = generateHash(type, checker);
+    const rootDefName = `${rootName}_${rootHash}`;
+
+    if (defs[rootDefName]) {
+      return {
+        $ref: `#/$defs/${rootDefName}`,
+        $defs: defs
+      };
+    } else {
+      return {
+        ...rootSchema,
+        $defs: defs
+      };
+    }
+  }
+
+  return rootSchema;
+}
+
+function buildJsonSchemaInternal(
+  type: ts.Type, 
+  checker: ts.TypeChecker, 
+  defs: Record<string, any>, 
+  visited: Map<number, string>
+): any {
   const flags = type.getFlags();
   const typeId = (type as any).id;
+
   if (typeId && visited.has(typeId)) {
-    return { type: "object", description: "Circular reference" };
+    return { $ref: `#/$defs/${visited.get(typeId)}` };
   }
-  if (typeId) visited.add(typeId);
 
   const isUnion = (flags & ts.TypeFlags.Union) !== 0 || type.isUnion();
   const isIntersection = (flags & ts.TypeFlags.Intersection) !== 0 || type.isIntersection();
@@ -324,15 +356,12 @@ export function buildJsonSchema(type: ts.Type, checker: ts.TypeChecker, visited:
       types.every(t => (t.getFlags() & ts.TypeFlags.BooleanLiteral) !== 0);
     
     if (isBoolUnion) {
-      if (typeId) visited.delete(typeId);
       return { type: "boolean" };
     }
 
-    const unionRes = {
-      anyOf: types.map(t => buildJsonSchema(t, checker, visited))
+    return {
+      anyOf: types.map(t => buildJsonSchemaInternal(t, checker, defs, visited))
     };
-    if (typeId) visited.delete(typeId);
-    return unionRes;
   }
 
   if (isIntersection) {
@@ -354,7 +383,7 @@ export function buildJsonSchema(type: ts.Type, checker: ts.TypeChecker, visited:
         baseSchema = { type: "string", format: "date-time" };
       } else if (checker.isArrayType(sub)) {
         const elementType = (sub as ts.TypeReference).typeArguments?.[0] || checker.getAnyType();
-        baseSchema = { type: "array", items: buildJsonSchema(elementType, checker, visited) };
+        baseSchema = { type: "array", items: buildJsonSchemaInternal(elementType, checker, defs, visited) };
       }
 
       const props = checker.getPropertiesOfType(sub);
@@ -387,70 +416,56 @@ export function buildJsonSchema(type: ts.Type, checker: ts.TypeChecker, visited:
       }
     }
     
-    if (typeId) visited.delete(typeId);
     return { ...baseSchema, ...constraints };
   }
 
   if (type.getSymbol()?.name === 'Date') {
-    if (typeId) visited.delete(typeId);
     return { type: "string", format: "date-time" };
   }
   if (flags & ts.TypeFlags.Null) {
-    if (typeId) visited.delete(typeId);
     return { type: "null" };
   }
   if (flags & ts.TypeFlags.Undefined || flags & ts.TypeFlags.Void) {
-    if (typeId) visited.delete(typeId);
     return { type: "null", description: "undefined" };
   }
   if (flags & ts.TypeFlags.String) {
-    if (typeId) visited.delete(typeId);
     return { type: "string" };
   }
   if (flags & ts.TypeFlags.Number) {
-    if (typeId) visited.delete(typeId);
     return { type: "number" };
   }
   if (flags & ts.TypeFlags.BigInt) {
-    if (typeId) visited.delete(typeId);
     return { type: "integer" };
   }
   if (flags & ts.TypeFlags.Boolean || (type as any).intrinsicName === 'boolean') {
-    if (typeId) visited.delete(typeId);
     return { type: "boolean" };
   }
   if (type.isStringLiteral()) {
-    if (typeId) visited.delete(typeId);
     return { type: "string", const: type.value };
   }
   if (type.isNumberLiteral()) {
-    if (typeId) visited.delete(typeId);
     return { type: "number", const: type.value };
   }
   if (flags & ts.TypeFlags.BigIntLiteral) {
-    if (typeId) visited.delete(typeId);
     return { type: "integer", const: (type as any).value };
   }
   if (flags & ts.TypeFlags.BooleanLiteral) {
-    if (typeId) visited.delete(typeId);
     return { type: "boolean", const: (type as any).intrinsicName === 'true' };
   }
 
   if (checker.isArrayType(type)) {
     const elementType = (type as ts.TypeReference).typeArguments?.[0] || checker.getAnyType();
-    if (typeId) visited.delete(typeId);
     return {
       type: "array",
-      items: buildJsonSchema(elementType, checker, visited)
+      items: buildJsonSchemaInternal(elementType, checker, defs, visited)
     };
   }
 
   if (checker.isTupleType(type)) {
     const elementTypes = (type as ts.TypeReference).typeArguments || [];
-    if (typeId) visited.delete(typeId);
     return {
       type: "array",
-      items: elementTypes.map(t => buildJsonSchema(t, checker, visited)),
+      items: elementTypes.map(t => buildJsonSchemaInternal(t, checker, defs, visited)),
       minItems: elementTypes.length,
       maxItems: elementTypes.length
     };
@@ -458,6 +473,17 @@ export function buildJsonSchema(type: ts.Type, checker: ts.TypeChecker, visited:
 
   // Object types
   if (flags & ts.TypeFlags.Object || type.isClassOrInterface()) {
+    const symbol = type.getSymbol() || type.aliasSymbol;
+    const name = symbol ? symbol.getName() : 'Object';
+    const typeHash = generateHash(type, checker);
+    const defName = `${name}_${typeHash}`;
+
+    if (defs[defName]) {
+      return { $ref: `#/$defs/${defName}` };
+    }
+
+    if (typeId) visited.set(typeId, defName);
+
     const properties: Record<string, any> = {};
     const required: string[] = [];
     const props = checker.getPropertiesOfType(type);
@@ -467,13 +493,12 @@ export function buildJsonSchema(type: ts.Type, checker: ts.TypeChecker, visited:
       const isOptional = (prop.flags & ts.SymbolFlags.Optional) !== 0;
       const propType = checker.getTypeOfSymbolAtLocation(prop, prop.valueDeclaration || (prop as any).declarations?.[0]);
       
-      properties[pName] = buildJsonSchema(propType, checker, visited);
+      properties[pName] = buildJsonSchemaInternal(propType, checker, defs, visited);
       if (!isOptional) {
         required.push(pName);
       }
     }
 
-    if (typeId) visited.delete(typeId);
     const schemaObj: any = {
       type: "object",
       properties,
@@ -482,9 +507,13 @@ export function buildJsonSchema(type: ts.Type, checker: ts.TypeChecker, visited:
     if (required.length > 0) {
       schemaObj.required = required;
     }
-    return schemaObj;
+
+    defs[defName] = schemaObj;
+
+    if (typeId) visited.delete(typeId);
+
+    return { $ref: `#/$defs/${defName}` };
   }
 
-  if (typeId) visited.delete(typeId);
   return {};
 }
