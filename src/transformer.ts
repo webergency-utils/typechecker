@@ -15,6 +15,10 @@ export default function transformer(program: ts.Program) {
       const requiredUtils = new Set<string>();
 
       const visitor = (node: ts.Node): ts.Node => {
+        // Skip visiting ImportDeclarations to preserve their original symbols and avoid compiler crashes
+        if (ts.isImportDeclaration(node)) {
+          return node;
+        }
 
         // Handle runtime function calls (is, assert, assertGuard, validate)
         if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
