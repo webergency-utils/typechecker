@@ -3,20 +3,35 @@
   "version": "0.0.1",
   "type": "module",
   "description": "TypeScript compiler plugin for runtime validation",
+  "author": "radixxko",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist/**/*"
+  ],
   "scripts": {
-    "build": "tsc",
+    "clean": "rm -rf ./dist/* node_modules package-lock.json && npm i",
+    "build": "npm run clean && tsc",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "version": "npm run build && npm publish && npm run commit && git push",
+    "commit": "node -e \"const version = require('./package.json').version.trim(); require('child_process').execSync('git add . && git commit -m \\\"Version ' + version + '\\\"');\""
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/webergency-utils/typechecker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/webergency-utils/typechecker/issues"
+  },
+  "homepage": "https://github.com/webergency-utils/typechecker#readme",
   "peerDependencies": {
     "typescript": ">=5.0.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^24.10.1",
     "@vitest/coverage-v8": "^4.1.6",
-    "typescript": "^5.0.0",
+    "typescript": "^5.9.3",
     "vitest": "^4.1.6"
   }
 }
