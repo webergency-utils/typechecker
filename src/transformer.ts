@@ -14,34 +14,7 @@ export default function transformer(program: ts.Program) {
       const validatorCache = new Map<string, ts.Expression>();
       const requiredUtils = new Set<string>();
 
-      const visitor = (node: ts.Node): any => {
-        // Remove runtime functions import specifiers from @webergency-utils/typechecker
-        if (ts.isImportDeclaration(node)) {
-          const moduleSpecifier = node.moduleSpecifier;
-          if (ts.isStringLiteral(moduleSpecifier) && moduleSpecifier.text === '@webergency-utils/typechecker') {
-            const importClause = node.importClause;
-            if (importClause && importClause.namedBindings && ts.isNamedImports(importClause.namedBindings)) {
-              const elements = importClause.namedBindings.elements.filter(
-                el => !RUNTIME_FUNCTIONS.includes(el.name.text)
-              );
-              if (elements.length === 0) {
-                return undefined; // Remove the entire import statement
-              }
-              return ts.factory.updateImportDeclaration(
-                node,
-                node.modifiers,
-                ts.factory.updateImportClause(
-                  importClause,
-                  importClause.isTypeOnly,
-                  importClause.name,
-                  ts.factory.createNamedImports(elements)
-                ),
-                node.moduleSpecifier,
-                node.assertClause
-              );
-            }
-          }
-        }
+      const visitor = (node: ts.Node): ts.Node => {
 
         // Handle runtime function calls (is, assert, assertGuard, validate)
         if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
