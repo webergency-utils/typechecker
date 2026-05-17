@@ -328,3 +328,19 @@ export const validators = {
 
     any: (v: any) => v
 };
+
+export class MetadataStoreClass {
+    private validators = new Map<string, Function>();
+
+    registerValidator(hash: string, validator: Function) {
+        this.validators.set(hash, validator);
+    }
+
+    getValidator(hash: string): Function {
+        const val = this.validators.get(hash);
+        if (!val) throw new Error(`Validator not found for hash: ${hash}`);
+        return val;
+    }
+}
+
+export const MetadataStore = new MetadataStoreClass();
