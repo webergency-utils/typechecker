@@ -6,6 +6,16 @@
   "author": "radixxko",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/validators.d.ts",
+      "import": "./dist/runtime/validators.js"
+    }
+  },
   "files": [
     "dist/**/*"
   ],
