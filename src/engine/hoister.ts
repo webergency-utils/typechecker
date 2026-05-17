@@ -55,19 +55,22 @@ export function hoistRegistrations(sourceFile: ts.SourceFile, cache: Map<string,
 
   for (const [hash, expr] of cache.entries()) {
     // const __val_hash = expr;
-    registrations.push(
-      ts.factory.createVariableStatement(
-        undefined,
-        ts.factory.createVariableDeclarationList([
-          ts.factory.createVariableDeclaration(
-            ts.factory.createIdentifier(`__val_${hash}`),
-            undefined,
-            undefined,
-            expr
-          )
-        ], ts.NodeFlags.Const)
-      )
-    );
+    if (!hasVariableDeclaration(sourceFile.statements, `__val_${hash}`) &&
+        !hasVariableDeclaration(registrations, `__val_${hash}`)) {
+      registrations.push(
+        ts.factory.createVariableStatement(
+          undefined,
+          ts.factory.createVariableDeclarationList([
+            ts.factory.createVariableDeclaration(
+              ts.factory.createIdentifier(`__val_${hash}`),
+              undefined,
+              undefined,
+              expr
+            )
+          ], ts.NodeFlags.Const)
+        )
+      );
+    }
 
     // MetadataStore.registerValidator(hash, __val_hash);
     registrations.push(
