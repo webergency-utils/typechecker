@@ -13,7 +13,8 @@ export function hoistRegistrations(sourceFile: ts.SourceFile, cache: Map<string,
     )
   ];
 
-  if (!hasVariableDeclaration(sourceFile.statements, 'validators')) {
+  if (!hasVariableDeclaration(sourceFile.statements, 'validators') &&
+      !hasVariableDeclaration(utilityStatements, 'validators')) {
     utilityStatements.push(
       ts.factory.createVariableStatement(
         undefined,
@@ -32,7 +33,8 @@ export function hoistRegistrations(sourceFile: ts.SourceFile, cache: Map<string,
     );
   }
 
-  if (!hasVariableDeclaration(sourceFile.statements, 'MetadataStore')) {
+  if (!hasVariableDeclaration(sourceFile.statements, 'MetadataStore') &&
+      !hasVariableDeclaration(utilityStatements, 'MetadataStore')) {
     utilityStatements.push(
       ts.factory.createVariableStatement(
         undefined,
@@ -51,13 +53,15 @@ export function hoistRegistrations(sourceFile: ts.SourceFile, cache: Map<string,
     );
   }
 
-  const registrations: ts.Statement[] = [];
+  const variablePrepends: ts.Statement[] = [];
+  const registrationAppends: ts.Statement[] = [];
 
   for (const [hash, expr] of cache.entries()) {
     // const __val_hash = expr;
     if (!hasVariableDeclaration(sourceFile.statements, `__val_${hash}`) &&
-        !hasVariableDeclaration(registrations, `__val_${hash}`)) {
-      registrations.push(
+        !hasVariableDeclaration(utilityStatements, `__val_${hash}`) &&
+        !hasVariableDeclaration(variablePrepends, `__val_${hash}`)) {
+      variablePrepends.push(
         ts.factory.createVariableStatement(
           undefined,
           ts.factory.createVariableDeclarationList([
@@ -73,7 +77,7 @@ export function hoistRegistrations(sourceFile: ts.SourceFile, cache: Map<string,
     }
 
     // MetadataStore.registerValidator(hash, __val_hash);
-    registrations.push(
+    registrationAppends.push(
       ts.factory.createExpressionStatement(
         ts.factory.createCallExpression(
           ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('MetadataStore'), 'registerValidator'),
@@ -89,10 +93,12 @@ export function hoistRegistrations(sourceFile: ts.SourceFile, cache: Map<string,
 
   return ts.factory.updateSourceFile(sourceFile, [
     ...utilityStatements,
-    ...registrations,
-    ...sourceFile.statements
+    ...variablePrepends,
+    ...sourceFile.statements,
+    ...registrationAppends
   ]);
 }
+
 
 function hasVariableDeclaration(statements: readonly ts.Statement[], name: string): boolean {
   for (const statement of statements) {
