@@ -195,5 +195,28 @@ describe('Transformer Call Expression Replacements', () => {
         const compiled = compileAndTransform(code);
         expect(compiled).toContain('MetadataStore.getOrCompileSchema(schema)');
     });
+
+    it('should inline small repeating structures like Point while hoisting circular types', () => {
+        const code = `
+            import { jsonSchema } from './src/index.js';
+            interface Point {
+                x: number;
+                y: number;
+            }
+            interface SmallLine {
+                start: Point;
+                end: Point;
+            }
+            interface Node {
+                val: number;
+                next?: Node;
+            }
+            const schema1 = jsonSchema<SmallLine>();
+            const schema2 = jsonSchema<Node>();
+        `;
+        const compiled = compileAndTransform(code);
+        expect(compiled).not.toContain('"$ref": "#/$defs/Point_');
+        expect(compiled).toContain('"$ref": "#/$defs/Node_');
+    });
 });
 

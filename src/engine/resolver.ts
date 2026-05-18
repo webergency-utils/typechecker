@@ -99,30 +99,72 @@ export function buildValidator(
             constraints.push({ type: 'transform', value: 'todate' });
           } else if (pName === '__transform_custom') {
             let fnName: string | undefined;
+            let filePath: string | undefined;
             const symbol = pType.getSymbol() || pType.aliasSymbol;
             if (symbol) {
               fnName = symbol.getName();
+              let dec = symbol.valueDeclaration || symbol.declarations?.[0];
+              if (fnName === '__function' && dec) {
+                let current: ts.Node | undefined = dec;
+                while (current) {
+                  if (ts.isVariableDeclaration(current) && ts.isIdentifier(current.name)) {
+                    fnName = current.name.text;
+                    dec = current;
+                    break;
+                  }
+                  current = current.parent;
+                }
+              }
+              if (dec) {
+                const sourceFile = dec.getSourceFile();
+                if (sourceFile) filePath = sourceFile.fileName;
+              }
             } else {
               const str = checker.typeToString(pType);
               const match = str.match(/typeof\s+([a-zA-Z0-9_]+)/);
               if (match) fnName = match[1];
             }
-            if (fnName) {
-              constraints.push({ type: 'transform_custom', value: fnName });
+            if (fnName === '__function' || !fnName) {
+              throw new Error(`[Webergency] Custom validator must reference a named function via typeof (e.g. tag.Custom<typeof myFunc>).`);
             }
+            if (filePath) {
+              requiredUtils.add(`custom:${fnName}:${filePath}`);
+            }
+            constraints.push({ type: 'transform_custom', value: fnName });
           } else if (pName === '__custom') {
             let fnName: string | undefined;
+            let filePath: string | undefined;
             const symbol = pType.getSymbol() || pType.aliasSymbol;
             if (symbol) {
               fnName = symbol.getName();
+              let dec = symbol.valueDeclaration || symbol.declarations?.[0];
+              if (fnName === '__function' && dec) {
+                let current: ts.Node | undefined = dec;
+                while (current) {
+                  if (ts.isVariableDeclaration(current) && ts.isIdentifier(current.name)) {
+                    fnName = current.name.text;
+                    dec = current;
+                    break;
+                  }
+                  current = current.parent;
+                }
+              }
+              if (dec) {
+                const sourceFile = dec.getSourceFile();
+                if (sourceFile) filePath = sourceFile.fileName;
+              }
             } else {
               const str = checker.typeToString(pType);
               const match = str.match(/typeof\s+([a-zA-Z0-9_]+)/);
               if (match) fnName = match[1];
             }
-            if (fnName) {
-              constraints.push({ type: 'custom', value: fnName });
+            if (fnName === '__function' || !fnName) {
+              throw new Error(`[Webergency] Custom validator must reference a named function via typeof (e.g. tag.Custom<typeof myFunc>).`);
             }
+            if (filePath) {
+              requiredUtils.add(`custom:${fnName}:${filePath}`);
+            }
+            constraints.push({ type: 'custom', value: fnName });
           } else if (val !== undefined) {
             if (pName === '__minLength') constraints.push({ type: 'minLength', value: val });
             else if (pName === '__maxLength') constraints.push({ type: 'maxLength', value: val });
@@ -307,10 +349,114 @@ export function objectToAst(val: any): ts.Expression {
   return ts.factory.createIdentifier('undefined');
 }
 
+export function getTypeComplexity(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  visited: Set<number>
+): number {
+  const typeId = (type as any).id;
+  if (typeId) {
+    if (visited.has(typeId)) return 1;
+    visited.add(typeId);
+  }
+
+  const flags = type.getFlags();
+  let complexity = 1;
+
+  const isUnion = (flags & ts.TypeFlags.Union) !== 0 || type.isUnion();
+  const isIntersection = (flags & ts.TypeFlags.Intersection) !== 0 || type.isIntersection();
+
+  if (isUnion) {
+    for (const t of (type as ts.UnionType).types) {
+      complexity += getTypeComplexity(t, checker, visited);
+    }
+  } else if (isIntersection) {
+    for (const t of (type as ts.IntersectionType).types) {
+      complexity += getTypeComplexity(t, checker, visited);
+    }
+  } else if (checker.isArrayType(type)) {
+    const elementType = (type as ts.TypeReference).typeArguments?.[0] || checker.getAnyType();
+    complexity += getTypeComplexity(elementType, checker, visited);
+  } else if (checker.isTupleType(type)) {
+    const elementTypes = (type as ts.TypeReference).typeArguments || [];
+    for (const t of elementTypes) {
+      complexity += getTypeComplexity(t, checker, visited);
+    }
+  } else if (flags & ts.TypeFlags.Object || type.isClassOrInterface()) {
+    if (type.getSymbol()?.name !== 'Date') {
+      const props = checker.getPropertiesOfType(type);
+      for (const prop of props) {
+        const propType = checker.getTypeOfSymbolAtLocation(prop, prop.valueDeclaration || (prop as any).declarations?.[0]);
+        complexity += getTypeComplexity(propType, checker, visited);
+      }
+    }
+  }
+
+  if (typeId) visited.delete(typeId);
+  return complexity;
+}
+
+export function preScanType(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  counts: Map<string, number>,
+  circularHashes: Set<string>,
+  visited: Set<number>
+) {
+  const flags = type.getFlags();
+  const typeId = (type as any).id;
+  if (!typeId) return;
+
+  if (visited.has(typeId)) {
+    const hash = generateHash(type, checker);
+    circularHashes.add(hash);
+    return;
+  }
+  visited.add(typeId);
+
+  const isUnion = (flags & ts.TypeFlags.Union) !== 0 || type.isUnion();
+  const isIntersection = (flags & ts.TypeFlags.Intersection) !== 0 || type.isIntersection();
+
+  if (isUnion) {
+    for (const t of (type as ts.UnionType).types) {
+      preScanType(t, checker, counts, circularHashes, visited);
+    }
+  } else if (isIntersection) {
+    for (const t of (type as ts.IntersectionType).types) {
+      preScanType(t, checker, counts, circularHashes, visited);
+    }
+  } else if (checker.isArrayType(type)) {
+    const elementType = (type as ts.TypeReference).typeArguments?.[0] || checker.getAnyType();
+    preScanType(elementType, checker, counts, circularHashes, visited);
+  } else if (checker.isTupleType(type)) {
+    const elementTypes = (type as ts.TypeReference).typeArguments || [];
+    for (const t of elementTypes) {
+      preScanType(t, checker, counts, circularHashes, visited);
+    }
+  } else if (flags & ts.TypeFlags.Object || type.isClassOrInterface()) {
+    if (type.getSymbol()?.name !== 'Date') {
+      const hash = generateHash(type, checker);
+      counts.set(hash, (counts.get(hash) || 0) + 1);
+
+      const props = checker.getPropertiesOfType(type);
+      for (const prop of props) {
+        const propType = checker.getTypeOfSymbolAtLocation(prop, prop.valueDeclaration || (prop as any).declarations?.[0]);
+        preScanType(propType, checker, counts, circularHashes, visited);
+      }
+    }
+  }
+
+  visited.delete(typeId);
+}
+
 export function buildJsonSchema(type: ts.Type, checker: ts.TypeChecker): any {
   const defs: Record<string, any> = {};
   const visited = new Map<number, string>();
-  const rootSchema = buildJsonSchemaInternal(type, checker, defs, visited);
+  const counts = new Map<string, number>();
+  const circularHashes = new Set<string>();
+  preScanType(type, checker, counts, circularHashes, new Set<number>());
+
+  const rootSchema = buildJsonSchemaInternal(type, checker, defs, visited, counts, circularHashes);
 
   if (Object.keys(defs).length > 0) {
     const rootSymbol = type.getSymbol() || type.aliasSymbol;
@@ -338,7 +484,9 @@ function buildJsonSchemaInternal(
   type: ts.Type, 
   checker: ts.TypeChecker, 
   defs: Record<string, any>, 
-  visited: Map<number, string>
+  visited: Map<number, string>,
+  counts: Map<string, number>,
+  circularHashes: Set<string>
 ): any {
   const flags = type.getFlags();
   const typeId = (type as any).id;
@@ -360,7 +508,7 @@ function buildJsonSchemaInternal(
     }
 
     return {
-      anyOf: types.map(t => buildJsonSchemaInternal(t, checker, defs, visited))
+      anyOf: types.map(t => buildJsonSchemaInternal(t, checker, defs, visited, counts, circularHashes))
     };
   }
 
@@ -383,7 +531,7 @@ function buildJsonSchemaInternal(
         baseSchema = { type: "string", format: "date-time" };
       } else if (checker.isArrayType(sub)) {
         const elementType = (sub as ts.TypeReference).typeArguments?.[0] || checker.getAnyType();
-        baseSchema = { type: "array", items: buildJsonSchemaInternal(elementType, checker, defs, visited) };
+        baseSchema = { type: "array", items: buildJsonSchemaInternal(elementType, checker, defs, visited, counts, circularHashes) };
       }
 
       const props = checker.getPropertiesOfType(sub);
@@ -457,7 +605,7 @@ function buildJsonSchemaInternal(
     const elementType = (type as ts.TypeReference).typeArguments?.[0] || checker.getAnyType();
     return {
       type: "array",
-      items: buildJsonSchemaInternal(elementType, checker, defs, visited)
+      items: buildJsonSchemaInternal(elementType, checker, defs, visited, counts, circularHashes)
     };
   }
 
@@ -465,7 +613,7 @@ function buildJsonSchemaInternal(
     const elementTypes = (type as ts.TypeReference).typeArguments || [];
     return {
       type: "array",
-      items: elementTypes.map(t => buildJsonSchemaInternal(t, checker, defs, visited)),
+      items: elementTypes.map(t => buildJsonSchemaInternal(t, checker, defs, visited, counts, circularHashes)),
       minItems: elementTypes.length,
       maxItems: elementTypes.length
     };
@@ -482,6 +630,10 @@ function buildJsonSchemaInternal(
       return { $ref: `#/$defs/${defName}` };
     }
 
+    if (typeId && visited.has(typeId)) {
+      return { $ref: `#/$defs/${defName}` };
+    }
+
     if (typeId) visited.set(typeId, defName);
 
     const properties: Record<string, any> = {};
@@ -493,7 +645,7 @@ function buildJsonSchemaInternal(
       const isOptional = (prop.flags & ts.SymbolFlags.Optional) !== 0;
       const propType = checker.getTypeOfSymbolAtLocation(prop, prop.valueDeclaration || (prop as any).declarations?.[0]);
       
-      properties[pName] = buildJsonSchemaInternal(propType, checker, defs, visited);
+      properties[pName] = buildJsonSchemaInternal(propType, checker, defs, visited, counts, circularHashes);
       if (!isOptional) {
         required.push(pName);
       }
@@ -508,11 +660,19 @@ function buildJsonSchemaInternal(
       schemaObj.required = required;
     }
 
-    defs[defName] = schemaObj;
-
     if (typeId) visited.delete(typeId);
 
-    return { $ref: `#/$defs/${defName}` };
+    const isCircular = circularHashes.has(typeHash);
+    const refCount = counts.get(typeHash) || 0;
+    const complexity = getTypeComplexity(type, checker, new Set<number>());
+    const score = refCount * complexity;
+
+    if (isCircular || score >= 128) {
+      defs[defName] = schemaObj;
+      return { $ref: `#/$defs/${defName}` };
+    }
+
+    return schemaObj;
   }
 
   return {};
