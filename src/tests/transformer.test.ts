@@ -37,10 +37,8 @@ describe('Transformer Call Expression Replacements', () => {
             const res = validate<number>(x, 'relaxed');
         `;
         const compiled = compileAndTransform(code);
-        expect(compiled).toContain('__mode = typeof __opt === "string" ? __opt : (__opt?.mode || "strict")');
-        expect(compiled).toContain('__tryConvert = typeof __opt === "object" ? __opt?.tryConvert : undefined');
-        expect(compiled).toContain('__wrapArrays = typeof __opt === "object" ? __opt?.wrapArrays : undefined');
-        expect(compiled).toContain('mode: __mode, tryConvert: __tryConvert, wrapArrays: __wrapArrays');
+        expect(compiled).toContain('MetadataStore.validate(');
+        expect(compiled).toContain("'relaxed'");
     });
 
     it('should transform validate with options object', () => {
@@ -50,8 +48,10 @@ describe('Transformer Call Expression Replacements', () => {
             const res = validate<number>(x, { mode: 'relaxed', tryConvert: true, wrapArrays: true });
         `;
         const compiled = compileAndTransform(code);
-        expect(compiled).toContain('__opt?.mode || "strict"');
-        expect(compiled).toContain('__tryConvert = typeof __opt === "object" ? __opt?.tryConvert : undefined');
+        expect(compiled).toContain('MetadataStore.validate(');
+        expect(compiled).toContain("mode: 'relaxed'");
+        expect(compiled).toContain('tryConvert: true');
+        expect(compiled).toContain('wrapArrays: true');
     });
 
     it('should transform types with constraint and format namespace constraints and custom validations', () => {

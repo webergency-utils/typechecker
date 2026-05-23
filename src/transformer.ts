@@ -1,6 +1,6 @@
 import ts from 'typescript';
 import { buildValidator, generateHash, buildJsonSchema, objectToAst } from './engine/resolver.js';
-export { buildValidator, generateHash } from './engine/resolver.js';
+export { buildValidator, generateHash, buildJsonSchema } from './engine/resolver.js';
 import { hoistRegistrations } from './engine/hoister.js';
 import { templateToAst, injectNodes } from './engine/generators.js';
 
@@ -84,45 +84,14 @@ export default function transformer(program: ts.Program) {
                   const getSchemaAccess = ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('MetadataStore'), 'getSchema');
                   return ts.factory.createCallExpression(getSchemaAccess, undefined, [ts.factory.createStringLiteral(hash)]);
               } else if (fnName === 'validate') {
-                  const tpl = `
-                  (() => {
-                      const __opt = __ARG1__;
-                      const __mode = typeof __opt === 'string' ? __opt : (__opt?.mode || 'strict');
-                      const __tryConvert = typeof __opt === 'object' ? __opt?.tryConvert : undefined;
-                      const __wrapArrays = typeof __opt === 'object' ? __opt?.wrapArrays : undefined;
-                      const __ctx = { success: true, errors: [], mode: __mode, tryConvert: __tryConvert, wrapArrays: __wrapArrays };
-                      const __res = __GET_CALL__(__ARG0__, "", __ctx);
-                      return { success: __ctx.success, errors: __ctx.errors, data: __res };
-                  })()
-                  `;
-                  return injectNodes(templateToAst(tpl), { '__GET_CALL__': getCall, '__ARG0__': arg0, '__ARG1__': arg1 });
+                  const mdStoreAccess = ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('MetadataStore'), 'validate');
+                  return ts.factory.createCallExpression(mdStoreAccess, undefined, [getCall, arg0, arg1]);
               } else if (fnName === 'is') {
-                  const tpl = `
-                  (() => {
-                      const __opt = __ARG1__;
-                      const __mode = typeof __opt === 'string' ? __opt : (__opt?.mode || 'strict');
-                      const __tryConvert = typeof __opt === 'object' ? __opt?.tryConvert : undefined;
-                      const __wrapArrays = typeof __opt === 'object' ? __opt?.wrapArrays : undefined;
-                      const __ctx = { success: true, errors: [], mode: __mode, tryConvert: __tryConvert, wrapArrays: __wrapArrays };
-                      __GET_CALL__(__ARG0__, "", __ctx);
-                      return __ctx.success;
-                  })()
-                  `;
-                  return injectNodes(templateToAst(tpl), { '__GET_CALL__': getCall, '__ARG0__': arg0, '__ARG1__': arg1 });
+                  const mdStoreAccess = ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('MetadataStore'), 'is');
+                  return ts.factory.createCallExpression(mdStoreAccess, undefined, [getCall, arg0, arg1]);
               } else if (fnName === 'assert' || fnName === 'assertGuard') {
-                  const tpl = `
-                  (() => {
-                      const __opt = __ARG1__;
-                      const __mode = typeof __opt === 'string' ? __opt : (__opt?.mode || 'strict');
-                      const __tryConvert = typeof __opt === 'object' ? __opt?.tryConvert : undefined;
-                      const __wrapArrays = typeof __opt === 'object' ? __opt?.wrapArrays : undefined;
-                      const __ctx = { success: true, errors: [], mode: __mode, tryConvert: __tryConvert, wrapArrays: __wrapArrays };
-                      const __res = __GET_CALL__(__ARG0__, "", __ctx);
-                      if (!__ctx.success) throw new Error("Validation Error: " + __ctx.errors.join(', '));
-                      return __res;
-                  })()
-                  `;
-                  return injectNodes(templateToAst(tpl), { '__GET_CALL__': getCall, '__ARG0__': arg0, '__ARG1__': arg1 });
+                  const mdStoreAccess = ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('MetadataStore'), 'assert');
+                  return ts.factory.createCallExpression(mdStoreAccess, undefined, [getCall, arg0, arg1]);
               }
             }
           }

@@ -14,6 +14,14 @@ export interface ValidationContext {
     wrapArrays?: boolean;
 }
 
+export interface ValidationOptions {
+    mode?: ValidationMode;
+    tryConvert?: boolean;
+    wrapArrays?: boolean;
+    schema?: any;
+}
+
+
 const report = (ctx: ValidationContext, path: string, expected: string, value: any) => {
     ctx.success = false;
     ctx.errors.push({ path, expected, value });
@@ -373,6 +381,39 @@ export class MetadataStoreClass {
             this.compiledSchemas.set(schema, compiled);
         }
         return compiled;
+    }
+
+    is(validator: Function, value: any, options?: ValidationMode | ValidationOptions): boolean {
+        const opt = options;
+        const mode = typeof opt === 'string' ? opt : (opt?.mode || 'strict');
+        const tryConvert = typeof opt === 'object' ? opt?.tryConvert : undefined;
+        const wrapArrays = typeof opt === 'object' ? opt?.wrapArrays : undefined;
+        const ctx: ValidationContext = { success: true, errors: [], mode, tryConvert, wrapArrays };
+        validator(value, "", ctx);
+        return ctx.success;
+    }
+
+    assert(validator: Function, value: any, options?: ValidationMode | ValidationOptions): any {
+        const opt = options;
+        const mode = typeof opt === 'string' ? opt : (opt?.mode || 'strict');
+        const tryConvert = typeof opt === 'object' ? opt?.tryConvert : undefined;
+        const wrapArrays = typeof opt === 'object' ? opt?.wrapArrays : undefined;
+        const ctx: ValidationContext = { success: true, errors: [], mode, tryConvert, wrapArrays };
+        const res = validator(value, "", ctx);
+        if (!ctx.success) {
+            throw new Error("Validation Error: " + ctx.errors.map(e => e.path ? `${e.path}: ${e.expected}` : e.expected).join(', '));
+        }
+        return res;
+    }
+
+    validate(validator: Function, value: any, options?: ValidationMode | ValidationOptions): { success: boolean; errors: any[]; data: any } {
+        const opt = options;
+        const mode = typeof opt === 'string' ? opt : (opt?.mode || 'strict');
+        const tryConvert = typeof opt === 'object' ? opt?.tryConvert : undefined;
+        const wrapArrays = typeof opt === 'object' ? opt?.wrapArrays : undefined;
+        const ctx: ValidationContext = { success: true, errors: [], mode, tryConvert, wrapArrays };
+        const res = validator(value, "", ctx);
+        return { success: ctx.success, errors: ctx.errors, data: res };
     }
 }
 
