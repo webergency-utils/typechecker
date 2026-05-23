@@ -36,8 +36,8 @@ export function buildValidator(
   let result: ts.Expression;
   const flags = type.getFlags();
 
-  const isUnion = (flags & ts.TypeFlags.Union) !== 0 || type.isUnion();
-  const isIntersection = (flags & ts.TypeFlags.Intersection) !== 0 || type.isIntersection();
+  const isUnion = (((flags & ts.TypeFlags.Union) !== 0 || type.isUnion()) && (type as any).types) ? true : false;
+  const isIntersection = (((flags & ts.TypeFlags.Intersection) !== 0 || type.isIntersection()) && (type as any).types) ? true : false;
 
   if (isUnion) {
     const checks = (type as ts.UnionType).types.map(t => buildValidator(t, checker, validatorsMap, requiredUtils));
@@ -276,15 +276,15 @@ function buildStructuralSignature(type: ts.Type, checker: ts.TypeChecker, visite
   const flags = type.getFlags();
   const typeId = (type as any).id;
 
-  if (typeId && visited.has(typeId)) return `[Circular:${typeId}]`;
-  if (typeId) visited.add(typeId);
+    if (typeId && visited.has(typeId)) return `[Circular:${typeId}]`;
+    if (typeId) visited.add(typeId);
 
-  if (flags & ts.TypeFlags.Union) {
-    return `Union<${(type as ts.UnionType).types.map(t => buildStructuralSignature(t, checker, visited)).sort().join(',')}>`;
-  }
-  if (flags & ts.TypeFlags.Intersection) {
-    return `Intersection<${(type as ts.IntersectionType).types.map(t => buildStructuralSignature(t, checker, visited)).sort().join(',')}>`;
-  }
+    if ((flags & ts.TypeFlags.Union) && (type as any).types) {
+      return `Union<${(type as ts.UnionType).types.map(t => buildStructuralSignature(t, checker, visited)).sort().join(',')}>`;
+    }
+    if ((flags & ts.TypeFlags.Intersection) && (type as any).types) {
+      return `Intersection<${(type as ts.IntersectionType).types.map(t => buildStructuralSignature(t, checker, visited)).sort().join(',')}>`;
+    }
   if (type.isStringLiteral()) return `S:"${type.value}"`;
   if (type.isNumberLiteral()) return `N:${type.value}`;
   if (flags & ts.TypeFlags.BigIntLiteral) return `B:${checker.typeToString(type)}`;
@@ -363,8 +363,8 @@ export function getTypeComplexity(
   const flags = type.getFlags();
   let complexity = 1;
 
-  const isUnion = (flags & ts.TypeFlags.Union) !== 0 || type.isUnion();
-  const isIntersection = (flags & ts.TypeFlags.Intersection) !== 0 || type.isIntersection();
+  const isUnion = (((flags & ts.TypeFlags.Union) !== 0 || type.isUnion()) && (type as any).types) ? true : false;
+  const isIntersection = (((flags & ts.TypeFlags.Intersection) !== 0 || type.isIntersection()) && (type as any).types) ? true : false;
 
   if (isUnion) {
     for (const t of (type as ts.UnionType).types) {
@@ -414,8 +414,8 @@ export function preScanType(
   }
   visited.add(typeId);
 
-  const isUnion = (flags & ts.TypeFlags.Union) !== 0 || type.isUnion();
-  const isIntersection = (flags & ts.TypeFlags.Intersection) !== 0 || type.isIntersection();
+  const isUnion = (((flags & ts.TypeFlags.Union) !== 0 || type.isUnion()) && (type as any).types) ? true : false;
+  const isIntersection = (((flags & ts.TypeFlags.Intersection) !== 0 || type.isIntersection()) && (type as any).types) ? true : false;
 
   if (isUnion) {
     for (const t of (type as ts.UnionType).types) {
@@ -495,8 +495,8 @@ function buildJsonSchemaInternal(
     return { $ref: `#/$defs/${visited.get(typeId)}` };
   }
 
-  const isUnion = (flags & ts.TypeFlags.Union) !== 0 || type.isUnion();
-  const isIntersection = (flags & ts.TypeFlags.Intersection) !== 0 || type.isIntersection();
+  const isUnion = (((flags & ts.TypeFlags.Union) !== 0 || type.isUnion()) && (type as any).types) ? true : false;
+  const isIntersection = (((flags & ts.TypeFlags.Intersection) !== 0 || type.isIntersection()) && (type as any).types) ? true : false;
 
   if (isUnion) {
     const types = (type as ts.UnionType).types;

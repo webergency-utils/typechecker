@@ -1,5 +1,6 @@
 import ts from 'typescript';
 import { buildValidator, generateHash, buildJsonSchema, objectToAst } from './engine/resolver.js';
+export { buildValidator, generateHash } from './engine/resolver.js';
 import { hoistRegistrations } from './engine/hoister.js';
 import { templateToAst, injectNodes } from './engine/generators.js';
 

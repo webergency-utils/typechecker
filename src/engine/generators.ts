@@ -184,7 +184,7 @@ export function createArrayCheck(elementValidator: ts.Expression, requiredUtils:
 export function createTemplateLiteralCheck(regexStr: string, expected: string, requiredUtils: Set<string>): ts.Expression {
     requiredUtils.add('validators');
     const tpl = `(v, path, ctx) => validators.templateLiteral(v, path, ctx, new RegExp(${JSON.stringify(regexStr)}), ${JSON.stringify(expected)})`;
-    return templateToAst(tpl);
+    return stripPositions(templateToAst(tpl));
 }
 
 export function createUnionCheck(checks: ts.Expression[], requiredUtils: Set<string>): ts.Expression {
