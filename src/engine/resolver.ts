@@ -14,9 +14,34 @@ import {
   templateToAst,
   createRegExpCheck,
   createTemplateLiteralCheck,
-  createConstrainedPrimitiveCheck
+  createConstrainedPrimitiveCheck,
+  createSetCheck,
+  createMapCheck
 } from './generators.js';
 import { createHash } from 'crypto';
+
+function getStringLiteralValue(type: ts.Type): string | undefined {
+  if (type.isStringLiteral()) {
+    return type.value;
+  }
+  if (type.isUnion()) {
+    const literalType = type.types.find(t => t.isStringLiteral());
+    if (literalType && literalType.isStringLiteral()) {
+      return literalType.value;
+    }
+  }
+  return undefined;
+}
+
+function minifyTypeString(str: string): string {
+  return str
+    .replace(/\{\s+/g, '{')
+    .replace(/\s+\}/g, '}')
+    .replace(/;\s*\}/g, '}')
+    .replace(/;\s+/g, ',')
+    .replace(/:\s+/g, ':')
+    .replace(/\s+\|\s+/g, '|');
+}
 
 export function buildValidator(
   type: ts.Type, 
@@ -41,7 +66,7 @@ export function buildValidator(
 
   if (isUnion) {
     const checks = (type as ts.UnionType).types.map(t => buildValidator(t, checker, validatorsMap, requiredUtils));
-    result = createUnionCheck(checks, requiredUtils);
+    result = createUnionCheck(checks, requiredUtils, `Type<${minifyTypeString(checker.typeToString(type))}>`);
   } else if (isIntersection) {
     const types = (type as ts.IntersectionType).types;
     let baseName = '';
@@ -83,6 +108,8 @@ export function buildValidator(
           }
           if (pName === '__default') {
             constraints.push({ type: 'default', value: val });
+          } else if (pName === '__message') {
+            constraints.push({ type: 'message', value: val });
           } else if (pName === '__transform_lowercase') {
             constraints.push({ type: 'transform', value: 'lowercase' });
           } else if (pName === '__transform_uppercase') {
@@ -164,36 +191,89 @@ export function buildValidator(
             if (filePath) {
               requiredUtils.add(`custom:${fnName}:${filePath}`);
             }
-            constraints.push({ type: 'custom', value: fnName });
+            const msgProp = props.find(p => p.getName() === `${pName}_message`);
+            let constraintMsg: string | undefined;
+            if (msgProp) {
+              const msgType = checker.getTypeOfSymbolAtLocation(msgProp, msgProp.valueDeclaration || (msgProp as any).declarations?.[0]);
+              constraintMsg = getStringLiteralValue(msgType);
+            }
+            constraints.push({ type: 'custom', value: fnName, message: constraintMsg });
           } else if (val !== undefined) {
-            if (pName === '__minLength') constraints.push({ type: 'minLength', value: val });
-            else if (pName === '__maxLength') constraints.push({ type: 'maxLength', value: val });
-            else if (pName === '__minimum') constraints.push({ type: 'minimum', value: val });
-            else if (pName === '__maximum') constraints.push({ type: 'maximum', value: val });
-            else if (pName === '__exclusiveMinimum') constraints.push({ type: 'exclusiveMinimum', value: val });
-            else if (pName === '__exclusiveMaximum') constraints.push({ type: 'exclusiveMaximum', value: val });
-            else if (pName === '__multipleOf') constraints.push({ type: 'multipleOf', value: val });
-            else if (pName === '__pattern') constraints.push({ type: 'pattern', value: val });
-            else if (pName === '__format') constraints.push({ type: 'format', value: val });
-            else if (pName === '__minItems') constraints.push({ type: 'minItems', value: val });
-            else if (pName === '__maxItems') constraints.push({ type: 'maxItems', value: val });
-            else if (pName === '__uniqueItems') constraints.push({ type: 'uniqueItems', value: true });
+            const msgProp = props.find(p => p.getName() === `${pName}_message`);
+            let constraintMsg: string | undefined;
+            if (msgProp) {
+              const msgType = checker.getTypeOfSymbolAtLocation(msgProp, msgProp.valueDeclaration || (msgProp as any).declarations?.[0]);
+              constraintMsg = getStringLiteralValue(msgType);
+            }
+            if (pName === '__minLength') constraints.push({ type: 'minLength', value: val, message: constraintMsg });
+            else if (pName === '__maxLength') constraints.push({ type: 'maxLength', value: val, message: constraintMsg });
+            else if (pName === '__minimum') constraints.push({ type: 'minimum', value: val, message: constraintMsg });
+            else if (pName === '__maximum') constraints.push({ type: 'maximum', value: val, message: constraintMsg });
+            else if (pName === '__exclusiveMinimum') constraints.push({ type: 'exclusiveMinimum', value: val, message: constraintMsg });
+            else if (pName === '__exclusiveMaximum') constraints.push({ type: 'exclusiveMaximum', value: val, message: constraintMsg });
+            else if (pName === '__multipleOf') constraints.push({ type: 'multipleOf', value: val, message: constraintMsg });
+            else if (pName === '__pattern') constraints.push({ type: 'pattern', value: val, message: constraintMsg });
+            else if (pName === '__format') constraints.push({ type: 'format', value: val, message: constraintMsg });
+            else if (pName === '__minItems') constraints.push({ type: 'minItems', value: val, message: constraintMsg });
+            else if (pName === '__maxItems') constraints.push({ type: 'maxItems', value: val, message: constraintMsg });
+            else if (pName === '__uniqueItems') constraints.push({ type: 'uniqueItems', value: true, message: constraintMsg });
+          } else if (pName === '__requires') {
+            let reqVal: string | string[] = '';
+            if (pType.isStringLiteral()) {
+              reqVal = pType.value;
+            } else {
+              const typeArgs = (pType as ts.TypeReference).typeArguments || [];
+              const items: string[] = [];
+              for (const arg of typeArgs) {
+                if (arg.isStringLiteral()) {
+                  items.push(arg.value);
+                }
+              }
+              reqVal = items;
+            }
+            const msgProp = props.find(p => p.getName() === `${pName}_message`);
+            let constraintMsg: string | undefined;
+            if (msgProp) {
+              const msgType = checker.getTypeOfSymbolAtLocation(msgProp, msgProp.valueDeclaration || (msgProp as any).declarations?.[0]);
+              constraintMsg = getStringLiteralValue(msgType);
+            }
+            constraints.push({ type: 'requires', value: reqVal, message: constraintMsg });
           }
         }
       }
     }
 
-    if (baseName && constraints.length > 0) {
-      if (baseName === 'array' && baseType) {
-         // Special case: constrained array
-         const baseValidator = buildValidator(baseType, checker, validatorsMap, requiredUtils);
-         result = createConstrainedPrimitiveCheck(baseName, constraints, requiredUtils, baseValidator);
-      } else if (baseType && (baseType.getFlags() & ts.TypeFlags.TemplateLiteral)) {
-         // Special case: template literal with tags
-         const baseValidator = buildValidator(baseType, checker, validatorsMap, requiredUtils);
-         result = createConstrainedPrimitiveCheck(baseName, constraints, requiredUtils, baseValidator);
+    if (constraints.length > 0) {
+      if (baseName) {
+        if (baseName === 'array' && baseType) {
+           const baseValidator = buildValidator(baseType, checker, validatorsMap, requiredUtils);
+           result = createConstrainedPrimitiveCheck(baseName, constraints, requiredUtils, baseValidator);
+        } else if (baseType && (baseType.getFlags() & ts.TypeFlags.TemplateLiteral)) {
+           const baseValidator = buildValidator(baseType, checker, validatorsMap, requiredUtils);
+           result = createConstrainedPrimitiveCheck(baseName, constraints, requiredUtils, baseValidator);
+        } else {
+           result = createConstrainedPrimitiveCheck(baseName, constraints, requiredUtils);
+        }
       } else {
-         result = createConstrainedPrimitiveCheck(baseName, constraints, requiredUtils);
+        const nonConstraintTypes = types.filter(t => {
+          const props = checker.getPropertiesOfType(t);
+          return !props.some(p => p.getName().startsWith('__'));
+        });
+
+        let baseValidator: ts.Expression | undefined;
+        if (nonConstraintTypes.length === 1) {
+          baseValidator = buildValidator(nonConstraintTypes[0], checker, validatorsMap, requiredUtils);
+        } else if (nonConstraintTypes.length > 1) {
+          const checks = nonConstraintTypes.map(t => buildValidator(t, checker, validatorsMap, requiredUtils));
+          baseValidator = createIntersectionCheck(checks, requiredUtils);
+        }
+
+        if (baseValidator) {
+          result = createConstrainedPrimitiveCheck('any', constraints, requiredUtils, baseValidator);
+        } else {
+          const checks = (type as ts.IntersectionType).types.map(t => buildValidator(t, checker, validatorsMap, requiredUtils));
+          result = createIntersectionCheck(checks, requiredUtils);
+        }
       }
     } else {
       const checks = (type as ts.IntersectionType).types.map(t => buildValidator(t, checker, validatorsMap, requiredUtils));
@@ -203,6 +283,17 @@ export function buildValidator(
     result = createDateCheck(requiredUtils);
   } else if (type.getSymbol()?.name === 'RegExp') {
     result = createRegExpCheck(requiredUtils);
+  } else if (type.getSymbol()?.name === 'Set') {
+    const elementType = (type as ts.TypeReference).typeArguments?.[0] || checker.getAnyType();
+    result = createSetCheck(buildValidator(elementType, checker, validatorsMap, requiredUtils), requiredUtils);
+  } else if (type.getSymbol()?.name === 'Map') {
+    const keyType = (type as ts.TypeReference).typeArguments?.[0] || checker.getAnyType();
+    const valueType = (type as ts.TypeReference).typeArguments?.[1] || checker.getAnyType();
+    result = createMapCheck(
+      buildValidator(keyType, checker, validatorsMap, requiredUtils),
+      buildValidator(valueType, checker, validatorsMap, requiredUtils),
+      requiredUtils
+    );
   } else if (flags & ts.TypeFlags.Null) {
     result = createNullCheck(requiredUtils);
   } else if (flags & ts.TypeFlags.Undefined || flags & ts.TypeFlags.Void) {
@@ -383,7 +474,8 @@ export function getTypeComplexity(
       complexity += getTypeComplexity(t, checker, visited);
     }
   } else if (flags & ts.TypeFlags.Object || type.isClassOrInterface()) {
-    if (type.getSymbol()?.name !== 'Date') {
+    const name = type.getSymbol()?.name;
+    if (name !== 'Date' && name !== 'Set' && name !== 'Map' && name !== 'RegExp') {
       const props = checker.getPropertiesOfType(type);
       for (const prop of props) {
         const propType = checker.getTypeOfSymbolAtLocation(prop, prop.valueDeclaration || (prop as any).declarations?.[0]);
@@ -434,7 +526,8 @@ export function preScanType(
       preScanType(t, checker, counts, circularHashes, visited);
     }
   } else if (flags & ts.TypeFlags.Object || type.isClassOrInterface()) {
-    if (type.getSymbol()?.name !== 'Date') {
+    const name = type.getSymbol()?.name;
+    if (name !== 'Date' && name !== 'Set' && name !== 'Map' && name !== 'RegExp') {
       const hash = generateHash(type, checker);
       counts.set(hash, (counts.get(hash) || 0) + 1);
 
@@ -529,6 +622,14 @@ function buildJsonSchemaInternal(
         baseSchema = { type: "boolean" };
       } else if (sub.getSymbol()?.name === 'Date') {
         baseSchema = { type: "string", format: "date-time" };
+      } else if (sub.getSymbol()?.name === 'RegExp') {
+        baseSchema = { type: "string", format: "regex" };
+      } else if (sub.getSymbol()?.name === 'Set') {
+        const elementType = (sub as ts.TypeReference).typeArguments?.[0] || checker.getAnyType();
+        baseSchema = { type: "array", items: buildJsonSchemaInternal(elementType, checker, defs, visited, counts, circularHashes), uniqueItems: true };
+      } else if (sub.getSymbol()?.name === 'Map') {
+        const valueType = (sub as ts.TypeReference).typeArguments?.[1] || checker.getAnyType();
+        baseSchema = { type: "object", additionalProperties: buildJsonSchemaInternal(valueType, checker, defs, visited, counts, circularHashes) };
       } else if (checker.isArrayType(sub)) {
         const elementType = (sub as ts.TypeReference).typeArguments?.[0] || checker.getAnyType();
         baseSchema = { type: "array", items: buildJsonSchemaInternal(elementType, checker, defs, visited, counts, circularHashes) };
@@ -560,6 +661,22 @@ function buildJsonSchemaInternal(
           else if (pName === '__minItems') constraints.minItems = val;
           else if (pName === '__maxItems') constraints.maxItems = val;
           else if (pName === '__uniqueItems') constraints.uniqueItems = true;
+          else if (pName === '__requires') {
+            let reqVal: string | string[] = '';
+            if (pType.isStringLiteral()) {
+              reqVal = pType.value;
+            } else {
+              const typeArgs = (pType as ts.TypeReference).typeArguments || [];
+              const items: string[] = [];
+              for (const arg of typeArgs) {
+                if (arg.isStringLiteral()) {
+                  items.push(arg.value);
+                }
+              }
+              reqVal = items;
+            }
+            constraints.requires = reqVal;
+          }
         }
       }
     }
@@ -569,6 +686,24 @@ function buildJsonSchemaInternal(
 
   if (type.getSymbol()?.name === 'Date') {
     return { type: "string", format: "date-time" };
+  }
+  if (type.getSymbol()?.name === 'RegExp') {
+    return { type: "string", format: "regex" };
+  }
+  if (type.getSymbol()?.name === 'Set') {
+    const elementType = (type as ts.TypeReference).typeArguments?.[0] || checker.getAnyType();
+    return {
+      type: "array",
+      items: buildJsonSchemaInternal(elementType, checker, defs, visited, counts, circularHashes),
+      uniqueItems: true
+    };
+  }
+  if (type.getSymbol()?.name === 'Map') {
+    const valueType = (type as ts.TypeReference).typeArguments?.[1] || checker.getAnyType();
+    return {
+      type: "object",
+      additionalProperties: buildJsonSchemaInternal(valueType, checker, defs, visited, counts, circularHashes)
+    };
   }
   if (flags & ts.TypeFlags.Null) {
     return { type: "null" };

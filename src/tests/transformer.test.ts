@@ -218,5 +218,52 @@ describe('Transformer Call Expression Replacements', () => {
         expect(compiled).not.toContain('"$ref": "#/$defs/Point_');
         expect(compiled).toContain('"$ref": "#/$defs/Node_');
     });
+
+    it('should transform types with Set and Map', () => {
+        const code = `
+            import { validate } from './src/index.js';
+            interface Container {
+                numbers: Set<number>;
+                mapping: Map<string, boolean>;
+            }
+            const res = validate<Container>({
+                numbers: new Set([1, 2, 3]),
+                mapping: new Map([['a', true]])
+            });
+        `;
+        const compiled = compileAndTransform(code);
+        expect(compiled).toContain('validators.set');
+        expect(compiled).toContain('validators.map');
+    });
+
+    it('should transform custom validation messages and pass message arguments to validator helpers', () => {
+        const code = `
+            import { validate, constraint, Message } from './src/index.js';
+            interface User {
+                email: string & constraint.Format<'email'> & Message<"Please supply a valid email address">;
+                age: number & constraint.Minimum<18> & constraint.Message<"You must be 18 or older">;
+            }
+            const res = validate<User>({ email: "invalid", age: 16 });
+        `;
+        const compiled = compileAndTransform(code);
+        expect(compiled).toContain('validators.format(v, path, ctx, "email", "Please supply a valid email address")');
+        expect(compiled).toContain('validators.minimum(v, path, ctx, 18, "You must be 18 or older")');
+    });
+
+    it('should prioritize specific messages over fallback message', () => {
+        const code = `
+            import { validate, constraint, Message } from './src/index.js';
+            interface User {
+                age: number 
+                    & constraint.Minimum<18, "Too young"> 
+                    & constraint.Maximum<99, "Too old"> 
+                    & Message<"Invalid age fallback">;
+            }
+            const res = validate<User>({ age: 16 });
+        `;
+        const compiled = compileAndTransform(code);
+        expect(compiled).toContain('validators.minimum(v, path, ctx, 18, "Too young")');
+        expect(compiled).toContain('validators.maximum(v, path, ctx, 99, "Too old")');
+    });
 });
 

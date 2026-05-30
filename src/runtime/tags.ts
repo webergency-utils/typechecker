@@ -5,62 +5,75 @@
  */
 
 // String Constraints
-export type MinLength<N extends number> = { readonly __minLength: N };
-export type MaxLength<N extends number> = { readonly __maxLength: N };
-export type Pattern<S extends string> = { readonly __pattern: S };
+export type MinLength<N extends number, Msg extends string = string> = { readonly __minLength: N; readonly __minLength_message?: Msg };
+export type MaxLength<N extends number, Msg extends string = string> = { readonly __maxLength: N; readonly __maxLength_message?: Msg };
+export type Pattern<S extends string, Msg extends string = string> = { readonly __pattern: S; readonly __pattern_message?: Msg };
 
 export type Format<S extends 
     | 'email' | 'uuid' | 'url' | 'ipv4' | 'ipv6' | 'date' | 'date-time'
     | 'byte' | 'password' | 'regex' | 'hostname' | 'idn-email' | 'idn-hostname'
     | 'iri' | 'iri-reference' | 'uri' | 'uri-reference' | 'uri-template'
     | 'time' | 'duration' | 'objectId'
-> = { readonly __format: S };
+, Msg extends string = string> = { readonly __format: S; readonly __format_message?: Msg };
 
 // Number Constraints
-export type Minimum<N extends number | bigint> = { readonly __minimum: N };
-export type Maximum<N extends number | bigint> = { readonly __maximum: N };
-export type ExclusiveMinimum<N extends number | bigint> = { readonly __exclusiveMinimum: N };
-export type ExclusiveMaximum<N extends number | bigint> = { readonly __exclusiveMaximum: N };
-export type MultipleOf<N extends number | bigint> = { readonly __multipleOf: N };
+export type Minimum<N extends number | bigint, Msg extends string = string> = { readonly __minimum: N; readonly __minimum_message?: Msg };
+export type Maximum<N extends number | bigint, Msg extends string = string> = { readonly __maximum: N; readonly __maximum_message?: Msg };
+export type ExclusiveMinimum<N extends number | bigint, Msg extends string = string> = { readonly __exclusiveMinimum: N; readonly __exclusiveMinimum_message?: Msg };
+export type ExclusiveMaximum<N extends number | bigint, Msg extends string = string> = { readonly __exclusiveMaximum: N; readonly __exclusiveMaximum_message?: Msg };
+export type MultipleOf<N extends number | bigint, Msg extends string = string> = { readonly __multipleOf: N; readonly __multipleOf_message?: Msg };
 
 // Array Constraints
-export type MinItems<N extends number> = { readonly __minItems: N };
-export type MaxItems<N extends number> = { readonly __maxItems: N };
-export type UniqueItems = { readonly __uniqueItems: true };
+export type MinItems<N extends number, Msg extends string = string> = { readonly __minItems: N; readonly __minItems_message?: Msg };
+export type MaxItems<N extends number, Msg extends string = string> = { readonly __maxItems: N; readonly __maxItems_message?: Msg };
+export type UniqueItems<Msg extends string = string> = { readonly __uniqueItems: true; readonly __uniqueItems_message?: Msg };
+
+// Cross-field dependencies
+export type Requires<Paths extends string | readonly string[], Msg extends string = string> = { readonly __requires: Paths; readonly __requires_message?: Msg };
+
+// Custom message override
+export type Message<Msg extends string> = { readonly __message: Msg };
+
 
 // Unified constraint namespace
 export namespace constraint {
     // String Constraints
-    export type MinLength<N extends number> = { readonly __minLength: N };
-    export type MaxLength<N extends number> = { readonly __maxLength: N };
-    export type Pattern<S extends string> = { readonly __pattern: S };
+    export type MinLength<N extends number, Msg extends string = string> = { readonly __minLength: N; readonly __minLength_message?: Msg };
+    export type MaxLength<N extends number, Msg extends string = string> = { readonly __maxLength: N; readonly __maxLength_message?: Msg };
+    export type Pattern<S extends string, Msg extends string = string> = { readonly __pattern: S; readonly __pattern_message?: Msg };
     export type Format<S extends 
         | 'email' | 'uuid' | 'url' | 'ipv4' | 'ipv6' | 'date' | 'date-time'
         | 'byte' | 'password' | 'regex' | 'hostname' | 'idn-email' | 'idn-hostname'
         | 'iri' | 'iri-reference' | 'uri' | 'uri-reference' | 'uri-template'
         | 'time' | 'duration' | 'objectId'
-    > = { readonly __format: S };
+    , Msg extends string = string> = { readonly __format: S; readonly __format_message?: Msg };
 
     // String Composite Helpers
     export type Length<Min extends number, Max extends number> = MinLength<Min> & MaxLength<Max>;
 
     // Number Constraints
-    export type Minimum<N extends number | bigint> = { readonly __minimum: N };
-    export type Maximum<N extends number | bigint> = { readonly __maximum: N };
-    export type ExclusiveMinimum<N extends number | bigint> = { readonly __exclusiveMinimum: N };
-    export type ExclusiveMaximum<N extends number | bigint> = { readonly __exclusiveMaximum: N };
-    export type MultipleOf<N extends number | bigint> = { readonly __multipleOf: N };
+    export type Minimum<N extends number | bigint, Msg extends string = string> = { readonly __minimum: N; readonly __minimum_message?: Msg };
+    export type Maximum<N extends number | bigint, Msg extends string = string> = { readonly __maximum: N; readonly __maximum_message?: Msg };
+    export type ExclusiveMinimum<N extends number | bigint, Msg extends string = string> = { readonly __exclusiveMinimum: N; readonly __exclusiveMinimum_message?: Msg };
+    export type ExclusiveMaximum<N extends number | bigint, Msg extends string = string> = { readonly __exclusiveMaximum: N; readonly __exclusiveMaximum_message?: Msg };
+    export type MultipleOf<N extends number | bigint, Msg extends string = string> = { readonly __multipleOf: N; readonly __multipleOf_message?: Msg };
 
     // Number Composite Helpers
     export type Range<Min extends number | bigint, Max extends number | bigint> = Minimum<Min> & Maximum<Max>;
 
     // Array Constraints
-    export type MinItems<N extends number> = { readonly __minItems: N };
-    export type MaxItems<N extends number> = { readonly __maxItems: N };
-    export type UniqueItems = { readonly __uniqueItems: true };
+    export type MinItems<N extends number, Msg extends string = string> = { readonly __minItems: N; readonly __minItems_message?: Msg };
+    export type MaxItems<N extends number, Msg extends string = string> = { readonly __maxItems: N; readonly __maxItems_message?: Msg };
+    export type UniqueItems<Msg extends string = string> = { readonly __uniqueItems: true; readonly __uniqueItems_message?: Msg };
 
     // Custom Validation function link
-    export type Custom<Fn extends (...args: any[]) => boolean> = { readonly __custom: Fn };
+    export type Custom<Fn extends (...args: any[]) => boolean, Msg extends string = string> = { readonly __custom: Fn; readonly __custom_message?: Msg };
+
+    // Cross-field dependencies
+    export type Requires<Paths extends string | readonly string[], Msg extends string = string> = { readonly __requires: Paths; readonly __requires_message?: Msg };
+
+    // Custom message override
+    export type Message<Msg extends string> = { readonly __message: Msg };
 }
 
 // Tag namespace for metadata/initializers
@@ -115,3 +128,48 @@ export interface ITypeConstraints {
     custom?: string;
     default?: string | number | boolean | null;
 }
+
+type Split<S extends string, D extends string> =
+  S extends `${infer T}${D}${infer U}`
+    ? [T, ...Split<U, D>]
+    : [S];
+
+type ModifierPathTuple<T, Path extends string[], Modifiers> = 
+  Path extends [infer Key, ...infer Rest]
+    ? Key extends keyof T
+      ? {
+          [P in keyof T]: P extends Key
+            ? Rest extends string[]
+              ? Rest['length'] extends 0
+                ? T[P] & Modifiers 
+                : ModifierPathTuple<Exclude<T[P], undefined>, Rest, Modifiers> | (undefined extends T[P] ? undefined : never)
+              : T[P]
+            : T[P]
+        }
+      : T
+    : T;
+
+type UnionToIntersection<U> = 
+  (U extends any ? (k: U) => void : never) extends ((k: infer I) => void) ? I : never;
+type LastOf<U> = 
+  UnionToIntersection<U extends any ? (f: U) => void : never> extends ((a: infer A) => void) ? A : never;
+type Push<T extends any[], V> = [...T, V];
+type TuplifyUnion<U, L = LastOf<U>> = 
+  [U] extends [never] ? [] : Push<TuplifyUnion<Exclude<U, L>>, L>;
+
+type Entries<M> = {
+  [K in keyof M]: [K, M[K]]
+}[keyof M];
+
+type ApplyModifiers<T, EntriesList extends any[]> = 
+  EntriesList extends [[infer Path, infer Modifiers], ...infer Rest]
+    ? Path extends string
+      ? ApplyModifiers<ModifierPathTuple<T, Split<Path, '.'>, Modifiers>, Rest>
+      : T
+    : T;
+
+/**
+ * Utility type to decorate nested properties of a type with validation/transform modifiers without retyping the structure.
+ */
+export type WithModifiers<T, M> = ApplyModifiers<T, TuplifyUnion<Entries<M>>>;
+

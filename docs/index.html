@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Webergency Typechecker - Ahead-of-Time (AOT) Type Validation Engine Docs</title>
+  
+  <!-- Google Fonts Outfit, Inter, and Fira Code for code blocks -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@400;500;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+  
+  <style>
+    /* Premium Design System with curated Dark Palette matching Webergency Server */
+    :root {
+      --bg-dark: #070a13;
+      --bg-card: rgba(15, 23, 42, 0.65);
+      --bg-code: #0b0f19;
+      --border-color: rgba(255, 255, 255, 0.06);
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --primary: #6366f1; /* Indigo */
+      --primary-hover: #4f46e5;
+      --secondary: #d946ef; /* Magenta/Pink */
+      --success: #10b981; /* Emerald */
+      --warning: #f59e0b; /* Amber */
+      --error: #f43f5e; /* Rose */
+      
+      --font-title: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --font-body: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --font-mono: 'Fira Code', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: var(--font-body);
+      line-height: 1.625;
+      overflow-x: hidden;
+    }
+
+    /* Ambient Background Glows */
+    .glow-1 {
+      position: fixed;
+      top: -15%;
+      left: -10%;
+      width: 55vw;
+      height: 55vh;
+      background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, rgba(0,0,0,0) 70%);
+      pointer-events: none;
+      z-index: -1;
+    }
+
+    .glow-2 {
+      position: fixed;
+      bottom: -15%;
+      right: -10%;
+      width: 55vw;
+      height: 55vh;
+      background: radial-gradient(circle, rgba(217, 70, 239, 0.1) 0%, rgba(0,0,0,0) 70%);
+      pointer-events: none;
+      z-index: -1;
+    }
+
+    /* Responsive Layout */
+    .app-layout {
+      display: flex;
+      min-height: 100vh;
+    }
+
+    /* Glassmorphic Sidebar */
+    .sidebar {
+      width: 320px;
+      background: rgba(7, 10, 19, 0.85);
+      backdrop-filter: blur(20px);
+      border-right: 1px solid var(--border-color);
+      position: fixed;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      z-index: 100;
+      overflow-y: auto;
+      padding: 2.5rem 1.75rem;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.05) transparent;
+    }
+
+    .logo-container {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 3rem;
+    }
+
+    .logo-icon {
+      width: 40px;
+      height: 40px;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      color: #fff;
+      font-family: var(--font-title);
+      font-size: 1.4rem;
+      box-shadow: 0 0 20px rgba(99, 102, 241, 0.4);
+    }
+
+    .logo-text {
+      font-family: var(--font-title);
+      font-size: 1.5rem;
+      font-weight: 800;
+      background: linear-gradient(to right, #ffffff, #e2e8f0);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .nav-group {
+      margin-bottom: 2.25rem;
+    }
+
+    .nav-title {
+      font-family: var(--font-title);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: var(--text-muted);
+      margin-bottom: 0.85rem;
+      padding-left: 0.5rem;
+      font-weight: 700;
+    }
+
+    .nav-links {
+      list-style: none;
+    }
+
+    .nav-links li {
+      margin-bottom: 0.4rem;
+    }
+
+    .nav-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+      padding: 0.55rem 0.75rem;
+      border-radius: 8px;
+      display: block;
+      transition: all 0.2s ease-in-out;
+      border-left: 2px solid transparent;
+    }
+
+    .nav-links a:hover {
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.03);
+      padding-left: 1rem;
+    }
+
+    .nav-links li.active a {
+      color: #fff;
+      background: rgba(99, 102, 241, 0.08);
+      border-left-color: var(--primary);
+      font-weight: 500;
+    }
+
+    /* Content Area */
+    .main-content {
+      flex: 1;
+      margin-left: 320px;
+      padding: 3.5rem 5rem;
+      max-width: 1240px;
+    }
+
+    .content-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4rem;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 1.5rem;
+    }
+
+    .badge {
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(217, 70, 239, 0.08) 100%);
+      border: 1px solid rgba(99, 102, 241, 0.25);
+      color: #f472b6;
+      padding: 0.35rem 0.85rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+    }
+
+    /* Sections styling */
+    section {
+      margin-bottom: 6rem;
+      scroll-margin-top: 3.5rem;
+    }
+
+    h1, h2, h3, h4 {
+      font-family: var(--font-title);
+      color: #fff;
+      font-weight: 700;
+    }
+
+    h1 {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+      background: linear-gradient(135deg, #fff 40%, #e879f9 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -0.02em;
+    }
+
+    h2 {
+      font-size: 1.95rem;
+      margin-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 0.6rem;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+
+    h2::before {
+      content: '';
+      display: inline-block;
+      width: 4px;
+      height: 1.35rem;
+      background: linear-gradient(to bottom, var(--primary), var(--secondary));
+      border-radius: 2px;
+    }
+
+    h3 {
+      font-size: 1.35rem;
+      margin: 1.75rem 0 0.85rem 0;
+      color: #f3f4f6;
+    }
+
+    p {
+      color: var(--text-muted);
+      margin-bottom: 1.5rem;
+      font-size: 1rem;
+      line-height: 1.75;
+    }
+
+    strong {
+      color: #fff;
+      font-weight: 600;
+    }
+
+    /* Cards (Glassmorphism) */
+    .card {
+      background: var(--bg-card);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 2.25rem;
+      margin-bottom: 2rem;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+      transition: all 0.3s ease;
+    }
+
+    .card:hover {
+      border-color: rgba(99, 102, 241, 0.3);
+      transform: translateY(-2px);
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+      gap: 1.75rem;
+      margin-bottom: 2rem;
+    }
+
+    /* Feature indicators */
+    .feature-indicator {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.85rem;
+    }
+
+    .feature-icon {
+      background: rgba(99, 102, 241, 0.12);
+      color: #818cf8;
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.15rem;
+      flex-shrink: 0;
+    }
+
+    /* Code Block Containers */
+    .code-container {
+      position: relative;
+      background-color: var(--bg-code);
+      border: 1px solid var(--border-color);
+      border-radius: 14px;
+      margin: 1.5rem 0;
+      overflow: hidden;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+    }
+
+    .code-header {
+      background-color: rgba(255, 255, 255, 0.015);
+      padding: 0.85rem 1.35rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .code-title {
+      font-family: var(--font-mono);
+      font-size: 0.825rem;
+      color: var(--text-muted);
+    }
+
+    .btn-copy {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: var(--text-muted);
+      padding: 0.3rem 0.65rem;
+      font-size: 0.725rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: var(--font-body);
+      transition: all 0.2s;
+    }
+
+    .btn-copy:hover {
+      color: #fff;
+      border-color: var(--primary);
+      background-color: rgba(99, 102, 241, 0.1);
+    }
+
+    pre {
+      padding: 1.5rem;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 0.875rem;
+      line-height: 1.6;
+    }
+
+    code {
+      color: #e2e8f0;
+    }
+
+    /* Syntax Highlighting */
+    .keyword { color: #f43f5e; font-weight: 500; }
+    .type { color: #22d3ee; }
+    .string { color: #34d399; }
+    .comment { color: #57606a; font-style: italic; }
+    .decorator { color: #d946ef; font-weight: 600; }
+    .function { color: #38bdf8; }
+    .number { color: #fbbf24; }
+    .boolean { color: #fbbf24; }
+
+    /* Alerts */
+    .alert {
+      background: rgba(99, 102, 241, 0.04);
+      border-left: 4px solid var(--primary);
+      padding: 1.35rem 1.75rem;
+      border-radius: 0 12px 12px 0;
+      margin: 1.75rem 0;
+      border-top: 1px solid rgba(255,255,255,0.02);
+      border-right: 1px solid rgba(255,255,255,0.02);
+      border-bottom: 1px solid rgba(255,255,255,0.02);
+    }
+
+    .alert-title {
+      font-family: var(--font-title);
+      font-weight: 700;
+      font-size: 1rem;
+      color: #818cf8;
+      margin-bottom: 0.35rem;
+    }
+
+    /* Reference Table */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1.5rem 0;
+      background: rgba(15, 23, 42, 0.35);
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid var(--border-color);
+    }
+
+    th, td {
+      padding: 1rem 1.25rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    th {
+      background: rgba(255, 255, 255, 0.015);
+      font-family: var(--font-title);
+      font-weight: 600;
+      color: #fff;
+    }
+
+    td {
+      color: var(--text-muted);
+    }
+
+    td code {
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      color: #38bdf8;
+      background: rgba(56, 189, 248, 0.06);
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+      border: 1px solid rgba(56, 189, 248, 0.15);
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border-color);
+      padding: 3rem 0;
+      margin-top: 6rem;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.875rem;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="glow-1"></div>
+  <div class="glow-2"></div>
+
+  <div class="app-layout">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="logo-container">
+        <div class="logo-icon">T</div>
+        <div class="logo-text">webergency</div>
+      </div>
+      
+      <nav>
+        <div class="nav-group">
+          <div class="nav-title">Overview</div>
+          <ul class="nav-links">
+            <li class="active"><a href="#introduction">Introduction</a></li>
+            <li><a href="#installation">Installation</a></li>
+            <li><a href="#configuration">Configuration</a></li>
+          </ul>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-title">Runtime APIs</div>
+          <ul class="nav-links">
+            <li><a href="#apis">Validation APIs</a></li>
+            <li><a href="#with-modifiers">WithModifiers Utility</a></li>
+          </ul>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-title">Modifier Namespaces</div>
+          <ul class="nav-links">
+            <li><a href="#namespace-constraint">constraint</a></li>
+            <li><a href="#namespace-format">format</a></li>
+            <li><a href="#namespace-transform">transform</a></li>
+            <li><a href="#namespace-tag">tag (defaults)</a></li>
+          </ul>
+        </div>
+      </nav>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      
+      <!-- Top header -->
+      <header class="content-header">
+        <div>
+          <span class="badge">v0.0.18</span>
+        </div>
+        <div style="font-size: 0.9rem; color: var(--text-muted);">
+          Ahead-Of-Time (AOT) Zero-Reflection Type Validation
+        </div>
+      </header>
+
+      <!-- Section: Introduction -->
+      <section id="introduction">
+        <h1>Webergency Typechecker</h1>
+        <p>
+          Webergency Typechecker is a high-performance, <strong>zero-runtime-dependency</strong> TypeScript compiler plugin (transformer). It intercepts standard TypeScript type definitions and converts them directly into optimized, hashed, and hoisted JavaScript validation functions at build time.
+        </p>
+        <p>
+          By generating static pipelines, it completely bypasses runtime reflection, parsing schemas, or dynamic validator evaluation, achieving execution speeds up to <strong>10x faster</strong> than standard runtime checkers.
+        </p>
+
+        <div class="grid-2">
+          <div class="card feature-indicator">
+            <div class="feature-icon">⚡</div>
+            <div>
+              <h3 style="margin-top:0;">Compiled Pipelines</h3>
+              <p style="margin-bottom:0; font-size:0.9rem;">Translates your types directly into vanilla JavaScript checks, keeping the runtime package size at a absolute zero dependency footprint.</p>
+            </div>
+          </div>
+          <div class="card feature-indicator">
+            <div class="feature-icon">🏷️</div>
+            <div>
+              <h3 style="margin-top:0;">Tag-Based Modifiers</h3>
+              <p style="margin-bottom:0; font-size:0.9rem;">Impose constraints, formatting rules, transformations, and default values directly onto TypeScript primitives using intersection types.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section: Installation -->
+      <section id="installation">
+        <h2>Installation</h2>
+        <p>
+          Since this library is a TypeScript compiler plugin (transformer), you must compile your project using a compiler patcher like <code>ts-patch</code> to hook into TS compilation.
+        </p>
+        <div class="code-container">
+          <div class="code-header">
+            <span class="code-title">Terminal</span>
+          </div>
+          <pre><code>npm install @webergency-utils/typechecker
+npm install -D ts-patch
+
+# Run patcher to inject the compiler hook
+npx ts-patch install</code></pre>
+        </div>
+      </section>
+
+      <!-- Section: Configuration -->
+      <section id="configuration">
+        <h2>Configuration</h2>
+        <p>
+          Add the typechecker plugin to the <code>plugins</code> array inside your project's <code>tsconfig.json</code>:
+        </p>
+        <div class="code-container">
+          <div class="code-header">
+            <span class="code-title">tsconfig.json</span>
+          </div>
+          <pre><code>{
+  "<span class="keyword">compilerOptions</span>": {
+    "<span class="keyword">target</span>": "ES2022",
+    "<span class="keyword">module</span>": "NodeNext",
+    "<span class="keyword">moduleResolution</span>": "NodeNext",
+    "<span class="keyword">plugins</span>": [
+      { "<span class="string">transform</span>": "@webergency-utils/typechecker" }
+    ]
+  }
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- Section: APIs -->
+      <section id="apis">
+        <h2>Validation APIs</h2>
+        <p>
+          Import one of the validation helpers and pass any TypeScript type directly as a generic argument. The transformer will compile your call into a dedicated runtime validator.
+        </p>
+        
+        <div class="code-container">
+          <div class="code-header">
+            <span class="code-title">validation.ts</span>
+          </div>
+          <pre><code><span class="keyword">import</span> { <span class="function">is</span>, <span class="function">assert</span>, <span class="function">validate</span> } <span class="keyword">from</span> <span class="string">'@webergency-utils/typechecker'</span>;
+
+<span class="keyword">interface</span> <span class="type">User</span> {
+  id: <span class="type">string</span>;
+  age: <span class="type">number</span>;
+}
+
+<span class="keyword">const</span> data: <span class="type">unknown</span> = { id: "user_1", age: 24 };
+
+<span class="comment">// 1. is&lt;T&gt;() - returns a boolean Type Guard</span>
+<span class="keyword">if</span> (<span class="function">is</span>&lt;<span class="type">User</span>&gt;(data)) {
+  console.log(data.id); <span class="comment">// TypeScript narrows type to User here</span>
+}
+
+<span class="comment">// 2. assert&lt;T&gt;() - returns value or throws a formatted Error</span>
+<span class="keyword">const</span> validatedUser = <span class="function">assert</span>&lt;<span class="type">User</span>&gt;(data);
+
+<span class="comment">// 3. validate&lt;T&gt;() - returns structured detailed errors list</span>
+<span class="keyword">const</span> result = <span class="function">validate</span>&lt;<span class="type">User</span>&gt;(data);
+<span class="keyword">if</span> (!result.success) {
+  console.error(result.errors); <span class="comment">// [{ path: "age", expected: "number", value: ... }]</span>
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- Section: WithModifiers -->
+      <section id="with-modifiers">
+        <h2>WithModifiers Utility</h2>
+        <p>
+          If you have deeply nested objects or external types, you can add validation tags to specific properties using dot-notation path references. This prevents you from having to retype the entire structure.
+        </p>
+        
+        <div class="code-container">
+          <div class="code-header">
+            <span class="code-title">deep-decorators.ts</span>
+          </div>
+          <pre><code><span class="keyword">import</span> { <span class="type">WithModifiers</span>, constraint, format } <span class="keyword">from</span> <span class="string">'@webergency-utils/typechecker'</span>;
+
+<span class="comment">// External type we cannot edit directly</span>
+<span class="keyword">interface</span> <span class="type">ExternalUser</span> {
+  id: <span class="type">string</span>;
+  profile?: {
+    details: {
+      email: <span class="type">string</span>;
+      password: <span class="type">string</span>;
+    }
+  }
+}
+
+<span class="comment">// Decorate specific paths using dot notation</span>
+<span class="keyword">type</span> <span class="type">ValidatedUser</span> = <span class="type">WithModifiers</span>&lt;<span class="type">ExternalUser</span>, {
+  <span class="string">'profile.details.email'</span>: format.<span class="type">Email</span>;
+  <span class="string">'profile.details.password'</span>: constraint.<span class="type">MinLength</span>&lt;<span class="number">8</span>&gt;;
+}&gt;;</code></pre>
+        </div>
+
+        <div class="alert">
+          <div class="alert-title">Automatic Type Merging</div>
+          <p style="margin-bottom:0; font-size:0.925rem;">
+            <code>WithModifiers</code> automatically intersects validation metadata with the original type at that path. For example, <code>profile.details.email</code> will be typed as <code>string & Format&lt;'email'&gt;</code> under the hood. It also preserves optional properties (<code>?</code>) and handles recursive types correctly.
+          </p>
+        </div>
+
+        <h3>Cross-Field Dependencies (Requires)</h3>
+        <p>
+          You can specify that a property requires the presence of other properties in the same object using absolute paths or relative dot-notation paths (e.g. <code>.sibling</code>, <code>..grandparent.cousin</code>):
+        </p>
+        <div class="code-container">
+          <div class="code-header">
+            <span class="code-title">cross-dependencies.ts</span>
+          </div>
+          <pre><code><span class="keyword">import</span> { <span class="type">WithModifiers</span>, constraint } <span class="keyword">from</span> <span class="string">'@webergency-utils/typechecker'</span>;
+
+<span class="keyword">interface</span> <span class="type">DBConfig</span> {
+  ssl?: <span class="type">boolean</span>;
+  cert?: <span class="type">string</span>;
+  auth?: {
+    username?: <span class="type">string</span>;
+    password?: <span class="type">string</span>;
+  }
+}
+
+<span class="keyword">type</span> <span class="type">SecureConfig</span> = <span class="type">WithModifiers</span>&lt;<span class="type">DBConfig</span>, {
+  <span class="comment">// 1. Absolute check: if "ssl" is defined, "cert" must exist at root</span>
+  <span class="string">'ssl'</span>: constraint.<span class="type">Requires</span>&lt;<span class="string">'cert'</span>&gt;;
+
+  <span class="comment">// 2. Relative check: if "auth.password" is defined, its sibling "username" must exist</span>
+  <span class="string">'auth.password'</span>: constraint.<span class="type">Requires</span>&lt;<span class="string">'.username'</span>&gt;;
+}&gt;;</code></pre>
+        </div>
+      </section>
+
+      <!-- Section: constraint -->
+      <section id="namespace-constraint">
+        <h2>Namespace: constraint</h2>
+        <p>
+          Impose values constraints directly on your TypeScript types:
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Tag / Modifier</th>
+              <th>Applies To</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>constraint.MinLength&lt;N&gt;</code></td>
+              <td><code>string</code></td>
+              <td>Enforces a minimum string length.</td>
+            </tr>
+            <tr>
+              <td><code>constraint.MaxLength&lt;N&gt;</code></td>
+              <td><code>string</code></td>
+              <td>Enforces a maximum string length.</td>
+            </tr>
+            <tr>
+              <td><code>constraint.Length&lt;Min, Max&gt;</code></td>
+              <td><code>string</code></td>
+              <td>Combination helper to enforce string length range.</td>
+            </tr>
+            <tr>
+              <td><code>constraint.Pattern&lt;S&gt;</code></td>
+              <td><code>string</code></td>
+              <td>Validates string against a regex pattern.</td>
+            </tr>
+            <tr>
+              <td><code>constraint.Minimum&lt;N&gt;</code></td>
+              <td><code>number | bigint</code></td>
+              <td>Minimum value constraint (inclusive).</td>
+            </tr>
+            <tr>
+              <td><code>constraint.Maximum&lt;N&gt;</code></td>
+              <td><code>number | bigint</code></td>
+              <td>Maximum value constraint (inclusive).</td>
+            </tr>
+            <tr>
+              <td><code>constraint.Range&lt;Min, Max&gt;</code></td>
+              <td><code>number | bigint</code></td>
+              <td>Enforces that value lies within a numeric range.</td>
+            </tr>
+            <tr>
+              <td><code>constraint.MultipleOf&lt;N&gt;</code></td>
+              <td><code>number | bigint</code></td>
+              <td>Enforces value to be a multiple of N.</td>
+            </tr>
+            <tr>
+              <td><code>constraint.MinItems&lt;N&gt;</code></td>
+              <td><code>Array</code></td>
+              <td>Minimum number of elements in the array.</td>
+            </tr>
+            <tr>
+              <td><code>constraint.MaxItems&lt;N&gt;</code></td>
+              <td><code>Array</code></td>
+              <td>Maximum number of elements in the array.</td>
+            </tr>
+            <tr>
+              <td><code>constraint.UniqueItems</code></td>
+              <td><code>Array</code></td>
+              <td>Ensures all array elements are deeply unique.</td>
+            </tr>
+            <tr>
+              <td><code>constraint.Custom&lt;typeof fn&gt;</code></td>
+              <td><code>Any</code></td>
+              <td>Executes a custom validation function (receives <code>(val, { parent, root, path }) => boolean</code>).</td>
+            </tr>
+            <tr>
+              <td><code>constraint.Requires&lt;Path | [Paths]&gt;</code></td>
+              <td><code>Any</code></td>
+              <td>Enforces cross-field dependencies (supports absolute and relative sibling <code>.sibling</code>, grandparent <code>..cousin</code> paths).</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Section: format -->
+      <section id="namespace-format">
+        <h2>Namespace: format</h2>
+        <p>
+          Impose common format constraints on string primitives:
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Format Tag</th>
+              <th>Description / Validator</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>format.Email</code></td>
+              <td>Standard RFC 5322 Email Validator.</td>
+            </tr>
+            <tr>
+              <td><code>format.UUID</code></td>
+              <td>UUID (v1-v5) format.</td>
+            </tr>
+            <tr>
+              <td><code>format.URL</code></td>
+              <td>Full URL validation (HTTP/HTTPS/FTP).</td>
+            </tr>
+            <tr>
+              <td><code>format.IPv4</code> / <code>format.IPv6</code></td>
+              <td>Standard IP address validator.</td>
+            </tr>
+            <tr>
+              <td><code>format.DateTime</code></td>
+              <td>ISO-8601 Date Time string.</td>
+            </tr>
+            <tr>
+              <td><code>format.Date</code></td>
+              <td>Standard ISO Date string (YYYY-MM-DD).</td>
+            </tr>
+            <tr>
+              <td><code>format.ObjectId</code></td>
+              <td>24-character hexadecimal MongoDB ObjectId.</td>
+            </tr>
+            <tr>
+              <td><code>format.Duration</code></td>
+              <td>ISO-8601 duration format (e.g., PT1H).</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Section: transform -->
+      <section id="namespace-transform">
+        <h2>Namespace: transform</h2>
+        <p>
+          Modify input data before validating it:
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Transform Tag</th>
+              <th>Target Type</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>transform.Trim</code></td>
+              <td><code>string</code></td>
+              <td>Removes whitespace from both ends.</td>
+            </tr>
+            <tr>
+              <td><code>transform.LowerCase</code></td>
+              <td><code>string</code></td>
+              <td>Converts string to lowercase.</td>
+            </tr>
+            <tr>
+              <td><code>transform.UpperCase</code></td>
+              <td><code>string</code></td>
+              <td>Converts string to uppercase.</td>
+            </tr>
+            <tr>
+              <td><code>transform.Capitalize</code></td>
+              <td><code>string</code></td>
+              <td>Capitalizes the first character of the string.</td>
+            </tr>
+            <tr>
+              <td><code>transform.ToNumber</code></td>
+              <td><code>Any</code></td>
+              <td>Coerces string, boolean, etc. to number.</td>
+            </tr>
+            <tr>
+              <td><code>transform.ToBoolean</code></td>
+              <td><code>Any</code></td>
+              <td>Coerces values into boolean.</td>
+            </tr>
+            <tr>
+              <td><code>transform.ToDate</code></td>
+              <td><code>Any</code></td>
+              <td>Coerces string timestamp into a Date object.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Section: tag -->
+      <section id="namespace-tag">
+        <h2>Namespace: tag</h2>
+        <p>
+          Define default values inside your TypeScript types:
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Tag</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>tag.Default&lt;Value&gt;</code></td>
+              <td>Injects <code>Value</code> at validation time if the property is undefined.</td>
+            </tr>
+          </tbody>
+        </table>
+        
+        <div class="code-container">
+          <div class="code-header">
+            <span class="code-title">defaults.ts</span>
+          </div>
+          <pre><code><span class="keyword">import</span> { tag, <span class="function">assert</span> } <span class="keyword">from</span> <span class="string">'@webergency-utils/typechecker'</span>;
+
+<span class="keyword">interface</span> <span class="type">Config</span> {
+  retries: <span class="type">number</span> & tag.<span class="type">Default</span>&lt;<span class="number">3</span>&gt;;
+  verbose: <span class="type">boolean</span> & tag.<span class="type">Default</span>&lt;<span class="boolean">false</span>&gt;;
+}
+
+<span class="comment">// Evaluates to: { retries: 3, verbose: false }</span>
+<span class="keyword">const</span> finalConfig = <span class="function">assert</span>&lt;<span class="type">Config</span>&gt;({}); </code></pre>
+        </div>
+      </section>
+
+      <footer>
+        Webergency Utilities © 2026. Made with passion for high performance.
+      </footer>
+    </main>
+  </div>
+
+</body>
+</html>

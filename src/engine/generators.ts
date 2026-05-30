@@ -62,23 +62,28 @@ export function createConstrainedPrimitiveCheck(baseType: string, constraints: a
     
     const defaultConstraint = constraints.find(c => c.type === 'default');
     const transformConstraints = constraints.filter(c => c.type === 'transform' || c.type === 'transform_custom');
-    const remainingConstraints = constraints.filter(c => c.type !== 'default' && c.type !== 'transform' && c.type !== 'transform_custom');
+    const messageConstraint = constraints.find(c => c.type === 'message');
+    const remainingConstraints = constraints.filter(c => c.type !== 'default' && c.type !== 'transform' && c.type !== 'transform_custom' && c.type !== 'message');
     
+    const fallbackMsg = messageConstraint?.value;
     const constraintCode = remainingConstraints.map(c => {
         const valStr = typeof c.value === 'bigint' ? `${c.value}n` : (typeof c.value === 'string' ? `"${c.value}"` : `${c.value}`);
-        if (c.type === 'minLength') return `validators.minLength(v, path, ctx, ${valStr})`;
-        if (c.type === 'maxLength') return `validators.maxLength(v, path, ctx, ${valStr})`;
-        if (c.type === 'minimum') return `validators.minimum(v, path, ctx, ${valStr})`;
-        if (c.type === 'maximum') return `validators.maximum(v, path, ctx, ${valStr})`;
-        if (c.type === 'exclusiveMinimum') return `validators.exclusiveMinimum(v, path, ctx, ${valStr})`;
-        if (c.type === 'exclusiveMaximum') return `validators.exclusiveMaximum(v, path, ctx, ${valStr})`;
-        if (c.type === 'multipleOf') return `validators.multipleOf(v, path, ctx, ${valStr})`;
-        if (c.type === 'pattern') return `validators.pattern(v, path, ctx, new RegExp(${JSON.stringify(c.value)}), ${JSON.stringify('Pattern<' + c.value + '>')})`;
-        if (c.type === 'format') return `validators.format(v, path, ctx, ${JSON.stringify(c.value)})`;
-        if (c.type === 'minItems') return `validators.minItems(v, path, ctx, ${valStr})`;
-        if (c.type === 'maxItems') return `validators.maxItems(v, path, ctx, ${valStr})`;
-        if (c.type === 'uniqueItems') return `validators.uniqueItems(v, path, ctx)`;
-        if (c.type === 'custom') return `validators.custom(v, path, ctx, ${c.value})`;
+        const activeMsg = c.message !== undefined ? c.message : fallbackMsg;
+        const msgArg = activeMsg !== undefined ? `, ${JSON.stringify(activeMsg)}` : '';
+        if (c.type === 'minLength') return `validators.minLength(v, path, ctx, ${valStr}${msgArg})`;
+        if (c.type === 'maxLength') return `validators.maxLength(v, path, ctx, ${valStr}${msgArg})`;
+        if (c.type === 'minimum') return `validators.minimum(v, path, ctx, ${valStr}${msgArg})`;
+        if (c.type === 'maximum') return `validators.maximum(v, path, ctx, ${valStr}${msgArg})`;
+        if (c.type === 'exclusiveMinimum') return `validators.exclusiveMinimum(v, path, ctx, ${valStr}${msgArg})`;
+        if (c.type === 'exclusiveMaximum') return `validators.exclusiveMaximum(v, path, ctx, ${valStr}${msgArg})`;
+        if (c.type === 'multipleOf') return `validators.multipleOf(v, path, ctx, ${valStr}${msgArg})`;
+        if (c.type === 'pattern') return `validators.pattern(v, path, ctx, new RegExp(${JSON.stringify(c.value)}), ${JSON.stringify('Pattern<' + c.value + '>')}${msgArg})`;
+        if (c.type === 'format') return `validators.format(v, path, ctx, ${JSON.stringify(c.value)}${msgArg})`;
+        if (c.type === 'minItems') return `validators.minItems(v, path, ctx, ${valStr}${msgArg})`;
+        if (c.type === 'maxItems') return `validators.maxItems(v, path, ctx, ${valStr}${msgArg})`;
+        if (c.type === 'uniqueItems') return `validators.uniqueItems(v, path, ctx${msgArg})`;
+        if (c.type === 'custom') return `validators.custom(v, path, ctx, ${c.value}${msgArg})`;
+        if (c.type === 'requires') return `validators.requires(v, path, ctx, ${JSON.stringify(Array.isArray(c.value) ? c.value : [c.value])}${msgArg})`;
         return '';
     }).filter(c => c !== '').join(';\n            ');
 
@@ -187,7 +192,7 @@ export function createTemplateLiteralCheck(regexStr: string, expected: string, r
     return stripPositions(templateToAst(tpl));
 }
 
-export function createUnionCheck(checks: ts.Expression[], requiredUtils: Set<string>): ts.Expression {
+export function createUnionCheck(checks: ts.Expression[], requiredUtils: Set<string>, expected: string = "Type<Union>"): ts.Expression {
     requiredUtils.add('validators');
     return ts.factory.createArrowFunction(
         undefined,
@@ -206,7 +211,8 @@ export function createUnionCheck(checks: ts.Expression[], requiredUtils: Set<str
                 ts.factory.createIdentifier('v'),
                 ts.factory.createIdentifier('path'),
                 ts.factory.createIdentifier('ctx'),
-                ts.factory.createArrayLiteralExpression(checks)
+                ts.factory.createArrayLiteralExpression(checks),
+                ts.factory.createStringLiteral(expected)
             ]
         )
     );
@@ -307,4 +313,16 @@ export function createIntersectionCheck(checks: ts.Expression[], requiredUtils: 
     return injectNodes(templateToAst(tpl), {
         '__CHECKS__': ts.factory.createArrayLiteralExpression(checks)
     });
+}
+
+export function createSetCheck(elementValidator: ts.Expression, requiredUtils: Set<string>): ts.Expression {
+    requiredUtils.add('validators');
+    const tpl = `(v, path, ctx) => validators.set(v, path, ctx, __CHILD__)`;
+    return injectNodes(templateToAst(tpl), { '__CHILD__': elementValidator });
+}
+
+export function createMapCheck(keyValidator: ts.Expression, valueValidator: ts.Expression, requiredUtils: Set<string>): ts.Expression {
+    requiredUtils.add('validators');
+    const tpl = `(v, path, ctx) => validators.map(v, path, ctx, __KEY__, __VALUE__)`;
+    return injectNodes(templateToAst(tpl), { '__KEY__': keyValidator, '__VALUE__': valueValidator });
 }

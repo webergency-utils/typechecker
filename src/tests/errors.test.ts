@@ -20,8 +20,8 @@ describe('Error Reporting Unit Tests', () => {
 
         expect(ctx.success).toBe(false);
         expect(ctx.errors).toHaveLength(2);
-        expect(ctx.errors[0]).toEqual({ path: 'user.name', expected: 'string', value: 123 });
-        expect(ctx.errors[1]).toEqual({ path: 'user.age', expected: 'number', value: 'abc' });
+        expect(ctx.errors[0]).toEqual({ path: 'user.name', error: "Type<string>", value: 123 });
+        expect(ctx.errors[1]).toEqual({ path: 'user.age', error: "Type<number>", value: 'abc' });
     });
 
     it('should resolve nested paths correctly', () => {
@@ -44,7 +44,7 @@ describe('Error Reporting Unit Tests', () => {
 
         expect(ctx.success).toBe(false);
         expect(ctx.errors[0].path).toBe('root.info.address.street');
-        expect(ctx.errors[0].expected).toBe('string');
+        expect(ctx.errors[0].error).toBe('Type<string>');
         expect(ctx.errors[0].value).toBe(123);
     });
 
@@ -58,9 +58,9 @@ describe('Error Reporting Unit Tests', () => {
         expect(ctx.success).toBe(false);
         // Should have 3 errors: union itself + string branch + number branch
         expect(ctx.errors).toHaveLength(3);
-        expect(ctx.errors[0].expected).toBe('union');
-        expect(ctx.errors[1].expected).toBe('string');
-        expect(ctx.errors[2].expected).toBe('number');
+        expect(ctx.errors[0].error).toBe('Type<Union>');
+        expect(ctx.errors[1].error).toBe('Type<string>');
+        expect(ctx.errors[2].error).toBe('Type<number>');
     });
 
     it('should report multiple errors in arrays', () => {
@@ -85,7 +85,7 @@ describe('Error Reporting Unit Tests', () => {
         expect(ctx.success).toBe(false);
         expect(ctx.errors[0]).toEqual({
             path: 'user',
-            expected: 'property not allowed: extra',
+            error: 'PropertyNotAllowed<extra>',
             value: 'bad'
         });
     });
@@ -105,6 +105,6 @@ describe('Error Reporting Unit Tests', () => {
         expect(ctx.success).toBe(false);
         expect(ctx.errors).toHaveLength(1);
         expect(ctx.errors[0].path).toBe('root.info');
-        expect(ctx.errors[0].expected).toBe('object');
+        expect(ctx.errors[0].error).toBe('Type<Object>');
     });
 });

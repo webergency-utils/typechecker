@@ -11,6 +11,7 @@ export interface ValidationOptions {
     tryConvert?: boolean;
     wrapArrays?: boolean;
     schema?: any;
+    errorFactory?: (errors: any[]) => Error;
 }
 
 export declare function is<T>(input: unknown, options?: ValidationMode | ValidationOptions): input is T;

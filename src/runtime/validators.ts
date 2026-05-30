@@ -2,8 +2,8 @@ export type ValidationMode = 'strict' | 'relaxed' | 'strip';
 
 export interface IValidationError {
     path: string;
-    expected: string;
     value: any;
+    error: string;
 }
 
 export interface ValidationContext {
@@ -12,25 +12,28 @@ export interface ValidationContext {
     mode: ValidationMode;
     tryConvert?: boolean;
     wrapArrays?: boolean;
+    root?: any;
 }
+
 
 export interface ValidationOptions {
     mode?: ValidationMode;
     tryConvert?: boolean;
     wrapArrays?: boolean;
     schema?: any;
+    errorFactory?: (errors: IValidationError[]) => Error;
 }
 
 
-const report = (ctx: ValidationContext, path: string, expected: string, value: any) => {
+const report = (ctx: ValidationContext, path: string, expected: string, value: any, message?: string) => {
     ctx.success = false;
-    ctx.errors.push({ path, expected, value });
+    ctx.errors.push({ path, value, error: message || expected });
 };
 
 export const validators = {
     string: (v: any, path: string, ctx: ValidationContext) => {
         if (typeof v !== "string") {
-            report(ctx, path, "string", v);
+            report(ctx, path, "Type<string>", v);
         }
         return v;
     },
@@ -41,7 +44,7 @@ export const validators = {
                 const parsed = parseFloat(v);
                 if (!isNaN(parsed)) return parsed;
             }
-            report(ctx, path, "number", v);
+            report(ctx, path, "Type<number>", v);
         }
         return v;
     },
@@ -53,7 +56,7 @@ export const validators = {
                     return BigInt(v);
                 } catch (e) {}
             }
-            report(ctx, path, "bigint", v);
+            report(ctx, path, "Type<bigint>", v);
         }
         return v;
     },
@@ -66,7 +69,7 @@ export const validators = {
                 if (s === "true" || s === "1" || s === "yes" || s === "on") return true;
                 if (s === "false" || s === "0" || s === "no" || s === "off") return false;
             }
-            report(ctx, path, "boolean", v);
+            report(ctx, path, "Type<boolean>", v);
         }
         return v;
     },
@@ -77,7 +80,7 @@ export const validators = {
                 const parsed = new Date(v);
                 if (!isNaN(parsed.getTime())) return parsed;
             }
-            report(ctx, path, "Date", v);
+            report(ctx, path, "Type<Date>", v);
         }
         return v;
     },
@@ -96,21 +99,21 @@ export const validators = {
                     } catch (e) {}
                 }
             }
-            report(ctx, path, "RegExp", v);
+            report(ctx, path, "Type<RegExp>", v);
         }
         return v;
     },
 
     null: (v: any, path: string, ctx: ValidationContext) => {
         if (v !== null) {
-            report(ctx, path, "null", v);
+            report(ctx, path, "Type<null>", v);
         }
         return null;
     },
 
     undefined: (v: any, path: string, ctx: ValidationContext) => {
         if (v !== undefined) {
-            report(ctx, path, "undefined", v);
+            report(ctx, path, "Type<undefined>", v);
         }
         return undefined;
     },
@@ -136,7 +139,8 @@ export const validators = {
                     if (val === expected) return val;
                 }
             }
-            report(ctx, path, `literal ${expected}`, v);
+            const expStr = typeof expected === "string" ? `'${expected}'` : expected;
+            report(ctx, path, `Literal<${expStr}>`, v);
         }
         return v;
     },
@@ -146,7 +150,7 @@ export const validators = {
             if (ctx.wrapArrays && v !== undefined && v !== null) {
                 v = [v];
             } else {
-                report(ctx, path, "array", v);
+                report(ctx, path, "Type<Array>", v);
                 return v;
             }
         }
@@ -173,7 +177,7 @@ export const validators = {
         }
     },
 
-    object: (v: any, path: string, ctx: ValidationContext, allowedKeys?: string[], expected: string = "object") => {
+    object: (v: any, path: string, ctx: ValidationContext, allowedKeys?: string[], expected: string = "Type<Object>") => {
         if (!v || typeof v !== "object" || Array.isArray(v)) {
             report(ctx, path, expected, v);
             return false;
@@ -181,7 +185,7 @@ export const validators = {
         if (ctx.mode === "strict" && allowedKeys) {
             for (const k of Object.keys(v)) {
                 if (!allowedKeys.includes(k)) {
-                    report(ctx, path, `property not allowed: ${k}`, v[k]);
+                    report(ctx, path, `PropertyNotAllowed<${k}>`, v[k]);
                 }
             }
         }
@@ -195,51 +199,51 @@ export const validators = {
         return v;
     },
 
-    minLength: (v: string, path: string, ctx: ValidationContext, min: number) => {
-        if (v.length < min) report(ctx, path, `MinLength<${min}>`, v);
+    minLength: (v: string, path: string, ctx: ValidationContext, min: number, message?: string) => {
+        if (v.length < min) report(ctx, path, `MinLength<${min}>`, v, message);
         return v;
     },
 
-    maxLength: (v: string, path: string, ctx: ValidationContext, max: number) => {
-        if (v.length > max) report(ctx, path, `MaxLength<${max}>`, v);
+    maxLength: (v: string, path: string, ctx: ValidationContext, max: number, message?: string) => {
+        if (v.length > max) report(ctx, path, `MaxLength<${max}>`, v, message);
         return v;
     },
 
-    minimum: (v: number | bigint, path: string, ctx: ValidationContext, min: number | bigint) => {
-        if (v < min) report(ctx, path, `Minimum<${min}>`, v);
+    minimum: (v: number | bigint, path: string, ctx: ValidationContext, min: number | bigint, message?: string) => {
+        if (v < min) report(ctx, path, `Minimum<${min}>`, v, message);
         return v;
     },
 
-    maximum: (v: number | bigint, path: string, ctx: ValidationContext, max: number | bigint) => {
-        if (v > max) report(ctx, path, `Maximum<${max}>`, v);
+    maximum: (v: number | bigint, path: string, ctx: ValidationContext, max: number | bigint, message?: string) => {
+        if (v > max) report(ctx, path, `Maximum<${max}>`, v, message);
         return v;
     },
 
-    exclusiveMinimum: (v: number | bigint, path: string, ctx: ValidationContext, min: number | bigint) => {
-        if (v <= min) report(ctx, path, `ExclusiveMinimum<${min}>`, v);
+    exclusiveMinimum: (v: number | bigint, path: string, ctx: ValidationContext, min: number | bigint, message?: string) => {
+        if (v <= min) report(ctx, path, `ExclusiveMinimum<${min}>`, v, message);
         return v;
     },
 
-    exclusiveMaximum: (v: number | bigint, path: string, ctx: ValidationContext, max: number | bigint) => {
-        if (v >= max) report(ctx, path, `ExclusiveMaximum<${max}>`, v);
+    exclusiveMaximum: (v: number | bigint, path: string, ctx: ValidationContext, max: number | bigint, message?: string) => {
+        if (v >= max) report(ctx, path, `ExclusiveMaximum<${max}>`, v, message);
         return v;
     },
 
-    multipleOf: (v: number | bigint, path: string, ctx: ValidationContext, n: number | bigint) => {
+    multipleOf: (v: number | bigint, path: string, ctx: ValidationContext, n: number | bigint, message?: string) => {
         if (typeof v === 'bigint' || typeof n === 'bigint') {
-            if (BigInt(v) % BigInt(n) !== 0n) report(ctx, path, `MultipleOf<${n}>`, v);
+            if (BigInt(v) % BigInt(n) !== 0n) report(ctx, path, `MultipleOf<${n}>`, v, message);
         } else {
-            if (v % n !== 0) report(ctx, path, `MultipleOf<${n}>`, v);
+            if (v % n !== 0) report(ctx, path, `MultipleOf<${n}>`, v, message);
         }
         return v;
     },
 
-    pattern: (v: string, path: string, ctx: ValidationContext, regex: RegExp, expected: string) => {
-        if (!regex.test(v)) report(ctx, path, expected, v);
+    pattern: (v: string, path: string, ctx: ValidationContext, regex: RegExp, expected: string, message?: string) => {
+        if (!regex.test(v)) report(ctx, path, expected, v, message);
         return v;
     },
 
-    format: (v: string, path: string, ctx: ValidationContext, format: string) => {
+    format: (v: string, path: string, ctx: ValidationContext, format: string, message?: string) => {
         let regex: RegExp | undefined;
         let isValid = true;
 
@@ -264,27 +268,27 @@ export const validators = {
         }
 
         if (regex && !regex.test(v)) isValid = false;
-        if (!isValid) report(ctx, path, `Format<${format}>`, v);
+        if (!isValid) report(ctx, path, `Format<${format}>`, v, message);
         return v;
     },
 
-    minItems: (v: any[], path: string, ctx: ValidationContext, min: number) => {
-        if (v.length < min) report(ctx, path, `MinItems<${min}>`, v);
+    minItems: (v: any[], path: string, ctx: ValidationContext, min: number, message?: string) => {
+        if (v.length < min) report(ctx, path, `MinItems<${min}>`, v, message);
         return v;
     },
 
-    maxItems: (v: any[], path: string, ctx: ValidationContext, max: number) => {
-        if (v.length > max) report(ctx, path, `MaxItems<${max}>`, v);
+    maxItems: (v: any[], path: string, ctx: ValidationContext, max: number, message?: string) => {
+        if (v.length > max) report(ctx, path, `MaxItems<${max}>`, v, message);
         return v;
     },
 
-    uniqueItems: (v: any[], path: string, ctx: ValidationContext) => {
+    uniqueItems: (v: any[], path: string, ctx: ValidationContext, message?: string) => {
         const seen = new Set();
         for (let i = 0; i < v.length; i++) {
             const item = v[i];
             const key = typeof item === 'object' && item !== null ? JSON.stringify(item) : item;
             if (seen.has(key)) {
-                report(ctx, path, "UniqueItems", v);
+                report(ctx, path, "UniqueItems", v, message);
                 break;
             }
             seen.add(key);
@@ -292,15 +296,19 @@ export const validators = {
         return v;
     },
 
-    custom: (v: any, path: string, ctx: ValidationContext, fn: Function) => {
-        if (!fn(v)) {
-            report(ctx, path, `Custom<${fn.name || 'validation'}>`, v);
+    custom: (v: any, path: string, ctx: ValidationContext, fn: Function, message?: string) => {
+        const parentPath = path.includes('.') ? path.substring(0, path.lastIndexOf('.')) : '';
+        const parent = getValueAtPath(ctx.root, parentPath);
+        const indexMatch = path.match(/\[(\d+)\]$/);
+        const index = indexMatch ? parseInt(indexMatch[1], 10) : undefined;
+        if (!fn(v, { parent, root: ctx.root, path, index })) {
+            report(ctx, path, fn.name ? `Custom<${fn.name}>` : 'Custom', v, message);
         }
         return v;
     },
 
 
-    union: (v: any, path: string, ctx: ValidationContext, checks: Function[]) => {
+    union: (v: any, path: string, ctx: ValidationContext, checks: Function[], expected: string = "Type<Union>") => {
         // Pass 1: No conversion
         for (const check of checks) {
             const subCtx = { ...ctx, success: true, errors: [], tryConvert: false };
@@ -320,11 +328,8 @@ export const validators = {
         ctx.success = false;
         ctx.errors.push({
             path,
-            expected: "union",
             value: v,
-            // Nestia-like detail? We can't easily nest in this flat array without adding a field.
-            // For now, we'll just push the union error and let the caller see the sub-errors if we exposed them.
-            // Actually, Typia pushes all sub-errors.
+            error: expected,
         });
         ctx.errors.push(...unionErrors);
         return v;
@@ -332,7 +337,7 @@ export const validators = {
 
     tuple: (v: any, path: string, ctx: ValidationContext, checks: Function[]) => {
         if (!Array.isArray(v) || v.length !== checks.length) {
-            report(ctx, path, `tuple of length ${checks.length}`, v);
+            report(ctx, path, `Tuple<${checks.length}>`, v);
             return v;
         }
         let data = ctx.mode === "strip" ? [] : v;
@@ -343,8 +348,111 @@ export const validators = {
         return data;
     },
 
-    any: (v: any) => v
+    any: (v: any) => v,
+
+    requires: (v: any, path: string, ctx: ValidationContext, reqs: string[], message?: string) => {
+        if (v === undefined || v === null) return v;
+        for (const r of reqs) {
+            const resolved = resolvePath(path, r);
+            if (!hasPath(ctx.root, resolved)) {
+                report(ctx, path, `Requires<${r}>`, v, message);
+            }
+        }
+        return v;
+    },
+
+    record: (v: any, path: string, ctx: ValidationContext, childValidator: Function) => {
+        if (!v || typeof v !== "object" || Array.isArray(v)) {
+            report(ctx, path, "Type<Object>", v);
+            return v;
+        }
+        let data = ctx.mode === "strip" ? {} : v;
+        for (const key of Object.keys(v)) {
+            const val = childValidator(v[key], path + "." + key, ctx);
+            if (ctx.mode === "strip") (data as any)[key] = val;
+        }
+        return data;
+    },
+
+    set: (v: any, path: string, ctx: ValidationContext, childValidator: Function, message?: string) => {
+        if (!(v instanceof Set)) {
+            if (ctx.tryConvert && Array.isArray(v)) {
+                v = new Set(v);
+            } else if (ctx.tryConvert && v !== undefined && v !== null) {
+                v = new Set([v]);
+            } else {
+                report(ctx, path, "Type<Set>", v, message);
+                return v;
+            }
+        }
+        let data = ctx.mode === "strip" ? new Set() : v;
+        let index = 0;
+        for (const item of v) {
+            const val = childValidator(item, `${path}[${index}]`, ctx);
+            if (ctx.mode === "strip") data.add(val);
+            index++;
+        }
+        return data;
+    },
+
+    map: (v: any, path: string, ctx: ValidationContext, keyValidator: Function, valueValidator: Function, message?: string) => {
+        if (!(v instanceof Map)) {
+            if (ctx.tryConvert && typeof v === "object" && v !== null && !Array.isArray(v)) {
+                v = new Map(Object.entries(v));
+            } else {
+                report(ctx, path, "Type<Map>", v, message);
+                return v;
+            }
+        }
+        let data = ctx.mode === "strip" ? new Map() : v;
+        for (const [key, val] of v.entries()) {
+            const validatedKey = keyValidator(key, `${path}.key(${JSON.stringify(key)})`, ctx);
+            const validatedVal = valueValidator(val, `${path}[${JSON.stringify(key)}]`, ctx);
+            if (ctx.mode === "strip") {
+                data.set(validatedKey, validatedVal);
+            }
+        }
+        return data;
+    }
 };
+
+function resolvePath(currentPath: string, targetPath: string): string {
+    if (!targetPath.startsWith('.')) {
+        return targetPath;
+    }
+    const dotsMatch = targetPath.match(/^\.+/);
+    const dots = dotsMatch ? dotsMatch[0].length : 0;
+    const targetClean = targetPath.substring(dots);
+
+    const cleanCurrentPath = currentPath.startsWith('.') ? currentPath.substring(1) : currentPath;
+    const currentParts = cleanCurrentPath ? cleanCurrentPath.split('.') : [];
+    const baseParts = currentParts.slice(0, currentParts.length - dots);
+    if (targetClean) {
+        baseParts.push(targetClean);
+    }
+    return baseParts.join('.');
+}
+
+function getValueAtPath(obj: any, path: string): any {
+    if (!obj || typeof obj !== 'object') return undefined;
+    const cleanPath = path.startsWith('.') ? path.substring(1) : path;
+    if (!cleanPath) return obj;
+    const parts = cleanPath.split('.');
+    let current = obj;
+    for (const part of parts) {
+        if (current === null || current === undefined || typeof current !== 'object') {
+            return undefined;
+        }
+        const cleanPart = part.replace(/\[\d+\]/g, '');
+        current = current[cleanPart];
+    }
+    return current;
+}
+
+function hasPath(obj: any, path: string): boolean {
+    const val = getValueAtPath(obj, path);
+    return val !== undefined && val !== null;
+}
 
 export class MetadataStoreClass {
     private validators = new Map<string, Function>();
@@ -388,7 +496,7 @@ export class MetadataStoreClass {
         const mode = typeof opt === 'string' ? opt : (opt?.mode || 'strict');
         const tryConvert = typeof opt === 'object' ? opt?.tryConvert : undefined;
         const wrapArrays = typeof opt === 'object' ? opt?.wrapArrays : undefined;
-        const ctx: ValidationContext = { success: true, errors: [], mode, tryConvert, wrapArrays };
+        const ctx: ValidationContext = { success: true, errors: [], mode, tryConvert, wrapArrays, root: value };
         validator(value, "", ctx);
         return ctx.success;
     }
@@ -398,23 +506,39 @@ export class MetadataStoreClass {
         const mode = typeof opt === 'string' ? opt : (opt?.mode || 'strict');
         const tryConvert = typeof opt === 'object' ? opt?.tryConvert : undefined;
         const wrapArrays = typeof opt === 'object' ? opt?.wrapArrays : undefined;
-        const ctx: ValidationContext = { success: true, errors: [], mode, tryConvert, wrapArrays };
+        const ctx: ValidationContext = { success: true, errors: [], mode, tryConvert, wrapArrays, root: value };
         const res = validator(value, "", ctx);
         if (!ctx.success) {
-            throw new Error("Validation Error: " + ctx.errors.map(e => e.path ? `${e.path}: ${e.expected}` : e.expected).join(', '));
+            if (typeof opt === 'object' && opt?.errorFactory) {
+                throw opt.errorFactory(ctx.errors);
+            }
+            throw new Error("Validation Error: " + ctx.errors.map(e => e.path ? `${e.path}: ${e.error}` : e.error).join(', '));
         }
         return res;
     }
 
-    validate(validator: Function, value: any, options?: ValidationMode | ValidationOptions): { success: boolean; errors: any[]; data: any } {
+    validate(validator: Function, value: any, options?: ValidationMode | ValidationOptions): { success: boolean; errors: IValidationError[]; data: any } {
         const opt = options;
         const mode = typeof opt === 'string' ? opt : (opt?.mode || 'strict');
         const tryConvert = typeof opt === 'object' ? opt?.tryConvert : undefined;
         const wrapArrays = typeof opt === 'object' ? opt?.wrapArrays : undefined;
-        const ctx: ValidationContext = { success: true, errors: [], mode, tryConvert, wrapArrays };
+        const ctx: ValidationContext = { success: true, errors: [], mode, tryConvert, wrapArrays, root: value };
         const res = validator(value, "", ctx);
         return { success: ctx.success, errors: ctx.errors, data: res };
     }
+}
+
+export function groupErrorsByPath(errors: IValidationError[]): Record<string, { value: any; errors: string[] }> {
+    const grouped: Record<string, { value: any; errors: string[] }> = {};
+    for (const err of errors) {
+        if (!grouped[err.path]) {
+            grouped[err.path] = { value: err.value, errors: [] };
+        }
+        if (!grouped[err.path].errors.includes(err.error)) {
+            grouped[err.path].errors.push(err.error);
+        }
+    }
+    return grouped;
 }
 
 export const MetadataStore = new MetadataStoreClass();
@@ -482,7 +606,7 @@ export function compileSchema(schema: any): (v: any, path: string, ctx: any) => 
                 v = validators.number(v, path, ctx);
                 if (v === undefined || v === null) return v;
                 if (isInt && typeof v === 'number' && !Number.isInteger(v)) {
-                    report(ctx, path, "integer", v);
+                    report(ctx, path, "Type<integer>", v);
                 }
                 if (minimum !== undefined) validators.minimum(v, path, ctx, minimum);
                 if (maximum !== undefined) validators.maximum(v, path, ctx, maximum);

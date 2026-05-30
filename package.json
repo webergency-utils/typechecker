@@ -30,6 +30,7 @@
     "dist/**/*"
   ],
   "scripts": {
+    "lint": "eslint .",
     "clean": "rm -rf ./dist/* node_modules package-lock.json && npm i",
     "commit": "node -e \"const version = require('./package.json').version.trim(); require('child_process').execSync('git add . && git commit -m \\\"Version ' + version + '\\\"');\"",
     "build": "npm run clean && tsc",
@@ -49,9 +50,13 @@
     "typescript": ">=5.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@stylistic/eslint-plugin": "^5.10.0",
     "@types/node": "^24.10.1",
     "@vitest/coverage-v8": "^4.1.6",
+    "eslint": "^10.4.1",
     "typescript": "^6.0.3",
+    "typescript-eslint": "^8.60.0",
     "vitest": "^4.1.6"
   }
 }

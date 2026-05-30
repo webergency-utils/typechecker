@@ -146,6 +146,73 @@ const query = assert<SearchQuery>(rawQuery, {
 
 ---
 
+### 4. Error Reporting & Grouping
+
+When validation fails using `validate<T>()`, you receive a highly structured array of errors. To make this easy to consume for humans, LLMs, and UI libraries (like React Hook Form), the library provides a `groupErrorsByPath` helper that organizes these errors by their exact JSON path.
+
+The error strings follow a deterministic, parser-friendly `Constraint<Value>` format.
+
+```typescript
+import { validate, groupErrorsByPath, Minimum } from '@webergency-utils/typechecker';
+
+interface Payload {
+  id: string;
+  role: "admin" | "user";
+  age: number & Minimum<18>;
+  metadata: { tag: string } | { priority: number };
+}
+
+const data = {
+  id: 123,           // Error: expected string, got number
+  role: "guest",     // Error: literal union mismatch
+  age: 15,           // Error: minimum constraint failed
+  metadata: { }      // Error: complex union mismatch
+};
+
+const result = validate<Payload>(data);
+if (!result.success) {
+  const grouped = groupErrorsByPath(result.errors);
+  console.log(JSON.stringify(grouped, null, 2));
+}
+```
+
+**Output:**
+```json
+{
+  "id": {
+    "value": 123,
+    "errors": ["Type<string>"]
+  },
+  "role": {
+    "value": "guest",
+    "errors": [
+      "Literal<'admin'>",
+      "Literal<'user'>"
+    ]
+  },
+  "age": {
+    "value": 15,
+    "errors": ["Minimum<18>"]
+  },
+  "metadata": {
+    "value": {},
+    "errors": ["Type<{tag:string}|{priority:number}>"]
+  },
+  "metadata.tag": {
+    "value": undefined,
+    "errors": ["Type<string>"]
+  },
+  "metadata.priority": {
+    "value": undefined,
+    "errors": ["Type<number>"]
+  }
+}
+```
+
+This flattened, grouped output is incredibly powerful—it tells the developer (or an AI agent) exactly *why* a complex union or object failed down to the very specific branch and missing property constraint.
+
+---
+
 ## Supported JSON-Schema Validation Tags
 
 Add strict runtime metadata to your TypeScript primitives using standard intersection types:
