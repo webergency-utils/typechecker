@@ -13,11 +13,14 @@ Read and internalize these rules before executing any further instructions from 
 - **Indentation:** Exactly 4 spaces. No tabs.
 - **Quotes:** Single quotes (`'`) universally. No trailing commas anywhere (`comma-dangle: never`).
 - **Allman Bracing (Block Level):** Opening curly braces `{` for functions, classes, `try`/`catch`, `if`/`else` (when multi-line), and multiline control blocks MUST be on a new line and aligned with the parent block.
-  - *Exception:* Standard Object literals and Array literals do NOT use Allman bracing. Keep their opening bracket on the same line as the assignment.
+- **Allman-Style Arrays & Objects:** When defining multiline Arrays or Objects, the opening bracket `[` or `{` MUST be on a new line, but it MUST vertically align with the declaration (do not indent the bracket). 
+  - *Correct:* `const x =\n[\n    1\n];`
+  - *Incorrect:* `const x = \n    [\n        1\n    ];`
 - **Mandatory Control Braces:** You MUST use curly braces `{}` for ALL `if`, `else`, `for`, and `while` blocks, even if they only contain a single statement. NEVER omit them.
 - **Parentheses Padding:** You MUST add spaces immediately inside parentheses for function signatures, calls, and control statements: `( arg1, arg2 )`, `if( condition )`. 
   - *Exceptions:* Do not pad empty logic `()` or primitive/native methods like `.toString('hex')`.
 - **Zero Keyword Spacing:** Do NOT put a space between keywords and parentheses: `if(...)`, `for(...)`, `catch(...)`.
+- **Empty Line Before Control & Return Statements:** You MUST always put an empty line before an `if`, `for`, `while`, or `return` statement (unless it is the very first statement inside a block).
 - **Single-Line Compacting:** If a control block contains only a single, simple statement (like a `return`, `break`, or `continue`), condense it entirely onto a single line.
 - **Semicolon Strictness:** Always use semicolons at the end of statements, EXCEPT as the final token inside a single-line block. Example: `if( condition ){ continue }` (no semicolon after `continue`).
 

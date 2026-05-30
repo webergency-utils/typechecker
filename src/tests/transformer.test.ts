@@ -4,57 +4,68 @@ import * as fs from 'fs';
 import * as path from 'path';
 import transformer from '../transformer.js';
 
-describe('Transformer Call Expression Replacements', () => {
-    function compileAndTransform(sourceCode: string): string {
-        const tempFile = path.resolve('./temp_test_file.ts');
-        fs.writeFileSync(tempFile, sourceCode);
+describe( 'Transformer Call Expression Replacements', () => 
+{
+    function compileAndTransform( sourceCode: string ): string 
+    {
+        const tempFile = path.resolve( './temp_test_file.ts' );
+        fs.writeFileSync( tempFile, sourceCode );
 
-        try {
-            const program = ts.createProgram([tempFile], {
-                target: ts.ScriptTarget.ES2022,
-                module: ts.ModuleKind.NodeNext,
-                moduleResolution: ts.ModuleResolutionKind.NodeNext,
-                skipLibCheck: true
-            });
+        try 
+        {
+            const program = ts.createProgram( [tempFile], {
+                target           : ts.ScriptTarget.ES2022,
+                module           : ts.ModuleKind.NodeNext,
+                moduleResolution : ts.ModuleResolutionKind.NodeNext,
+                skipLibCheck     : true
+            } );
 
-            const sourceFile = program.getSourceFile(tempFile);
-            if (!sourceFile) throw new Error("Could not load source file");
+            const sourceFile = program.getSourceFile( tempFile );
 
-            const result = ts.transform(sourceFile, [transformer(program)]);
+            if( !sourceFile ) {throw new Error( 'Could not load source file' )}
+
+            const result = ts.transform( sourceFile, [transformer( program )] );
             const printer = ts.createPrinter();
-            return printer.printFile(result.transformed[0]);
-        } finally {
-            if (fs.existsSync(tempFile)) {
-                fs.unlinkSync(tempFile);
+
+            return printer.printFile( result.transformed[0] );
+        }
+        finally 
+        {
+            if( fs.existsSync( tempFile ) ) 
+            {
+                fs.unlinkSync( tempFile );
             }
         }
     }
 
-    it('should transform validate with a string ValidationMode', () => {
+    it( 'should transform validate with a string ValidationMode', () => 
+    {
         const code = `
             import { validate } from '../index.js';
             const x: any = 123;
             const res = validate<number>(x, 'relaxed');
         `;
-        const compiled = compileAndTransform(code);
-        expect(compiled).toContain('MetadataStore.validate(');
-        expect(compiled).toContain("'relaxed'");
-    });
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'MetadataStore.validate(' );
+        expect( compiled ).toContain( "'relaxed'" );
+    } );
 
-    it('should transform validate with options object', () => {
+    it( 'should transform validate with options object', () => 
+    {
         const code = `
             import { validate } from '../index.js';
             const x: any = 123;
             const res = validate<number>(x, { mode: 'relaxed', tryConvert: true, wrapArrays: true });
         `;
-        const compiled = compileAndTransform(code);
-        expect(compiled).toContain('MetadataStore.validate(');
-        expect(compiled).toContain("mode: 'relaxed'");
-        expect(compiled).toContain('tryConvert: true');
-        expect(compiled).toContain('wrapArrays: true');
-    });
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'MetadataStore.validate(' );
+        expect( compiled ).toContain( "mode: 'relaxed'" );
+        expect( compiled ).toContain( 'tryConvert: true' );
+        expect( compiled ).toContain( 'wrapArrays: true' );
+    } );
 
-    it('should transform types with constraint and format namespace constraints and custom validations', () => {
+    it( 'should transform types with constraint and format namespace constraints and custom validations', () => 
+    {
         const code = `
             import { validate, constraint, format } from './src/index.js';
             function startsWithWeb(val: string) { return val.startsWith("web_"); }
@@ -67,17 +78,18 @@ describe('Transformer Call Expression Replacements', () => {
             }
             const res = validate<ApiKey>({ key: "web_abc", age: 20, name: "Tom", email: "tom@web.com", id: "507f1f77bcf86cd799439011" });
         `;
-        const compiled = compileAndTransform(code);
-        expect(compiled).toContain('validators.custom');
-        expect(compiled).toContain('startsWithWeb');
-        expect(compiled).toContain('validators.minimum');
-        expect(compiled).toContain('validators.maximum');
-        expect(compiled).toContain('validators.minLength');
-        expect(compiled).toContain('validators.maxLength');
-        expect(compiled).toContain('validators.format');
-    });
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'validators.custom' );
+        expect( compiled ).toContain( 'startsWithWeb' );
+        expect( compiled ).toContain( 'validators.minimum' );
+        expect( compiled ).toContain( 'validators.maximum' );
+        expect( compiled ).toContain( 'validators.minLength' );
+        expect( compiled ).toContain( 'validators.maxLength' );
+        expect( compiled ).toContain( 'validators.format' );
+    } );
 
-    it('should transform types with tag.Default initializers', () => {
+    it( 'should transform types with tag.Default initializers', () => 
+    {
         const code = `
             import { validate, tag } from './src/index.js';
             interface Config {
@@ -86,12 +98,13 @@ describe('Transformer Call Expression Replacements', () => {
             }
             const res = validate<Config>({});
         `;
-        const compiled = compileAndTransform(code);
-        expect(compiled).toContain('v = 8080;');
-        expect(compiled).toContain('v = "localhost";');
-    });
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'v = 8080;' );
+        expect( compiled ).toContain( 'v = "localhost";' );
+    } );
 
-    it('should transform types with transform namespace and custom mappers', () => {
+    it( 'should transform types with transform namespace and custom mappers', () => 
+    {
         const code = `
             import { validate, transform } from './src/index.js';
             function customSuffix(val: string) { return val + "_suffix"; }
@@ -102,14 +115,15 @@ describe('Transformer Call Expression Replacements', () => {
             }
             const res = validate<Member>({ username: "  TOM  ", joined: "2026-05-17T19:55:00.000Z", code: "abc" });
         `;
-        const compiled = compileAndTransform(code);
-        expect(compiled).toContain('v = v.trim();');
-        expect(compiled).toContain('v = v.toLowerCase();');
-        expect(compiled).toContain('v = new Date(v);');
-        expect(compiled).toContain('v = customSuffix(v);');
-    });
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'v = v.trim();' );
+        expect( compiled ).toContain( 'v = v.toLowerCase();' );
+        expect( compiled ).toContain( 'v = new Date(v);' );
+        expect( compiled ).toContain( 'v = customSuffix(v);' );
+    } );
 
-    it('should transform jsonSchema calls and pre-compile static schemas', () => {
+    it( 'should transform jsonSchema calls and pre-compile static schemas', () => 
+    {
         const code = `
             import { jsonSchema, constraint } from './src/index.js';
             interface Account {
@@ -119,18 +133,19 @@ describe('Transformer Call Expression Replacements', () => {
             }
             const schema = jsonSchema<Account>();
         `;
-        const compiled = compileAndTransform(code);
-        expect(compiled).toContain('MetadataStore.registerSchema');
-        expect(compiled).toContain('MetadataStore.getSchema');
-        expect(compiled).toContain('"type": "object"');
-        expect(compiled).toContain('"email"');
-        expect(compiled).toContain('"age"');
-        expect(compiled).toContain('"minimum": 18');
-        expect(compiled).toContain('"maximum": 99');
-        expect(compiled).toContain('"type": "boolean"');
-    });
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'MetadataStore.registerSchema' );
+        expect( compiled ).toContain( 'MetadataStore.getSchema' );
+        expect( compiled ).toContain( '"type": "object"' );
+        expect( compiled ).toContain( '"email"' );
+        expect( compiled ).toContain( '"age"' );
+        expect( compiled ).toContain( '"minimum": 18' );
+        expect( compiled ).toContain( '"maximum": 99' );
+        expect( compiled ).toContain( '"type": "boolean"' );
+    } );
 
-    it('should handle deeply nested, circular, and highly complex types in jsonSchema', () => {
+    it( 'should handle deeply nested, circular, and highly complex types in jsonSchema', () => 
+    {
         const code = `
             import { jsonSchema, constraint, format } from './src/index.js';
             
@@ -153,33 +168,34 @@ describe('Transformer Call Expression Replacements', () => {
             
             const schema = jsonSchema<ComplexNode>();
         `;
-        const compiled = compileAndTransform(code);
+        const compiled = compileAndTransform( code );
         
-        expect(compiled).toContain('"type": "object"');
-        expect(compiled).toContain('"id"');
-        expect(compiled).toContain('"format": "objectId"');
-        expect(compiled).toContain('"name"');
-        expect(compiled).toContain('"minLength": 1');
-        expect(compiled).toContain('"maxLength": 100');
-        expect(compiled).toContain('"anyOf"');
-        expect(compiled).toContain('"const": "folder"');
-        expect(compiled).toContain('"const": "file"');
-        expect(compiled).toContain('"tags"');
-        expect(compiled).toContain('"meta"');
-        expect(compiled).toContain('"format": "date-time"');
-        expect(compiled).toContain('"minimum": 0');
-        expect(compiled).toContain('"email"');
-        expect(compiled).toContain('"format": "email"');
-        expect(compiled).toContain('"active"');
-        expect(compiled).toContain('"type": "boolean"');
-        expect(compiled).toContain('"children"');
-        expect(compiled).toContain('"$ref": "#/$defs/ComplexNode_');
-        expect(compiled).toContain('"tupleField"');
-        expect(compiled).toContain('"minItems": 3');
-        expect(compiled).toContain('"maxItems": 3');
-    });
+        expect( compiled ).toContain( '"type": "object"' );
+        expect( compiled ).toContain( '"id"' );
+        expect( compiled ).toContain( '"format": "objectId"' );
+        expect( compiled ).toContain( '"name"' );
+        expect( compiled ).toContain( '"minLength": 1' );
+        expect( compiled ).toContain( '"maxLength": 100' );
+        expect( compiled ).toContain( '"anyOf"' );
+        expect( compiled ).toContain( '"const": "folder"' );
+        expect( compiled ).toContain( '"const": "file"' );
+        expect( compiled ).toContain( '"tags"' );
+        expect( compiled ).toContain( '"meta"' );
+        expect( compiled ).toContain( '"format": "date-time"' );
+        expect( compiled ).toContain( '"minimum": 0' );
+        expect( compiled ).toContain( '"email"' );
+        expect( compiled ).toContain( '"format": "email"' );
+        expect( compiled ).toContain( '"active"' );
+        expect( compiled ).toContain( '"type": "boolean"' );
+        expect( compiled ).toContain( '"children"' );
+        expect( compiled ).toContain( '"$ref": "#/$defs/ComplexNode_' );
+        expect( compiled ).toContain( '"tupleField"' );
+        expect( compiled ).toContain( '"minItems": 3' );
+        expect( compiled ).toContain( '"maxItems": 3' );
+    } );
 
-    it('should transform validate calls with dynamic validation schema option', () => {
+    it( 'should transform validate calls with dynamic validation schema option', () => 
+    {
         const code = `
             import { validate } from './src/index.js';
             const schema = {
@@ -192,11 +208,12 @@ describe('Transformer Call Expression Replacements', () => {
             };
             const res = validate<any>({ name: "Tom", age: 20 }, { schema });
         `;
-        const compiled = compileAndTransform(code);
-        expect(compiled).toContain('MetadataStore.getOrCompileSchema(schema)');
-    });
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'MetadataStore.getOrCompileSchema(schema)' );
+    } );
 
-    it('should inline small repeating structures like Point while hoisting circular types', () => {
+    it( 'should inline small repeating structures like Point while hoisting circular types', () => 
+    {
         const code = `
             import { jsonSchema } from './src/index.js';
             interface Point {
@@ -214,12 +231,13 @@ describe('Transformer Call Expression Replacements', () => {
             const schema1 = jsonSchema<SmallLine>();
             const schema2 = jsonSchema<Node>();
         `;
-        const compiled = compileAndTransform(code);
-        expect(compiled).not.toContain('"$ref": "#/$defs/Point_');
-        expect(compiled).toContain('"$ref": "#/$defs/Node_');
-    });
+        const compiled = compileAndTransform( code );
+        expect( compiled ).not.toContain( '"$ref": "#/$defs/Point_' );
+        expect( compiled ).toContain( '"$ref": "#/$defs/Node_' );
+    } );
 
-    it('should transform types with Set and Map', () => {
+    it( 'should transform types with Set and Map', () => 
+    {
         const code = `
             import { validate } from './src/index.js';
             interface Container {
@@ -231,12 +249,13 @@ describe('Transformer Call Expression Replacements', () => {
                 mapping: new Map([['a', true]])
             });
         `;
-        const compiled = compileAndTransform(code);
-        expect(compiled).toContain('validators.set');
-        expect(compiled).toContain('validators.map');
-    });
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'validators.set' );
+        expect( compiled ).toContain( 'validators.map' );
+    } );
 
-    it('should transform custom validation messages and pass message arguments to validator helpers', () => {
+    it( 'should transform custom validation messages and pass message arguments to validator helpers', () => 
+    {
         const code = `
             import { validate, constraint, Message } from './src/index.js';
             interface User {
@@ -245,12 +264,13 @@ describe('Transformer Call Expression Replacements', () => {
             }
             const res = validate<User>({ email: "invalid", age: 16 });
         `;
-        const compiled = compileAndTransform(code);
-        expect(compiled).toContain('validators.format(v, path, ctx, "email", "Please supply a valid email address")');
-        expect(compiled).toContain('validators.minimum(v, path, ctx, 18, "You must be 18 or older")');
-    });
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'validators.format(v, path, ctx, "email", "Please supply a valid email address")' );
+        expect( compiled ).toContain( 'validators.minimum(v, path, ctx, 18, "You must be 18 or older")' );
+    } );
 
-    it('should prioritize specific messages over fallback message', () => {
+    it( 'should prioritize specific messages over fallback message', () => 
+    {
         const code = `
             import { validate, constraint, Message } from './src/index.js';
             interface User {
@@ -261,9 +281,9 @@ describe('Transformer Call Expression Replacements', () => {
             }
             const res = validate<User>({ age: 16 });
         `;
-        const compiled = compileAndTransform(code);
-        expect(compiled).toContain('validators.minimum(v, path, ctx, 18, "Too young")');
-        expect(compiled).toContain('validators.maximum(v, path, ctx, 99, "Too old")');
-    });
-});
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'validators.minimum(v, path, ctx, 18, "Too young")' );
+        expect( compiled ).toContain( 'validators.maximum(v, path, ctx, 99, "Too old")' );
+    } );
+} );
 

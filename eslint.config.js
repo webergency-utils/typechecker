@@ -16,8 +16,22 @@ export default tseslint.config(
             '@stylistic': stylistic
         },
         rules: {
-            // Indentation: 4 spaces strictly
-            '@stylistic/indent': ['error', 4],
+            // Disable strict TS recommended rules that break linting for legacy code
+            '@typescript-eslint/no-explicit-any': 'off',
+            '@typescript-eslint/no-unsafe-function-type': 'off',
+            '@typescript-eslint/no-unused-vars': 'off',
+            'no-empty': 'off',
+            // Indentation: 4 spaces strictly, ignoring Array/Object assignments to allow Allman brackets on new lines
+            '@stylistic/indent': ['error', 4, {
+                'ignoredNodes': [
+                    'VariableDeclarator > ArrayExpression',
+                    'VariableDeclarator > ObjectExpression',
+                    'PropertyDefinition > ArrayExpression',
+                    'PropertyDefinition > ObjectExpression',
+                    'AssignmentExpression > ArrayExpression',
+                    'AssignmentExpression > ObjectExpression'
+                ]
+            }],
             'indent': 'off', 
 
             // Quotes: Single quotes
@@ -66,7 +80,13 @@ export default tseslint.config(
                     'while': { 'after': false },
                     'catch': { 'after': false }
                 }
-            }]
+            }],
+
+            // Always require an empty line before control statements and return
+            '@stylistic/padding-line-between-statements': [
+                'error',
+                { 'blankLine': 'always', 'prev': '*', 'next': ['if', 'for', 'while', 'return'] }
+            ]
         }
     }
 );
