@@ -2,7 +2,7 @@ import ts from 'typescript';
 
 export function hoistRegistrations( sourceFile: ts.SourceFile, cache: Map<string, ts.Expression>, requiredUtils: Set<string>, schemasMap?: Map<string, ts.Expression> ) 
 {
-    if( cache.size === 0 && requiredUtils.size === 0 ) {return sourceFile}
+    if( cache.size === 0 && requiredUtils.size === 0 ) { return sourceFile }
 
     const utilityStatements: ts.Statement[] = [
         // 1. import "@webergency-utils/typechecker/runtime";
@@ -15,12 +15,12 @@ export function hoistRegistrations( sourceFile: ts.SourceFile, cache: Map<string
     ];
 
     if( !hasVariableDeclaration( sourceFile.statements, 'validators' ) &&
-        !hasVariableDeclaration( utilityStatements, 'validators' ) ) 
+        !hasVariableDeclaration( utilityStatements, 'validators' )) 
     {
         utilityStatements.push(
             ts.factory.createVariableStatement(
                 undefined,
-                ts.factory.createVariableDeclarationList( [
+                ts.factory.createVariableDeclarationList([
                     ts.factory.createVariableDeclaration(
                         ts.factory.createIdentifier( 'validators' ),
                         undefined,
@@ -36,12 +36,12 @@ export function hoistRegistrations( sourceFile: ts.SourceFile, cache: Map<string
     }
 
     if( !hasVariableDeclaration( sourceFile.statements, 'MetadataStore' ) &&
-        !hasVariableDeclaration( utilityStatements, 'MetadataStore' ) ) 
+        !hasVariableDeclaration( utilityStatements, 'MetadataStore' )) 
     {
         utilityStatements.push(
             ts.factory.createVariableStatement(
                 undefined,
-                ts.factory.createVariableDeclarationList( [
+                ts.factory.createVariableDeclarationList([
                     ts.factory.createVariableDeclaration(
                         ts.factory.createIdentifier( 'MetadataStore' ),
                         undefined,
@@ -59,17 +59,17 @@ export function hoistRegistrations( sourceFile: ts.SourceFile, cache: Map<string
     const variablePrepends: ts.Statement[] = [];
     const registrationAppends: ts.Statement[] = [];
 
-    for( const [hash, expr] of cache.entries() ) 
+    for( const [hash, expr] of cache.entries()) 
     {
         // const __val_hash = expr;
         if( !hasVariableDeclaration( sourceFile.statements, `__val_${hash}` ) &&
             !hasVariableDeclaration( utilityStatements, `__val_${hash}` ) &&
-            !hasVariableDeclaration( variablePrepends, `__val_${hash}` ) ) 
+            !hasVariableDeclaration( variablePrepends, `__val_${hash}` )) 
         {
             variablePrepends.push(
                 ts.factory.createVariableStatement(
                     undefined,
-                    ts.factory.createVariableDeclarationList( [
+                    ts.factory.createVariableDeclarationList([
                         ts.factory.createVariableDeclaration(
                             ts.factory.createIdentifier( `__val_${hash}` ),
                             undefined,
@@ -98,7 +98,7 @@ export function hoistRegistrations( sourceFile: ts.SourceFile, cache: Map<string
 
     if( schemasMap ) 
     {
-        for( const [hash, schemaExpr] of schemasMap.entries() ) 
+        for( const [hash, schemaExpr] of schemasMap.entries()) 
         {
             registrationAppends.push(
                 ts.factory.createExpressionStatement(
@@ -129,17 +129,17 @@ export function hoistRegistrations( sourceFile: ts.SourceFile, cache: Map<string
             ...mergedStatements.slice( 0, insertIndex ),
             ...registrationAppends,
             ...mergedStatements.slice( insertIndex )
-        ] );
+        ]);
 }
 
 
-function findInsertionIndex( statements: readonly ts.Statement[] ): number 
+function findInsertionIndex( statements: readonly ts.Statement[]): number 
 {
     let lastClassIndex = -1;
 
     for( let i = 0; i < statements.length; i++ ) 
     {
-        if( ts.isClassDeclaration( statements[i] ) ) 
+        if( ts.isClassDeclaration( statements[i])) 
         {
             lastClassIndex = i;
         }
@@ -151,22 +151,22 @@ function findInsertionIndex( statements: readonly ts.Statement[] ): number
     {
         const s = statements[i];
 
-        if( ts.isImportDeclaration( s ) || ts.isInterfaceDeclaration( s ) || ts.isTypeAliasDeclaration( s ) ) 
+        if( ts.isImportDeclaration( s ) || ts.isInterfaceDeclaration( s ) || ts.isTypeAliasDeclaration( s )) 
         {
             continue;
         }
 
-        if( ts.isVariableStatement( s ) ) 
+        if( ts.isVariableStatement( s )) 
         {
             let isPrependedVar = true;
 
             for( const decl of s.declarationList.declarations ) 
             {
-                if( ts.isIdentifier( decl.name ) ) 
+                if( ts.isIdentifier( decl.name )) 
                 {
                     const text = decl.name.text;
 
-                    if( text !== 'validators' && text !== 'MetadataStore' && text !== '__server_metadata_store' && !text.startsWith( '__val_' ) ) 
+                    if( text !== 'validators' && text !== 'MetadataStore' && text !== '__server_metadata_store' && !text.startsWith( '__val_' )) 
                     {
                         isPrependedVar = false;
                         break;
@@ -196,7 +196,7 @@ function hasVariableDeclaration( statements: readonly ts.Statement[], name: stri
 {
     for( const statement of statements ) 
     {
-        if( ts.isVariableStatement( statement ) ) 
+        if( ts.isVariableStatement( statement )) 
         {
             for( const decl of statement.declarationList.declarations ) 
             {

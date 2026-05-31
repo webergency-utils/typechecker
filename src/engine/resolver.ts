@@ -22,16 +22,16 @@ import { createHash } from 'crypto';
 
 function getStringLiteralValue( type: ts.Type ): string | undefined 
 {
-    if( type.isStringLiteral() ) 
+    if( type.isStringLiteral()) 
     {
         return type.value;
     }
 
-    if( type.isUnion() ) 
+    if( type.isUnion()) 
     {
-        const literalType = type.types.find( t => t.isStringLiteral() );
+        const literalType = type.types.find( t => t.isStringLiteral());
 
-        if( literalType && literalType.isStringLiteral() ) 
+        if( literalType && literalType.isStringLiteral()) 
         {
             return literalType.value;
         }
@@ -60,24 +60,24 @@ export function buildValidator(
 {
     const hash = generateHash( type, checker );
 
-    if( validatorsMap.has( hash ) ) 
+    if( validatorsMap.has( hash )) 
     {
         return ts.factory.createIdentifier( `__val_${hash}` );
     }
 
     // Set placeholder to handle circularity
-    validatorsMap.set( hash, ts.factory.createIdentifier( `PENDING_${hash}` ) );
+    validatorsMap.set( hash, ts.factory.createIdentifier( `PENDING_${hash}` ));
 
     let result: ts.Expression;
     const flags = type.getFlags();
 
-    const isUnion = ( ( ( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion() ) && ( type as any ).types ) ? true : false;
-    const isIntersection = ( ( ( flags & ts.TypeFlags.Intersection ) !== 0 || type.isIntersection() ) && ( type as any ).types ) ? true : false;
+    const isUnion = ((( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion()) && ( type as any ).types ) ? true : false;
+    const isIntersection = ((( flags & ts.TypeFlags.Intersection ) !== 0 || type.isIntersection()) && ( type as any ).types ) ? true : false;
 
     if( isUnion ) 
     {
-        const checks = ( type as ts.UnionType ).types.map( t => buildValidator( t, checker, validatorsMap, requiredUtils ) );
-        result = createUnionCheck( checks, requiredUtils, `Type<${minifyTypeString( checker.typeToString( type ) )}>` );
+        const checks = ( type as ts.UnionType ).types.map( t => buildValidator( t, checker, validatorsMap, requiredUtils ));
+        result = createUnionCheck( checks, requiredUtils, `Type<${minifyTypeString( checker.typeToString( type ))}>` );
     }
     else if( isIntersection ) 
     {
@@ -95,8 +95,8 @@ export function buildValidator(
                 baseName = 'string';
                 baseType = sub;
             }
-            else if( sFlags & ts.TypeFlags.Number ) {baseName = 'number'}
-            else if( sFlags & ts.TypeFlags.BigInt ) {baseName = 'bigint'}
+            else if( sFlags & ts.TypeFlags.Number ) { baseName = 'number' }
+            else if( sFlags & ts.TypeFlags.BigInt ) { baseName = 'bigint' }
             else if( sFlags & ts.TypeFlags.Boolean || ( sub as any ).intrinsicName === 'boolean' ) 
             {
                 baseName = 'boolean';
@@ -107,7 +107,7 @@ export function buildValidator(
                 baseName = 'date';
                 baseType = sub;
             }
-            else if( checker.isArrayType( sub ) ) 
+            else if( checker.isArrayType( sub )) 
             {
                 baseName = 'array';
                 baseType = sub;
@@ -119,56 +119,56 @@ export function buildValidator(
             {
                 const pName = prop.getName();
 
-                if( pName.startsWith( '__' ) ) 
+                if( pName.startsWith( '__' )) 
                 {
-                    const pType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0] );
+                    const pType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0]);
                     let val = ( pType as any ).value;
 
-                    if( val === undefined && ( pType.getFlags() & ts.TypeFlags.BooleanLiteral ) ) 
+                    if( val === undefined && ( pType.getFlags() & ts.TypeFlags.BooleanLiteral )) 
                     {
                         val = ( pType as any ).intrinsicName === 'true';
                     }
 
-                    if( val === undefined && ( pType.getFlags() & ts.TypeFlags.Null ) ) 
+                    if( val === undefined && ( pType.getFlags() & ts.TypeFlags.Null )) 
                     {
                         val = null;
                     }
 
                     if( pName === '__default' ) 
                     {
-                        constraints.push( { type : 'default', value : val } );
+                        constraints.push({ type : 'default', value : val });
                     }
                     else if( pName === '__message' ) 
                     {
-                        constraints.push( { type : 'message', value : val } );
+                        constraints.push({ type : 'message', value : val });
                     }
                     else if( pName === '__transform_lowercase' ) 
                     {
-                        constraints.push( { type : 'transform', value : 'lowercase' } );
+                        constraints.push({ type : 'transform', value : 'lowercase' });
                     }
                     else if( pName === '__transform_uppercase' ) 
                     {
-                        constraints.push( { type : 'transform', value : 'uppercase' } );
+                        constraints.push({ type : 'transform', value : 'uppercase' });
                     }
                     else if( pName === '__transform_trim' ) 
                     {
-                        constraints.push( { type : 'transform', value : 'trim' } );
+                        constraints.push({ type : 'transform', value : 'trim' });
                     }
                     else if( pName === '__transform_capitalize' ) 
                     {
-                        constraints.push( { type : 'transform', value : 'capitalize' } );
+                        constraints.push({ type : 'transform', value : 'capitalize' });
                     }
                     else if( pName === '__transform_tonumber' ) 
                     {
-                        constraints.push( { type : 'transform', value : 'tonumber' } );
+                        constraints.push({ type : 'transform', value : 'tonumber' });
                     }
                     else if( pName === '__transform_toboolean' ) 
                     {
-                        constraints.push( { type : 'transform', value : 'toboolean' } );
+                        constraints.push({ type : 'transform', value : 'toboolean' });
                     }
                     else if( pName === '__transform_todate' ) 
                     {
-                        constraints.push( { type : 'transform', value : 'todate' } );
+                        constraints.push({ type : 'transform', value : 'todate' });
                     }
                     else if( pName === '__transform_custom' ) 
                     {
@@ -187,7 +187,7 @@ export function buildValidator(
 
                                 while( current ) 
                                 {
-                                    if( ts.isVariableDeclaration( current ) && ts.isIdentifier( current.name ) ) 
+                                    if( ts.isVariableDeclaration( current ) && ts.isIdentifier( current.name )) 
                                     {
                                         fnName = current.name.text;
                                         dec = current;
@@ -201,7 +201,7 @@ export function buildValidator(
                             {
                                 const sourceFile = dec.getSourceFile();
 
-                                if( sourceFile ) {filePath = sourceFile.fileName}
+                                if( sourceFile ) { filePath = sourceFile.fileName }
                             }
                         }
                         else 
@@ -209,7 +209,7 @@ export function buildValidator(
                             const str = checker.typeToString( pType );
                             const match = str.match( /typeof\s+([a-zA-Z0-9_]+)/ );
 
-                            if( match ) {fnName = match[1]}
+                            if( match ) { fnName = match[1] }
                         }
 
                         if( fnName === '__function' || !fnName ) 
@@ -221,7 +221,7 @@ export function buildValidator(
                         {
                             requiredUtils.add( `custom:${fnName}:${filePath}` );
                         }
-                        constraints.push( { type : 'transform_custom', value : fnName } );
+                        constraints.push({ type : 'transform_custom', value : fnName });
                     }
                     else if( pName === '__custom' ) 
                     {
@@ -240,7 +240,7 @@ export function buildValidator(
 
                                 while( current ) 
                                 {
-                                    if( ts.isVariableDeclaration( current ) && ts.isIdentifier( current.name ) ) 
+                                    if( ts.isVariableDeclaration( current ) && ts.isIdentifier( current.name )) 
                                     {
                                         fnName = current.name.text;
                                         dec = current;
@@ -254,7 +254,7 @@ export function buildValidator(
                             {
                                 const sourceFile = dec.getSourceFile();
 
-                                if( sourceFile ) {filePath = sourceFile.fileName}
+                                if( sourceFile ) { filePath = sourceFile.fileName }
                             }
                         }
                         else 
@@ -262,7 +262,7 @@ export function buildValidator(
                             const str = checker.typeToString( pType );
                             const match = str.match( /typeof\s+([a-zA-Z0-9_]+)/ );
 
-                            if( match ) {fnName = match[1]}
+                            if( match ) { fnName = match[1] }
                         }
 
                         if( fnName === '__function' || !fnName ) 
@@ -279,10 +279,10 @@ export function buildValidator(
 
                         if( msgProp ) 
                         {
-                            const msgType = checker.getTypeOfSymbolAtLocation( msgProp, msgProp.valueDeclaration || ( msgProp as any ).declarations?.[0] );
+                            const msgType = checker.getTypeOfSymbolAtLocation( msgProp, msgProp.valueDeclaration || ( msgProp as any ).declarations?.[0]);
                             constraintMsg = getStringLiteralValue( msgType );
                         }
-                        constraints.push( { type : 'custom', value : fnName, message : constraintMsg } );
+                        constraints.push({ type : 'custom', value : fnName, message : constraintMsg });
                     }
                     else if( val !== undefined ) 
                     {
@@ -291,28 +291,28 @@ export function buildValidator(
 
                         if( msgProp ) 
                         {
-                            const msgType = checker.getTypeOfSymbolAtLocation( msgProp, msgProp.valueDeclaration || ( msgProp as any ).declarations?.[0] );
+                            const msgType = checker.getTypeOfSymbolAtLocation( msgProp, msgProp.valueDeclaration || ( msgProp as any ).declarations?.[0]);
                             constraintMsg = getStringLiteralValue( msgType );
                         }
 
-                        if( pName === '__minLength' ) {constraints.push( { type : 'minLength', value : val, message : constraintMsg } )}
-                        else if( pName === '__maxLength' ) {constraints.push( { type : 'maxLength', value : val, message : constraintMsg } )}
-                        else if( pName === '__minimum' ) {constraints.push( { type : 'minimum', value : val, message : constraintMsg } )}
-                        else if( pName === '__maximum' ) {constraints.push( { type : 'maximum', value : val, message : constraintMsg } )}
-                        else if( pName === '__exclusiveMinimum' ) {constraints.push( { type : 'exclusiveMinimum', value : val, message : constraintMsg } )}
-                        else if( pName === '__exclusiveMaximum' ) {constraints.push( { type : 'exclusiveMaximum', value : val, message : constraintMsg } )}
-                        else if( pName === '__multipleOf' ) {constraints.push( { type : 'multipleOf', value : val, message : constraintMsg } )}
-                        else if( pName === '__pattern' ) {constraints.push( { type : 'pattern', value : val, message : constraintMsg } )}
-                        else if( pName === '__format' ) {constraints.push( { type : 'format', value : val, message : constraintMsg } )}
-                        else if( pName === '__minItems' ) {constraints.push( { type : 'minItems', value : val, message : constraintMsg } )}
-                        else if( pName === '__maxItems' ) {constraints.push( { type : 'maxItems', value : val, message : constraintMsg } )}
-                        else if( pName === '__uniqueItems' ) {constraints.push( { type : 'uniqueItems', value : true, message : constraintMsg } )}
+                        if( pName === '__minLength' ) { constraints.push({ type : 'minLength', value : val, message : constraintMsg }) }
+                        else if( pName === '__maxLength' ) { constraints.push({ type : 'maxLength', value : val, message : constraintMsg }) }
+                        else if( pName === '__minimum' ) { constraints.push({ type : 'minimum', value : val, message : constraintMsg }) }
+                        else if( pName === '__maximum' ) { constraints.push({ type : 'maximum', value : val, message : constraintMsg }) }
+                        else if( pName === '__exclusiveMinimum' ) { constraints.push({ type : 'exclusiveMinimum', value : val, message : constraintMsg }) }
+                        else if( pName === '__exclusiveMaximum' ) { constraints.push({ type : 'exclusiveMaximum', value : val, message : constraintMsg }) }
+                        else if( pName === '__multipleOf' ) { constraints.push({ type : 'multipleOf', value : val, message : constraintMsg }) }
+                        else if( pName === '__pattern' ) { constraints.push({ type : 'pattern', value : val, message : constraintMsg }) }
+                        else if( pName === '__format' ) { constraints.push({ type : 'format', value : val, message : constraintMsg }) }
+                        else if( pName === '__minItems' ) { constraints.push({ type : 'minItems', value : val, message : constraintMsg }) }
+                        else if( pName === '__maxItems' ) { constraints.push({ type : 'maxItems', value : val, message : constraintMsg }) }
+                        else if( pName === '__uniqueItems' ) { constraints.push({ type : 'uniqueItems', value : true, message : constraintMsg }) }
                     }
                     else if( pName === '__requires' ) 
                     {
                         let reqVal: string | string[];
 
-                        if( pType.isStringLiteral() ) 
+                        if( pType.isStringLiteral()) 
                         {
                             reqVal = pType.value;
                         }
@@ -323,7 +323,7 @@ export function buildValidator(
 
                             for( const arg of typeArgs ) 
                             {
-                                if( arg.isStringLiteral() ) 
+                                if( arg.isStringLiteral()) 
                                 {
                                     items.push( arg.value );
                                 }
@@ -335,10 +335,10 @@ export function buildValidator(
 
                         if( msgProp ) 
                         {
-                            const msgType = checker.getTypeOfSymbolAtLocation( msgProp, msgProp.valueDeclaration || ( msgProp as any ).declarations?.[0] );
+                            const msgType = checker.getTypeOfSymbolAtLocation( msgProp, msgProp.valueDeclaration || ( msgProp as any ).declarations?.[0]);
                             constraintMsg = getStringLiteralValue( msgType );
                         }
-                        constraints.push( { type : 'requires', value : reqVal, message : constraintMsg } );
+                        constraints.push({ type : 'requires', value : reqVal, message : constraintMsg });
                     }
                 }
             }
@@ -353,7 +353,7 @@ export function buildValidator(
                     const baseValidator = buildValidator( baseType, checker, validatorsMap, requiredUtils );
                     result = createConstrainedPrimitiveCheck( baseName, constraints, requiredUtils, baseValidator );
                 }
-                else if( baseType && ( baseType.getFlags() & ts.TypeFlags.TemplateLiteral ) ) 
+                else if( baseType && ( baseType.getFlags() & ts.TypeFlags.TemplateLiteral )) 
                 {
                     const baseValidator = buildValidator( baseType, checker, validatorsMap, requiredUtils );
                     result = createConstrainedPrimitiveCheck( baseName, constraints, requiredUtils, baseValidator );
@@ -369,8 +369,8 @@ export function buildValidator(
                 {
                     const props = checker.getPropertiesOfType( t );
 
-                    return !props.some( p => p.getName().startsWith( '__' ) );
-                } );
+                    return !props.some( p => p.getName().startsWith( '__' ));
+                });
 
                 let baseValidator: ts.Expression | undefined;
 
@@ -380,7 +380,7 @@ export function buildValidator(
                 }
                 else if( nonConstraintTypes.length > 1 ) 
                 {
-                    const checks = nonConstraintTypes.map( t => buildValidator( t, checker, validatorsMap, requiredUtils ) );
+                    const checks = nonConstraintTypes.map( t => buildValidator( t, checker, validatorsMap, requiredUtils ));
                     baseValidator = createIntersectionCheck( checks, requiredUtils );
                 }
 
@@ -390,14 +390,14 @@ export function buildValidator(
                 }
                 else 
                 {
-                    const checks = ( type as ts.IntersectionType ).types.map( t => buildValidator( t, checker, validatorsMap, requiredUtils ) );
+                    const checks = ( type as ts.IntersectionType ).types.map( t => buildValidator( t, checker, validatorsMap, requiredUtils ));
                     result = createIntersectionCheck( checks, requiredUtils );
                 }
             }
         }
         else 
         {
-            const checks = ( type as ts.IntersectionType ).types.map( t => buildValidator( t, checker, validatorsMap, requiredUtils ) );
+            const checks = ( type as ts.IntersectionType ).types.map( t => buildValidator( t, checker, validatorsMap, requiredUtils ));
             result = createIntersectionCheck( checks, requiredUtils );
         }
     }
@@ -462,38 +462,38 @@ export function buildValidator(
                 const subType = templateType.types[i];
                 const subFlags = subType.getFlags();
 
-                if( subFlags & ts.TypeFlags.String ) {regexStr += '.*'}
-                else if( subFlags & ts.TypeFlags.Number ) {regexStr += '[0-9]+(\\.[0-9]+)?'}
-                else if( subFlags & ts.TypeFlags.BigInt ) {regexStr += '[0-9]+'}
-                else if( subFlags & ts.TypeFlags.Boolean ) {regexStr += '(true|false)'}
-                else {regexStr += '.*'}
+                if( subFlags & ts.TypeFlags.String ) { regexStr += '.*' }
+                else if( subFlags & ts.TypeFlags.Number ) { regexStr += '[0-9]+(\\.[0-9]+)?' }
+                else if( subFlags & ts.TypeFlags.BigInt ) { regexStr += '[0-9]+' }
+                else if( subFlags & ts.TypeFlags.Boolean ) { regexStr += '(true|false)' }
+                else { regexStr += '.*' }
             }
         }
         regexStr += '$';
         result = createTemplateLiteralCheck( regexStr, checker.typeToString( type ), requiredUtils );
     }
-    else if( type.isStringLiteral() ) 
+    else if( type.isStringLiteral()) 
     {
         result = createLiteralCheck( type.value, requiredUtils );
     }
-    else if( type.isNumberLiteral() ) 
+    else if( type.isNumberLiteral()) 
     {
         result = createLiteralCheck( type.value, requiredUtils );
     }
     else if( flags & ts.TypeFlags.BooleanLiteral ) 
     {
-        result = createLiteralCheck( ( type as any ).intrinsicName === 'true', requiredUtils );
+        result = createLiteralCheck(( type as any ).intrinsicName === 'true', requiredUtils );
     }
     else if( flags & ts.TypeFlags.BigIntLiteral ) 
     {
-        result = createLiteralCheck( ( type as ts.BigIntLiteralType ).value, requiredUtils );
+        result = createLiteralCheck(( type as ts.BigIntLiteralType ).value, requiredUtils );
     }
-    else if( checker.isTupleType( type ) ) 
+    else if( checker.isTupleType( type )) 
     {
         const typeArgs = ( type as ts.TupleTypeReference ).typeArguments || [];
-        result = createTupleCheck( typeArgs.map( t => buildValidator( t, checker, validatorsMap, requiredUtils ) ), requiredUtils );
+        result = createTupleCheck( typeArgs.map( t => buildValidator( t, checker, validatorsMap, requiredUtils )), requiredUtils );
     }
-    else if( checker.isArrayType( type ) ) 
+    else if( checker.isArrayType( type )) 
     {
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
         result = createArrayCheck( buildValidator( elementType, checker, validatorsMap, requiredUtils ), requiredUtils );
@@ -506,7 +506,7 @@ export function buildValidator(
         {
             result = createRecordCheck( buildValidator( stringIndexInfo.type, checker, validatorsMap, requiredUtils ), requiredUtils );
         }
-        else if( flags & ts.TypeFlags.Object || type.isClassOrInterface() || type.isTypeParameter() ) 
+        else if( flags & ts.TypeFlags.Object || type.isClassOrInterface() || type.isTypeParameter()) 
         {
             const props = checker.getPropertiesOfType( type ).map( prop => 
             {
@@ -518,7 +518,7 @@ export function buildValidator(
                     isOptional : ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0,
                     validator  : buildValidator( propType, checker, validatorsMap, requiredUtils )
                 };
-            } );
+            });
             const typeName = checker.typeToString( type );
             result = createObjectCheck( props, requiredUtils, typeName );
         }
@@ -534,60 +534,60 @@ export function buildValidator(
     return ts.factory.createIdentifier( `__val_${hash}` );
 }
 
-function buildStructuralSignature( type: ts.Type, checker: ts.TypeChecker, visited: Set<number> = new Set() ): string 
+function buildStructuralSignature( type: ts.Type, checker: ts.TypeChecker, visited: Set<number> = new Set()): string 
 {
     const flags = type.getFlags();
     const typeId = ( type as any ).id;
 
-    if( typeId && visited.has( typeId ) ) {return `[Circular:${typeId}]`}
+    if( typeId && visited.has( typeId )) { return `[Circular:${typeId}]` }
 
-    if( typeId ) {visited.add( typeId )}
+    if( typeId ) { visited.add( typeId ) }
 
-    if( ( flags & ts.TypeFlags.Union ) && ( type as any ).types ) 
+    if(( flags & ts.TypeFlags.Union ) && ( type as any ).types ) 
     {
-        return `Union<${( type as ts.UnionType ).types.map( t => buildStructuralSignature( t, checker, visited ) ).sort().join( ',' )}>`;
+        return `Union<${( type as ts.UnionType ).types.map( t => buildStructuralSignature( t, checker, visited )).sort().join( ',' )}>`;
     }
 
-    if( ( flags & ts.TypeFlags.Intersection ) && ( type as any ).types ) 
+    if(( flags & ts.TypeFlags.Intersection ) && ( type as any ).types ) 
     {
-        return `Intersection<${( type as ts.IntersectionType ).types.map( t => buildStructuralSignature( t, checker, visited ) ).sort().join( ',' )}>`;
+        return `Intersection<${( type as ts.IntersectionType ).types.map( t => buildStructuralSignature( t, checker, visited )).sort().join( ',' )}>`;
     }
 
-    if( type.isStringLiteral() ) {return `S:"${type.value}"`}
+    if( type.isStringLiteral()) { return `S:"${type.value}"` }
 
-    if( type.isNumberLiteral() ) {return `N:${type.value}`}
+    if( type.isNumberLiteral()) { return `N:${type.value}` }
 
-    if( flags & ts.TypeFlags.BigIntLiteral ) {return `B:${checker.typeToString( type )}`}
+    if( flags & ts.TypeFlags.BigIntLiteral ) { return `B:${checker.typeToString( type )}` }
 
-    if( flags & ts.TypeFlags.BooleanLiteral ) {return `L:${( type as any ).intrinsicName}`}
+    if( flags & ts.TypeFlags.BooleanLiteral ) { return `L:${( type as any ).intrinsicName}` }
 
-    if( flags & ts.TypeFlags.String ) {return 'string'}
+    if( flags & ts.TypeFlags.String ) { return 'string' }
 
-    if( flags & ts.TypeFlags.Number ) {return 'number'}
+    if( flags & ts.TypeFlags.Number ) { return 'number' }
 
-    if( flags & ts.TypeFlags.Boolean || ( type as any ).intrinsicName === 'boolean' ) {return 'boolean'}
+    if( flags & ts.TypeFlags.Boolean || ( type as any ).intrinsicName === 'boolean' ) { return 'boolean' }
 
-    if( flags & ts.TypeFlags.BigInt ) {return 'bigint'}
+    if( flags & ts.TypeFlags.BigInt ) { return 'bigint' }
 
-    if( flags & ts.TypeFlags.Null ) {return 'null'}
+    if( flags & ts.TypeFlags.Null ) { return 'null' }
 
-    if( flags & ts.TypeFlags.Undefined || flags & ts.TypeFlags.Void ) {return 'undefined'}
+    if( flags & ts.TypeFlags.Undefined || flags & ts.TypeFlags.Void ) { return 'undefined' }
 
     if( flags & ts.TypeFlags.TemplateLiteral ) 
     {
         const templateType = type as ts.TemplateLiteralType;
 
-        return `TemplateLiteral<${templateType.texts.join( ',' )}|${templateType.types.map( t => buildStructuralSignature( t, checker, visited ) ).join( ',' )}>`;
+        return `TemplateLiteral<${templateType.texts.join( ',' )}|${templateType.types.map( t => buildStructuralSignature( t, checker, visited )).join( ',' )}>`;
     }
 
-    if( checker.isArrayType( type ) ) 
+    if( checker.isArrayType( type )) 
     {
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
 
         return `Array<${buildStructuralSignature( elementType, checker, visited )}>`;
     }
 
-    if( flags & ts.TypeFlags.Object || type.isClassOrInterface() ) 
+    if( flags & ts.TypeFlags.Object || type.isClassOrInterface()) 
     {
         const props = checker.getPropertiesOfType( type );
 
@@ -596,7 +596,7 @@ function buildStructuralSignature( type: ts.Type, checker: ts.TypeChecker, visit
             // Handle Record or empty object
             const stringIndexInfo = checker.getIndexInfoOfType( type, ts.IndexKind.String );
 
-            if( stringIndexInfo ) {return `Record<${buildStructuralSignature( stringIndexInfo.type, checker, visited )}>`}
+            if( stringIndexInfo ) { return `Record<${buildStructuralSignature( stringIndexInfo.type, checker, visited )}>` }
         }
         const propSigs = props.map( prop => 
         {
@@ -605,7 +605,7 @@ function buildStructuralSignature( type: ts.Type, checker: ts.TypeChecker, visit
             const isOptional = ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0;
 
             return `${prop.getName()}${isOptional ? '?' : ''}:${buildStructuralSignature( propType, checker, visited )}`;
-        } ).sort();
+        }).sort();
 
         return `Object{${propSigs.join( ';' )}}`;
     }
@@ -622,27 +622,27 @@ export function generateHash( type: ts.Type, checker: ts.TypeChecker ): string
 
 export function objectToAst( val: any ): ts.Expression 
 {
-    if( val === null ) {return ts.factory.createNull()}
+    if( val === null ) { return ts.factory.createNull() }
 
-    if( val === undefined ) {return ts.factory.createIdentifier( 'undefined' )}
+    if( val === undefined ) { return ts.factory.createIdentifier( 'undefined' ) }
 
-    if( typeof val === 'string' ) {return ts.factory.createStringLiteral( val )}
+    if( typeof val === 'string' ) { return ts.factory.createStringLiteral( val ) }
 
-    if( typeof val === 'number' ) {return ts.factory.createNumericLiteral( val.toString() )}
+    if( typeof val === 'number' ) { return ts.factory.createNumericLiteral( val.toString()) }
 
-    if( typeof val === 'boolean' ) {return val ? ts.factory.createTrue() : ts.factory.createFalse()}
+    if( typeof val === 'boolean' ) { return val ? ts.factory.createTrue() : ts.factory.createFalse() }
 
-    if( typeof val === 'bigint' ) {return ts.factory.createBigIntLiteral( val.toString() + 'n' )}
+    if( typeof val === 'bigint' ) { return ts.factory.createBigIntLiteral( val.toString() + 'n' ) }
 
-    if( Array.isArray( val ) ) 
+    if( Array.isArray( val )) 
     {
-        return ts.factory.createArrayLiteralExpression( val.map( objectToAst ) );
+        return ts.factory.createArrayLiteralExpression( val.map( objectToAst ));
     }
 
     if( typeof val === 'object' ) 
     {
-        const properties = Object.entries( val ).map( ( [k, v] ) =>
-            ts.factory.createPropertyAssignment( ts.factory.createStringLiteral( k ), objectToAst( v ) )
+        const properties = Object.entries( val ).map(([k, v]) =>
+            ts.factory.createPropertyAssignment( ts.factory.createStringLiteral( k ), objectToAst( v ))
         );
 
         return ts.factory.createObjectLiteralExpression( properties, true );
@@ -661,15 +661,15 @@ export function getTypeComplexity(
 
     if( typeId ) 
     {
-        if( visited.has( typeId ) ) {return 1}
+        if( visited.has( typeId )) { return 1 }
         visited.add( typeId );
     }
 
     const flags = type.getFlags();
     let complexity = 1;
 
-    const isUnion = ( ( ( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion() ) && ( type as any ).types ) ? true : false;
-    const isIntersection = ( ( ( flags & ts.TypeFlags.Intersection ) !== 0 || type.isIntersection() ) && ( type as any ).types ) ? true : false;
+    const isUnion = ((( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion()) && ( type as any ).types ) ? true : false;
+    const isIntersection = ((( flags & ts.TypeFlags.Intersection ) !== 0 || type.isIntersection()) && ( type as any ).types ) ? true : false;
 
     if( isUnion ) 
     {
@@ -685,12 +685,12 @@ export function getTypeComplexity(
             complexity += getTypeComplexity( t, checker, visited );
         }
     }
-    else if( checker.isArrayType( type ) ) 
+    else if( checker.isArrayType( type )) 
     {
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
         complexity += getTypeComplexity( elementType, checker, visited );
     }
-    else if( checker.isTupleType( type ) ) 
+    else if( checker.isTupleType( type )) 
     {
         const elementTypes = ( type as ts.TypeReference ).typeArguments || [];
 
@@ -699,7 +699,7 @@ export function getTypeComplexity(
             complexity += getTypeComplexity( t, checker, visited );
         }
     }
-    else if( flags & ts.TypeFlags.Object || type.isClassOrInterface() ) 
+    else if( flags & ts.TypeFlags.Object || type.isClassOrInterface()) 
     {
         const name = type.getSymbol()?.name;
 
@@ -709,13 +709,13 @@ export function getTypeComplexity(
 
             for( const prop of props ) 
             {
-                const propType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0] );
+                const propType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0]);
                 complexity += getTypeComplexity( propType, checker, visited );
             }
         }
     }
 
-    if( typeId ) {visited.delete( typeId )}
+    if( typeId ) { visited.delete( typeId ) }
 
     return complexity;
 }
@@ -731,9 +731,9 @@ export function preScanType(
     const flags = type.getFlags();
     const typeId = ( type as any ).id;
 
-    if( !typeId ) {return}
+    if( !typeId ) { return }
 
-    if( visited.has( typeId ) ) 
+    if( visited.has( typeId )) 
     {
         const hash = generateHash( type, checker );
         circularHashes.add( hash );
@@ -742,8 +742,8 @@ export function preScanType(
     }
     visited.add( typeId );
 
-    const isUnion = ( ( ( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion() ) && ( type as any ).types ) ? true : false;
-    const isIntersection = ( ( ( flags & ts.TypeFlags.Intersection ) !== 0 || type.isIntersection() ) && ( type as any ).types ) ? true : false;
+    const isUnion = ((( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion()) && ( type as any ).types ) ? true : false;
+    const isIntersection = ((( flags & ts.TypeFlags.Intersection ) !== 0 || type.isIntersection()) && ( type as any ).types ) ? true : false;
 
     if( isUnion ) 
     {
@@ -759,12 +759,12 @@ export function preScanType(
             preScanType( t, checker, counts, circularHashes, visited );
         }
     }
-    else if( checker.isArrayType( type ) ) 
+    else if( checker.isArrayType( type )) 
     {
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
         preScanType( elementType, checker, counts, circularHashes, visited );
     }
-    else if( checker.isTupleType( type ) ) 
+    else if( checker.isTupleType( type )) 
     {
         const elementTypes = ( type as ts.TypeReference ).typeArguments || [];
 
@@ -773,7 +773,7 @@ export function preScanType(
             preScanType( t, checker, counts, circularHashes, visited );
         }
     }
-    else if( flags & ts.TypeFlags.Object || type.isClassOrInterface() ) 
+    else if( flags & ts.TypeFlags.Object || type.isClassOrInterface()) 
     {
         const name = type.getSymbol()?.name;
 
@@ -786,7 +786,7 @@ export function preScanType(
 
             for( const prop of props ) 
             {
-                const propType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0] );
+                const propType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0]);
                 preScanType( propType, checker, counts, circularHashes, visited );
             }
         }
@@ -801,7 +801,7 @@ export function buildJsonSchema( type: ts.Type, checker: ts.TypeChecker ): any
     const visited = new Map<number, string>();
     const counts = new Map<string, number>();
     const circularHashes = new Set<string>();
-    preScanType( type, checker, counts, circularHashes, new Set<number>() );
+    preScanType( type, checker, counts, circularHashes, new Set<number>());
 
     const rootSchema = buildJsonSchemaInternal( type, checker, defs, visited, counts, circularHashes );
 
@@ -812,7 +812,7 @@ export function buildJsonSchema( type: ts.Type, checker: ts.TypeChecker ): any
         const rootHash = generateHash( type, checker );
         const rootDefName = `${rootName}_${rootHash}`;
 
-        if( defs[rootDefName] ) 
+        if( defs[rootDefName]) 
         {
             return {
                 $ref  : `#/$defs/${rootDefName}`,
@@ -843,13 +843,13 @@ function buildJsonSchemaInternal(
     const flags = type.getFlags();
     const typeId = ( type as any ).id;
 
-    if( typeId && visited.has( typeId ) ) 
+    if( typeId && visited.has( typeId )) 
     {
         return { $ref : `#/$defs/${visited.get( typeId )}` };
     }
 
-    const isUnion = ( ( ( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion() ) && ( type as any ).types ) ? true : false;
-    const isIntersection = ( ( ( flags & ts.TypeFlags.Intersection ) !== 0 || type.isIntersection() ) && ( type as any ).types ) ? true : false;
+    const isUnion = ((( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion()) && ( type as any ).types ) ? true : false;
+    const isIntersection = ((( flags & ts.TypeFlags.Intersection ) !== 0 || type.isIntersection()) && ( type as any ).types ) ? true : false;
 
     if( isUnion ) 
     {
@@ -863,7 +863,7 @@ function buildJsonSchemaInternal(
         }
 
         return {
-            anyOf : types.map( t => buildJsonSchemaInternal( t, checker, defs, visited, counts, circularHashes ) )
+            anyOf : types.map( t => buildJsonSchemaInternal( t, checker, defs, visited, counts, circularHashes ))
         };
     }
 
@@ -911,7 +911,7 @@ function buildJsonSchemaInternal(
                 const valueType = ( sub as ts.TypeReference ).typeArguments?.[1] || checker.getAnyType();
                 baseSchema = { type : 'object', additionalProperties : buildJsonSchemaInternal( valueType, checker, defs, visited, counts, circularHashes ) };
             }
-            else if( checker.isArrayType( sub ) ) 
+            else if( checker.isArrayType( sub )) 
             {
                 const elementType = ( sub as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
                 baseSchema = { type : 'array', items : buildJsonSchemaInternal( elementType, checker, defs, visited, counts, circularHashes ) };
@@ -923,39 +923,39 @@ function buildJsonSchemaInternal(
             {
                 const pName = prop.getName();
 
-                if( pName.startsWith( '__' ) ) 
+                if( pName.startsWith( '__' )) 
                 {
-                    const pType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0] );
+                    const pType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0]);
                     let val = ( pType as any ).value;
 
-                    if( val === undefined && ( pType.getFlags() & ts.TypeFlags.BooleanLiteral ) ) 
+                    if( val === undefined && ( pType.getFlags() & ts.TypeFlags.BooleanLiteral )) 
                     {
                         val = ( pType as any ).intrinsicName === 'true';
                     }
 
-                    if( val === undefined && ( pType.getFlags() & ts.TypeFlags.Null ) ) 
+                    if( val === undefined && ( pType.getFlags() & ts.TypeFlags.Null )) 
                     {
                         val = null;
                     }
 
-                    if( pName === '__default' ) {constraints.default = val}
-                    else if( pName === '__minLength' ) {constraints.minLength = val}
-                    else if( pName === '__maxLength' ) {constraints.maxLength = val}
-                    else if( pName === '__minimum' ) {constraints.minimum = val}
-                    else if( pName === '__maximum' ) {constraints.maximum = val}
-                    else if( pName === '__exclusiveMinimum' ) {constraints.exclusiveMinimum = val}
-                    else if( pName === '__exclusiveMaximum' ) {constraints.exclusiveMaximum = val}
-                    else if( pName === '__multipleOf' ) {constraints.multipleOf = val}
-                    else if( pName === '__pattern' ) {constraints.pattern = val}
-                    else if( pName === '__format' ) {constraints.format = val}
-                    else if( pName === '__minItems' ) {constraints.minItems = val}
-                    else if( pName === '__maxItems' ) {constraints.maxItems = val}
-                    else if( pName === '__uniqueItems' ) {constraints.uniqueItems = true}
+                    if( pName === '__default' ) { constraints.default = val }
+                    else if( pName === '__minLength' ) { constraints.minLength = val }
+                    else if( pName === '__maxLength' ) { constraints.maxLength = val }
+                    else if( pName === '__minimum' ) { constraints.minimum = val }
+                    else if( pName === '__maximum' ) { constraints.maximum = val }
+                    else if( pName === '__exclusiveMinimum' ) { constraints.exclusiveMinimum = val }
+                    else if( pName === '__exclusiveMaximum' ) { constraints.exclusiveMaximum = val }
+                    else if( pName === '__multipleOf' ) { constraints.multipleOf = val }
+                    else if( pName === '__pattern' ) { constraints.pattern = val }
+                    else if( pName === '__format' ) { constraints.format = val }
+                    else if( pName === '__minItems' ) { constraints.minItems = val }
+                    else if( pName === '__maxItems' ) { constraints.maxItems = val }
+                    else if( pName === '__uniqueItems' ) { constraints.uniqueItems = true }
                     else if( pName === '__requires' ) 
                     {
                         let reqVal: string | string[];
 
-                        if( pType.isStringLiteral() ) 
+                        if( pType.isStringLiteral()) 
                         {
                             reqVal = pType.value;
                         }
@@ -966,7 +966,7 @@ function buildJsonSchemaInternal(
 
                             for( const arg of typeArgs ) 
                             {
-                                if( arg.isStringLiteral() ) 
+                                if( arg.isStringLiteral()) 
                                 {
                                     items.push( arg.value );
                                 }
@@ -1043,12 +1043,12 @@ function buildJsonSchemaInternal(
         return { type : 'boolean' };
     }
 
-    if( type.isStringLiteral() ) 
+    if( type.isStringLiteral()) 
     {
         return { type : 'string', const : type.value };
     }
 
-    if( type.isNumberLiteral() ) 
+    if( type.isNumberLiteral()) 
     {
         return { type : 'number', const : type.value };
     }
@@ -1063,7 +1063,7 @@ function buildJsonSchemaInternal(
         return { type : 'boolean', const : ( type as any ).intrinsicName === 'true' };
     }
 
-    if( checker.isArrayType( type ) ) 
+    if( checker.isArrayType( type )) 
     {
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
 
@@ -1073,37 +1073,37 @@ function buildJsonSchemaInternal(
         };
     }
 
-    if( checker.isTupleType( type ) ) 
+    if( checker.isTupleType( type )) 
     {
         const elementTypes = ( type as ts.TypeReference ).typeArguments || [];
 
         return {
             type     : 'array',
-            items    : elementTypes.map( t => buildJsonSchemaInternal( t, checker, defs, visited, counts, circularHashes ) ),
+            items    : elementTypes.map( t => buildJsonSchemaInternal( t, checker, defs, visited, counts, circularHashes )),
             minItems : elementTypes.length,
             maxItems : elementTypes.length
         };
     }
 
     // Object types
-    if( flags & ts.TypeFlags.Object || type.isClassOrInterface() ) 
+    if( flags & ts.TypeFlags.Object || type.isClassOrInterface()) 
     {
         const symbol = type.getSymbol() || type.aliasSymbol;
         const name = symbol ? symbol.getName() : 'Object';
         const typeHash = generateHash( type, checker );
         const defName = `${name}_${typeHash}`;
 
-        if( defs[defName] ) 
+        if( defs[defName]) 
         {
             return { $ref : `#/$defs/${defName}` };
         }
 
-        if( typeId && visited.has( typeId ) ) 
+        if( typeId && visited.has( typeId )) 
         {
             return { $ref : `#/$defs/${defName}` };
         }
 
-        if( typeId ) {visited.set( typeId, defName )}
+        if( typeId ) { visited.set( typeId, defName ) }
 
         const properties: Record<string, any> = {};
         const required: string[] = [];
@@ -1113,7 +1113,7 @@ function buildJsonSchemaInternal(
         {
             const pName = prop.getName();
             const isOptional = ( prop.flags & ts.SymbolFlags.Optional ) !== 0;
-            const propType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0] );
+            const propType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0]);
 
             properties[pName] = buildJsonSchemaInternal( propType, checker, defs, visited, counts, circularHashes );
 
@@ -1134,11 +1134,11 @@ function buildJsonSchemaInternal(
             schemaObj.required = required;
         }
 
-        if( typeId ) {visited.delete( typeId )}
+        if( typeId ) { visited.delete( typeId ) }
 
         const isCircular = circularHashes.has( typeHash );
         const refCount = counts.get( typeHash ) || 0;
-        const complexity = getTypeComplexity( type, checker, new Set<number>() );
+        const complexity = getTypeComplexity( type, checker, new Set<number>());
         const score = refCount * complexity;
 
         if( isCircular || score >= 128 ) 

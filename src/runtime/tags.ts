@@ -53,9 +53,9 @@ type ModifierPathTuple<T, Path extends string[], Modifiers> =
         : T;
 
 type UnionToIntersection<U> =
-    ( U extends any ? ( k: U ) => void : never ) extends ( ( k: infer I ) => void ) ? I : never;
+    ( U extends any ? ( k: U ) => void : never ) extends (( k: infer I ) => void ) ? I : never;
 type LastOf<U> =
-    UnionToIntersection<U extends any ? ( f: U ) => void : never> extends ( ( a: infer A ) => void ) ? A : never;
+    UnionToIntersection<U extends any ? ( f: U ) => void : never> extends (( a: infer A ) => void ) ? A : never;
 type Push<T extends any[], V> = [...T, V];
 type TuplifyUnion<U, L = LastOf<U>> =
     [U] extends [never] ? [] : Push<TuplifyUnion<Exclude<U, L>>, L>;

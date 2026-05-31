@@ -43,8 +43,8 @@ export default tseslint.config(
             // Mandatory Braces for all control statements (even single-line)
             'curly': ['error', 'all'],
 
-            // Padding spaces inside parenthesis, except empty
-            '@stylistic/space-in-parens': ['error', 'always', { 'exceptions': ['empty'] }],
+            // Padding spaces inside parenthesis, except empty, nested parens, objects, and arrays
+            '@stylistic/space-in-parens': ['error', 'always', { 'exceptions': ['empty', '()', '{}', '[]'] }],
 
             // Object literal colon alignment
             '@stylistic/key-spacing': ['error', {
@@ -53,8 +53,8 @@ export default tseslint.config(
                 'afterColon': true
             }],
 
-            // Block spacing: never
-            '@stylistic/block-spacing': ['error', 'never'],
+            // Block spacing: always
+            '@stylistic/block-spacing': ['error', 'always'],
 
             // Commas & Semicolons
             '@stylistic/semi': ['error', 'always', { 'omitLastInOneLineBlock': true }],

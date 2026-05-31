@@ -27,7 +27,7 @@ export type MaxItems<N extends number, Msg extends string = string> = { readonly
 export type UniqueItems<Msg extends string = string> = { readonly __uniqueItems : true, readonly __uniqueItems_message? : Msg };
 
 // Custom Validation function link
-export type Custom<Fn extends ( ...args: any[] ) => boolean, Msg extends string = string> = { readonly __custom : Fn, readonly __custom_message? : Msg };
+export type Custom<Fn extends ( ...args: any[]) => boolean, Msg extends string = string> = { readonly __custom : Fn, readonly __custom_message? : Msg };
 
 // Cross-field dependencies
 export type Requires<Paths extends string | readonly string[], Msg extends string = string> = { readonly __requires : Paths, readonly __requires_message? : Msg };

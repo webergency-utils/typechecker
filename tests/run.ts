@@ -3,10 +3,10 @@ import transformer from '../src/transformer';
 
 const filePath = './tests/fixtures/sample.ts';
 
-const program = ts.createProgram( [filePath], {
+const program = ts.createProgram([filePath], {
     target : ts.ScriptTarget.ES2022,
     module : ts.ModuleKind.CommonJS
-} );
+});
 
 const sourceFile = program.getSourceFile( filePath );
 

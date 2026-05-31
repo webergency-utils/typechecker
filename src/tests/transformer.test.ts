@@ -13,25 +13,25 @@ describe( 'Transformer Call Expression Replacements', () =>
 
         try 
         {
-            const program = ts.createProgram( [tempFile], {
+            const program = ts.createProgram([tempFile], {
                 target           : ts.ScriptTarget.ES2022,
                 module           : ts.ModuleKind.NodeNext,
                 moduleResolution : ts.ModuleResolutionKind.NodeNext,
                 skipLibCheck     : true
-            } );
+            });
 
             const sourceFile = program.getSourceFile( tempFile );
 
-            if( !sourceFile ) {throw new Error( 'Could not load source file' )}
+            if( !sourceFile ) { throw new Error( 'Could not load source file' ) }
 
-            const result = ts.transform( sourceFile, [transformer( program )] );
+            const result = ts.transform( sourceFile, [transformer( program )]);
             const printer = ts.createPrinter();
 
-            return printer.printFile( result.transformed[0] );
+            return printer.printFile( result.transformed[0]);
         }
         finally 
         {
-            if( fs.existsSync( tempFile ) ) 
+            if( fs.existsSync( tempFile )) 
             {
                 fs.unlinkSync( tempFile );
             }
@@ -48,7 +48,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         const compiled = compileAndTransform( code );
         expect( compiled ).toContain( 'MetadataStore.validate(' );
         expect( compiled ).toContain( "'relaxed'" );
-    } );
+    });
 
     it( 'should transform validate with options object', () => 
     {
@@ -62,7 +62,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).toContain( "mode: 'relaxed'" );
         expect( compiled ).toContain( 'tryConvert: true' );
         expect( compiled ).toContain( 'wrapArrays: true' );
-    } );
+    });
 
     it( 'should transform types with constraint and format namespace constraints and custom validations', () => 
     {
@@ -86,7 +86,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).toContain( 'validators.minLength' );
         expect( compiled ).toContain( 'validators.maxLength' );
         expect( compiled ).toContain( 'validators.format' );
-    } );
+    });
 
     it( 'should transform types with tag.Default initializers', () => 
     {
@@ -101,7 +101,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         const compiled = compileAndTransform( code );
         expect( compiled ).toContain( 'v = 8080;' );
         expect( compiled ).toContain( 'v = "localhost";' );
-    } );
+    });
 
     it( 'should transform types with transform namespace and custom mappers', () => 
     {
@@ -120,7 +120,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).toContain( 'v = v.toLowerCase();' );
         expect( compiled ).toContain( 'v = new Date(v);' );
         expect( compiled ).toContain( 'v = customSuffix(v);' );
-    } );
+    });
 
     it( 'should transform jsonSchema calls and pre-compile static schemas', () => 
     {
@@ -142,7 +142,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).toContain( '"minimum": 18' );
         expect( compiled ).toContain( '"maximum": 99' );
         expect( compiled ).toContain( '"type": "boolean"' );
-    } );
+    });
 
     it( 'should handle deeply nested, circular, and highly complex types in jsonSchema', () => 
     {
@@ -192,7 +192,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).toContain( '"tupleField"' );
         expect( compiled ).toContain( '"minItems": 3' );
         expect( compiled ).toContain( '"maxItems": 3' );
-    } );
+    });
 
     it( 'should transform validate calls with dynamic validation schema option', () => 
     {
@@ -210,7 +210,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         `;
         const compiled = compileAndTransform( code );
         expect( compiled ).toContain( 'MetadataStore.getOrCompileSchema(schema)' );
-    } );
+    });
 
     it( 'should inline small repeating structures like Point while hoisting circular types', () => 
     {
@@ -234,7 +234,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         const compiled = compileAndTransform( code );
         expect( compiled ).not.toContain( '"$ref": "#/$defs/Point_' );
         expect( compiled ).toContain( '"$ref": "#/$defs/Node_' );
-    } );
+    });
 
     it( 'should transform types with Set and Map', () => 
     {
@@ -252,7 +252,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         const compiled = compileAndTransform( code );
         expect( compiled ).toContain( 'validators.set' );
         expect( compiled ).toContain( 'validators.map' );
-    } );
+    });
 
     it( 'should transform custom validation messages and pass message arguments to validator helpers', () => 
     {
@@ -267,7 +267,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         const compiled = compileAndTransform( code );
         expect( compiled ).toContain( 'validators.format(v, path, ctx, "email", "Please supply a valid email address")' );
         expect( compiled ).toContain( 'validators.minimum(v, path, ctx, 18, "You must be 18 or older")' );
-    } );
+    });
 
     it( 'should prioritize specific messages over fallback message', () => 
     {
@@ -284,6 +284,6 @@ describe( 'Transformer Call Expression Replacements', () =>
         const compiled = compileAndTransform( code );
         expect( compiled ).toContain( 'validators.minimum(v, path, ctx, 18, "Too young")' );
         expect( compiled ).toContain( 'validators.maximum(v, path, ctx, 99, "Too old")' );
-    } );
-} );
+    });
+});
 

@@ -21,14 +21,14 @@ export interface ValidationOptions {
     tryConvert?   : boolean
     wrapArrays?   : boolean
     schema?       : any
-    errorFactory? : ( errors: IValidationError[] ) => Error
+    errorFactory? : ( errors: IValidationError[]) => Error
 }
 
 
 const report = ( ctx: ValidationContext, path: string, expected: string, value: any, message?: string ) => 
 {
     ctx.success = false;
-    ctx.errors.push( { path, value, error : message || expected } );
+    ctx.errors.push({ path, value, error : message || expected });
 };
 
 export const validators = {
@@ -50,7 +50,7 @@ export const validators = {
             {
                 const parsed = parseFloat( v );
 
-                if( !isNaN( parsed ) ) {return parsed}
+                if( !isNaN( parsed )) { return parsed }
             }
             report( ctx, path, 'Type<number>', v );
         }
@@ -68,7 +68,7 @@ export const validators = {
                 {
                     return BigInt( v );
                 }
-                catch ( e ) {/* ignore */}
+                catch ( e ) { /* ignore */ }
             }
             report( ctx, path, 'Type<bigint>', v );
         }
@@ -80,15 +80,15 @@ export const validators = {
     {
         if( typeof v !== 'boolean' ) 
         {
-            if( ctx.tryConvert && ( v === undefined || v === null ) ) {return false}
+            if( ctx.tryConvert && ( v === undefined || v === null )) { return false }
 
-            if( ctx.tryConvert && ( typeof v === 'string' || typeof v === 'number' ) ) 
+            if( ctx.tryConvert && ( typeof v === 'string' || typeof v === 'number' )) 
             {
                 const s = String( v ).toLowerCase();
 
-                if( s === 'true' || s === '1' || s === 'yes' || s === 'on' ) {return true}
+                if( s === 'true' || s === '1' || s === 'yes' || s === 'on' ) { return true }
 
-                if( s === 'false' || s === '0' || s === 'no' || s === 'off' ) {return false}
+                if( s === 'false' || s === '0' || s === 'no' || s === 'off' ) { return false }
             }
             report( ctx, path, 'Type<boolean>', v );
         }
@@ -98,13 +98,13 @@ export const validators = {
 
     date : ( v: any, path: string, ctx: ValidationContext ) => 
     {
-        if( !( v instanceof Date ) || isNaN( v.getTime() ) ) 
+        if( !( v instanceof Date ) || isNaN( v.getTime())) 
         {
             if( ctx.tryConvert && typeof v === 'string' ) 
             {
                 const parsed = new Date( v );
 
-                if( !isNaN( parsed.getTime() ) ) {return parsed}
+                if( !isNaN( parsed.getTime())) { return parsed }
             }
             report( ctx, path, 'Type<Date>', v );
         }
@@ -114,7 +114,7 @@ export const validators = {
 
     regexp : ( v: any, path: string, ctx: ValidationContext ) => 
     {
-        if( !( v instanceof RegExp ) ) 
+        if( !( v instanceof RegExp )) 
         {
             if( ctx.tryConvert && typeof v === 'string' ) 
             {
@@ -124,7 +124,7 @@ export const validators = {
                 {
                     try 
                     {
-                        return new RegExp( match[1], match[2] );
+                        return new RegExp( match[1], match[2]);
                     }
                     catch ( e ) { }
                 }
@@ -167,11 +167,11 @@ export const validators = {
     {
         if( v !== expected ) 
         {
-            if( ctx.tryConvert && ( v === undefined || v === null ) ) 
+            if( ctx.tryConvert && ( v === undefined || v === null )) 
             {
                 if( typeof expected === 'boolean' ) 
                 {
-                    if( expected === false ) {return false}
+                    if( expected === false ) { return false }
                 }
             }
 
@@ -181,7 +181,7 @@ export const validators = {
                 {
                     const p = parseFloat( v );
 
-                    if( p === expected ) {return p}
+                    if( p === expected ) { return p }
                 }
 
                 if( typeof expected === 'boolean' ) 
@@ -189,10 +189,10 @@ export const validators = {
                     const s = v.toLowerCase();
                     let val: boolean | undefined;
 
-                    if( s === 'true' || s === '1' || s === 'yes' || s === 'on' ) {val = true}
-                    else if( s === 'false' || s === '0' || s === 'no' || s === 'off' ) {val = false}
+                    if( s === 'true' || s === '1' || s === 'yes' || s === 'on' ) { val = true }
+                    else if( s === 'false' || s === '0' || s === 'no' || s === 'off' ) { val = false }
 
-                    if( val === expected ) {return val}
+                    if( val === expected ) { return val }
                 }
             }
             const expStr = typeof expected === 'string' ? `'${expected}'` : expected;
@@ -204,7 +204,7 @@ export const validators = {
 
     array : ( v: any, path: string, ctx: ValidationContext, childValidator: Function ) => 
     {
-        if( !Array.isArray( v ) ) 
+        if( !Array.isArray( v )) 
         {
             if( ctx.wrapArrays && v !== undefined && v !== null ) 
             {
@@ -223,13 +223,13 @@ export const validators = {
         {
             const val = childValidator( v[i], path + '[' + i + ']', ctx );
 
-            if( ctx.mode === 'strip' ) {( data as any[] ).push( val )}
+            if( ctx.mode === 'strip' ) { ( data as any[]).push( val ) }
         }
 
         return data;
     },
 
-    props : ( v: any, data: any, path: string, ctx: ValidationContext, props: [string, boolean, Function][] ) => 
+    props : ( v: any, data: any, path: string, ctx: ValidationContext, props: [string, boolean, Function][]) => 
     {
         for( const [key, isOptional, validator] of props ) 
         {
@@ -251,7 +251,7 @@ export const validators = {
 
     object : ( v: any, path: string, ctx: ValidationContext, allowedKeys?: string[], expected: string = 'Type<Object>' ) => 
     {
-        if( !v || typeof v !== 'object' || Array.isArray( v ) ) 
+        if( !v || typeof v !== 'object' || Array.isArray( v )) 
         {
             report( ctx, path, expected, v );
 
@@ -260,11 +260,11 @@ export const validators = {
 
         if( ctx.mode === 'strict' && allowedKeys ) 
         {
-            for( const k of Object.keys( v ) ) 
+            for( const k of Object.keys( v )) 
             {
-                if( !allowedKeys.includes( k ) ) 
+                if( !allowedKeys.includes( k )) 
                 {
-                    report( ctx, path, `PropertyNotAllowed<${k}>`, v[k] );
+                    report( ctx, path, `PropertyNotAllowed<${k}>`, v[k]);
                 }
             }
         }
@@ -274,7 +274,7 @@ export const validators = {
 
     templateLiteral : ( v: any, path: string, ctx: ValidationContext, regex: RegExp, expected: string ) => 
     {
-        if( typeof v !== 'string' || !regex.test( v ) ) 
+        if( typeof v !== 'string' || !regex.test( v )) 
         {
             report( ctx, path, expected, v );
         }
@@ -284,42 +284,42 @@ export const validators = {
 
     minLength : ( v: string, path: string, ctx: ValidationContext, min: number, message?: string ) => 
     {
-        if( v.length < min ) {report( ctx, path, `MinLength<${min}>`, v, message )}
+        if( v.length < min ) { report( ctx, path, `MinLength<${min}>`, v, message ) }
 
         return v;
     },
 
     maxLength : ( v: string, path: string, ctx: ValidationContext, max: number, message?: string ) => 
     {
-        if( v.length > max ) {report( ctx, path, `MaxLength<${max}>`, v, message )}
+        if( v.length > max ) { report( ctx, path, `MaxLength<${max}>`, v, message ) }
 
         return v;
     },
 
     minimum : ( v: number | bigint, path: string, ctx: ValidationContext, min: number | bigint, message?: string ) => 
     {
-        if( v < min ) {report( ctx, path, `Minimum<${min}>`, v, message )}
+        if( v < min ) { report( ctx, path, `Minimum<${min}>`, v, message ) }
 
         return v;
     },
 
     maximum : ( v: number | bigint, path: string, ctx: ValidationContext, max: number | bigint, message?: string ) => 
     {
-        if( v > max ) {report( ctx, path, `Maximum<${max}>`, v, message )}
+        if( v > max ) { report( ctx, path, `Maximum<${max}>`, v, message ) }
 
         return v;
     },
 
     exclusiveMinimum : ( v: number | bigint, path: string, ctx: ValidationContext, min: number | bigint, message?: string ) => 
     {
-        if( v <= min ) {report( ctx, path, `ExclusiveMinimum<${min}>`, v, message )}
+        if( v <= min ) { report( ctx, path, `ExclusiveMinimum<${min}>`, v, message ) }
 
         return v;
     },
 
     exclusiveMaximum : ( v: number | bigint, path: string, ctx: ValidationContext, max: number | bigint, message?: string ) => 
     {
-        if( v >= max ) {report( ctx, path, `ExclusiveMaximum<${max}>`, v, message )}
+        if( v >= max ) { report( ctx, path, `ExclusiveMaximum<${max}>`, v, message ) }
 
         return v;
     },
@@ -328,11 +328,11 @@ export const validators = {
     {
         if( typeof v === 'bigint' || typeof n === 'bigint' ) 
         {
-            if( BigInt( v ) % BigInt( n ) !== 0n ) {report( ctx, path, `MultipleOf<${n}>`, v, message )}
+            if( BigInt( v ) % BigInt( n ) !== 0n ) { report( ctx, path, `MultipleOf<${n}>`, v, message ) }
         }
         else 
         {
-            if( v % n !== 0 ) {report( ctx, path, `MultipleOf<${n}>`, v, message )}
+            if( v % n !== 0 ) { report( ctx, path, `MultipleOf<${n}>`, v, message ) }
         }
 
         return v;
@@ -340,7 +340,7 @@ export const validators = {
 
     pattern : ( v: string, path: string, ctx: ValidationContext, regex: RegExp, expected: string, message?: string ) => 
     {
-        if( !regex.test( v ) ) {report( ctx, path, expected, v, message )}
+        if( !regex.test( v )) { report( ctx, path, expected, v, message ) }
 
         return v;
     },
@@ -362,8 +362,8 @@ export const validators = {
 
             case 'byte': regex = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/; break;
             case 'password': break; // Anything is a password
-            case 'regex': try {new RegExp( v )}
-            catch{isValid = false}; break;
+            case 'regex': try { new RegExp( v ) }
+            catch{ isValid = false }; break;
             case 'hostname': regex = /^(?=.{1,253}$)(?:(?!-)[A-Za-z0-9-]{1,63}(?<!-)\.)+[A-Za-z]{2,63}$/; break;
             case 'uri': regex = /^[a-zA-Z][a-zA-Z0-9+.-]*:[^\s]*$/; break;
             case 'time': regex = /^\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[zZ]|[+-]\d{2}:\d{2})$/; break;
@@ -372,23 +372,23 @@ export const validators = {
             default: break;
         }
 
-        if( regex && !regex.test( v ) ) {isValid = false}
+        if( regex && !regex.test( v )) { isValid = false }
 
-        if( !isValid ) {report( ctx, path, `Format<${format}>`, v, message )}
+        if( !isValid ) { report( ctx, path, `Format<${format}>`, v, message ) }
 
         return v;
     },
 
     minItems : ( v: any[], path: string, ctx: ValidationContext, min: number, message?: string ) => 
     {
-        if( v.length < min ) {report( ctx, path, `MinItems<${min}>`, v, message )}
+        if( v.length < min ) { report( ctx, path, `MinItems<${min}>`, v, message ) }
 
         return v;
     },
 
     maxItems : ( v: any[], path: string, ctx: ValidationContext, max: number, message?: string ) => 
     {
-        if( v.length > max ) {report( ctx, path, `MaxItems<${max}>`, v, message )}
+        if( v.length > max ) { report( ctx, path, `MaxItems<${max}>`, v, message ) }
 
         return v;
     },
@@ -402,7 +402,7 @@ export const validators = {
             const item = v[i];
             const key = typeof item === 'object' && item !== null ? JSON.stringify( item ) : item;
 
-            if( seen.has( key ) ) 
+            if( seen.has( key )) 
             {
                 report( ctx, path, 'UniqueItems', v, message );
                 break;
@@ -415,12 +415,12 @@ export const validators = {
 
     custom : ( v: any, path: string, ctx: ValidationContext, fn: Function, message?: string ) => 
     {
-        const parentPath = path.includes( '.' ) ? path.substring( 0, path.lastIndexOf( '.' ) ) : '';
+        const parentPath = path.includes( '.' ) ? path.substring( 0, path.lastIndexOf( '.' )) : '';
         const parent = getValueAtPath( ctx.root, parentPath );
         const indexMatch = path.match( /\[(\d+)\]$/ );
         const index = indexMatch ? parseInt( indexMatch[1], 10 ) : undefined;
 
-        if( !fn( v, { parent, root : ctx.root, path, index } ) ) 
+        if( !fn( v, { parent, root : ctx.root, path, index })) 
         {
             report( ctx, path, fn.name ? `Custom<${fn.name}>` : 'Custom', v, message );
         }
@@ -437,7 +437,7 @@ export const validators = {
             const subCtx = { ...ctx, success : true, errors : [], tryConvert : false };
             const val = check( v, path, subCtx );
 
-            if( subCtx.success ) {return val}
+            if( subCtx.success ) { return val }
         }
 
         // Pass 2: With conversion
@@ -448,22 +448,22 @@ export const validators = {
             const subCtx = { ...ctx, success : true, errors : [], tryConvert : true };
             const val = check( v, path, subCtx );
 
-            if( subCtx.success ) {return val}
+            if( subCtx.success ) { return val }
             unionErrors.push( ...subCtx.errors );
         }
 
         ctx.success = false;
-        ctx.errors.push( {
+        ctx.errors.push({
             path,
             value : v,
             error : expected
-        } );
+        });
         ctx.errors.push( ...unionErrors );
 
         return v;
     },
 
-    tuple : ( v: any, path: string, ctx: ValidationContext, checks: Function[] ) => 
+    tuple : ( v: any, path: string, ctx: ValidationContext, checks: Function[]) => 
     {
         if( !Array.isArray( v ) || v.length !== checks.length ) 
         {
@@ -477,7 +477,7 @@ export const validators = {
         {
             const val = checks[i]( v[i], path + '[' + i + ']', ctx );
 
-            if( ctx.mode === 'strip' ) {( data as any[] ).push( val )}
+            if( ctx.mode === 'strip' ) { ( data as any[]).push( val ) }
         }
 
         return data;
@@ -487,13 +487,13 @@ export const validators = {
 
     requires : ( v: any, path: string, ctx: ValidationContext, reqs: string[], message?: string ) => 
     {
-        if( v === undefined || v === null ) {return v}
+        if( v === undefined || v === null ) { return v }
 
         for( const r of reqs ) 
         {
             const resolved = resolvePath( path, r );
 
-            if( !hasPath( ctx.root, resolved ) ) 
+            if( !hasPath( ctx.root, resolved )) 
             {
                 report( ctx, path, `Requires<${r}>`, v, message );
             }
@@ -504,7 +504,7 @@ export const validators = {
 
     record : ( v: any, path: string, ctx: ValidationContext, childValidator: Function ) => 
     {
-        if( !v || typeof v !== 'object' || Array.isArray( v ) ) 
+        if( !v || typeof v !== 'object' || Array.isArray( v )) 
         {
             report( ctx, path, 'Type<Object>', v );
 
@@ -512,11 +512,11 @@ export const validators = {
         }
         const data = ctx.mode === 'strip' ? {} : v;
 
-        for( const key of Object.keys( v ) ) 
+        for( const key of Object.keys( v )) 
         {
             const val = childValidator( v[key], path + '.' + key, ctx );
 
-            if( ctx.mode === 'strip' ) {( data as any )[key] = val}
+            if( ctx.mode === 'strip' ) { ( data as any )[key] = val }
         }
 
         return data;
@@ -524,15 +524,15 @@ export const validators = {
 
     set : ( v: any, path: string, ctx: ValidationContext, childValidator: Function, message?: string ) => 
     {
-        if( !( v instanceof Set ) ) 
+        if( !( v instanceof Set )) 
         {
-            if( ctx.tryConvert && Array.isArray( v ) ) 
+            if( ctx.tryConvert && Array.isArray( v )) 
             {
                 v = new Set( v );
             }
             else if( ctx.tryConvert && v !== undefined && v !== null ) 
             {
-                v = new Set( [v] );
+                v = new Set([v]);
             }
             else 
             {
@@ -548,7 +548,7 @@ export const validators = {
         {
             const val = childValidator( item, `${path}[${index}]`, ctx );
 
-            if( ctx.mode === 'strip' ) {data.add( val )}
+            if( ctx.mode === 'strip' ) { data.add( val ) }
             index++;
         }
 
@@ -557,11 +557,11 @@ export const validators = {
 
     map : ( v: any, path: string, ctx: ValidationContext, keyValidator: Function, valueValidator: Function, message?: string ) => 
     {
-        if( !( v instanceof Map ) ) 
+        if( !( v instanceof Map )) 
         {
-            if( ctx.tryConvert && typeof v === 'object' && v !== null && !Array.isArray( v ) ) 
+            if( ctx.tryConvert && typeof v === 'object' && v !== null && !Array.isArray( v )) 
             {
-                v = new Map( Object.entries( v ) );
+                v = new Map( Object.entries( v ));
             }
             else 
             {
@@ -572,7 +572,7 @@ export const validators = {
         }
         const data = ctx.mode === 'strip' ? new Map() : v;
 
-        for( const [key, val] of v.entries() ) 
+        for( const [key, val] of v.entries()) 
         {
             const validatedKey = keyValidator( key, `${path}.key(${JSON.stringify( key )})`, ctx );
             const validatedVal = valueValidator( val, `${path}[${JSON.stringify( key )}]`, ctx );
@@ -589,7 +589,7 @@ export const validators = {
 
 function resolvePath( currentPath: string, targetPath: string ): string 
 {
-    if( !targetPath.startsWith( '.' ) ) 
+    if( !targetPath.startsWith( '.' )) 
     {
         return targetPath;
     }
@@ -611,10 +611,10 @@ function resolvePath( currentPath: string, targetPath: string ): string
 
 function getValueAtPath( obj: any, path: string ): any 
 {
-    if( !obj || typeof obj !== 'object' ) {return undefined}
+    if( !obj || typeof obj !== 'object' ) { return undefined }
     const cleanPath = path.startsWith( '.' ) ? path.substring( 1 ) : path;
 
-    if( !cleanPath ) {return obj}
+    if( !cleanPath ) { return obj }
     const parts = cleanPath.split( '.' );
     let current = obj;
 
@@ -653,7 +653,7 @@ export class MetadataStoreClass
     {
         const val = this.validators.get( hash );
 
-        if( !val ) {throw new Error( `Validator not found for hash: ${hash}` )}
+        if( !val ) { throw new Error( `Validator not found for hash: ${hash}` ) }
 
         return val;
     }
@@ -667,7 +667,7 @@ export class MetadataStoreClass
     {
         const schema = this.schemas.get( hash );
 
-        if( !schema ) {throw new Error( `Schema not found for hash: ${hash}` )}
+        if( !schema ) { throw new Error( `Schema not found for hash: ${hash}` ) }
 
         return schema;
     }
@@ -716,7 +716,7 @@ export class MetadataStoreClass
             {
                 throw opt.errorFactory( ctx.errors );
             }
-            throw new Error( 'Validation Error: ' + ctx.errors.map( e => e.path ? `${e.path}: ${e.error}` : e.error ).join( ', ' ) );
+            throw new Error( 'Validation Error: ' + ctx.errors.map( e => e.path ? `${e.path}: ${e.error}` : e.error ).join( ', ' ));
         }
 
         return res;
@@ -735,18 +735,18 @@ export class MetadataStoreClass
     }
 }
 
-export function groupErrorsByPath( errors: IValidationError[] ): Record<string, { value : any, errors : string[] }> 
+export function groupErrorsByPath( errors: IValidationError[]): Record<string, { value : any, errors : string[] }> 
 {
     const grouped: Record<string, { value : any, errors : string[] }> = {};
 
     for( const err of errors ) 
     {
-        if( !grouped[err.path] ) 
+        if( !grouped[err.path]) 
         {
             grouped[err.path] = { value : err.value, errors : [] };
         }
 
-        if( !grouped[err.path].errors.includes( err.error ) ) 
+        if( !grouped[err.path].errors.includes( err.error )) 
         {
             grouped[err.path].errors.push( err.error );
         }
@@ -773,7 +773,7 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
         {
             const refPath = subSchema.$ref;
 
-            if( compiledDefs.has( refPath ) ) 
+            if( compiledDefs.has( refPath )) 
             {
                 return ( v, path, ctx ) => compiledDefs.get( refPath )( v, path, ctx );
             }
@@ -815,15 +815,15 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
             {
                 v = validators.string( v, path, ctx );
 
-                if( v === undefined || v === null ) {return v}
+                if( v === undefined || v === null ) { return v }
 
-                if( minLength !== undefined ) {validators.minLength( v, path, ctx, minLength )}
+                if( minLength !== undefined ) { validators.minLength( v, path, ctx, minLength ) }
 
-                if( maxLength !== undefined ) {validators.maxLength( v, path, ctx, maxLength )}
+                if( maxLength !== undefined ) { validators.maxLength( v, path, ctx, maxLength ) }
 
-                if( pattern !== undefined ) {validators.pattern( v, path, ctx, pattern, patternStr )}
+                if( pattern !== undefined ) { validators.pattern( v, path, ctx, pattern, patternStr ) }
 
-                if( format !== undefined ) {validators.format( v, path, ctx, format )}
+                if( format !== undefined ) { validators.format( v, path, ctx, format ) }
 
                 return v;
             };
@@ -840,18 +840,18 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
             {
                 v = validators.number( v, path, ctx );
 
-                if( v === undefined || v === null ) {return v}
+                if( v === undefined || v === null ) { return v }
 
-                if( isInt && typeof v === 'number' && !Number.isInteger( v ) ) 
+                if( isInt && typeof v === 'number' && !Number.isInteger( v )) 
                 {
                     report( ctx, path, 'Type<integer>', v );
                 }
 
-                if( minimum !== undefined ) {validators.minimum( v, path, ctx, minimum )}
+                if( minimum !== undefined ) { validators.minimum( v, path, ctx, minimum ) }
 
-                if( maximum !== undefined ) {validators.maximum( v, path, ctx, maximum )}
+                if( maximum !== undefined ) { validators.maximum( v, path, ctx, maximum ) }
 
-                if( multipleOf !== undefined ) {validators.multipleOf( v, path, ctx, multipleOf )}
+                if( multipleOf !== undefined ) { validators.multipleOf( v, path, ctx, multipleOf ) }
 
                 return v;
             };
@@ -869,16 +869,16 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
 
         if( subSchema.anyOf ) 
         {
-            const checks = subSchema.anyOf.map( ( s: any ) => build( s ) );
+            const checks = subSchema.anyOf.map(( s: any ) => build( s ));
 
             return ( v, path, ctx ) => validators.union( v, path, ctx, checks );
         }
 
         if( subSchema.type === 'array' ) 
         {
-            if( Array.isArray( subSchema.items ) ) 
+            if( Array.isArray( subSchema.items )) 
             {
-                const checks = subSchema.items.map( ( s: any ) => build( s ) );
+                const checks = subSchema.items.map(( s: any ) => build( s ));
 
                 return ( v, path, ctx ) => validators.tuple( v, path, ctx, checks );
             }
@@ -893,13 +893,13 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
                 {
                     v = validators.array( v, path, ctx, check );
 
-                    if( Array.isArray( v ) ) 
+                    if( Array.isArray( v )) 
                     {
-                        if( minItems !== undefined ) {validators.minItems( v, path, ctx, minItems )}
+                        if( minItems !== undefined ) { validators.minItems( v, path, ctx, minItems ) }
 
-                        if( maxItems !== undefined ) {validators.maxItems( v, path, ctx, maxItems )}
+                        if( maxItems !== undefined ) { validators.maxItems( v, path, ctx, maxItems ) }
 
-                        if( uniqueItems ) {validators.uniqueItems( v, path, ctx )}
+                        if( uniqueItems ) { validators.uniqueItems( v, path, ctx ) }
                     }
 
                     return v;
@@ -909,21 +909,21 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
 
         if( subSchema.type === 'object' ) 
         {
-            const props = Object.entries( subSchema.properties || {} );
+            const props = Object.entries( subSchema.properties || {});
             const required = subSchema.required || [];
-            const propVals = props.map( ( [key, s]: [string, any] ) => 
+            const propVals = props.map(([key, s]: [string, any]) => 
             {
                 const isOptional = !required.includes( key );
                 const check = build( s );
 
                 return [key, isOptional, check] as [string, boolean, any];
-            } );
+            });
 
-            const allowedKeys = Object.keys( subSchema.properties || {} );
+            const allowedKeys = Object.keys( subSchema.properties || {});
 
             return ( v, path, ctx ) => 
             {
-                if( !validators.object( v, path, ctx, allowedKeys, 'Object' ) ) {return v}
+                if( !validators.object( v, path, ctx, allowedKeys, 'Object' )) { return v }
                 let data = v;
 
                 if( ctx.mode === 'strip' ) 
@@ -939,7 +939,7 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
                     {
                         for( let i = 0; i < keys.length; i++ ) 
                         {
-                            if( !allowedKeys.includes( keys[i] ) ) 
+                            if( !allowedKeys.includes( keys[i])) 
                             {
                                 hasAdditional = true;
                                 break;
@@ -947,7 +947,7 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
                         }
                     }
 
-                    if( hasAdditional ) {data = {}}
+                    if( hasAdditional ) { data = {} }
                 }
                 validators.props( v, data, path, ctx, propVals );
 
@@ -974,6 +974,44 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
     }
 
     return build( schema );
+}
+
+export function toZodIssues( errors: IValidationError[])
+{
+    return errors.map(( err ) => 
+    {
+        const zodPath = err.path
+            .split( /\.|\[|\]/ )
+            .filter( Boolean )
+            .map(( segment ) => 
+            {
+                if( isNaN( Number( segment ))){ return segment }
+
+                return Number( segment );
+            });
+
+        const issue = 
+        {
+            code     : 'custom',
+            path     : zodPath,
+            message  : err.error,
+            received : err.value
+        };
+
+        return issue;
+    });
+}
+
+export class ZodLikeError extends Error
+{
+    public issues : any[];
+
+    constructor( errors: IValidationError[])
+    {
+        super( 'Validation failed' );
+        this.name = 'ZodError';
+        this.issues = toZodIssues( errors );
+    }
 }
 
 ( globalThis as any ).__WEBERGENCY_TYPECHECKER_METADATA_STORE__ = MetadataStore;

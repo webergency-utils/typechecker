@@ -3,11 +3,11 @@ import { validators, ValidationContext } from '../runtime/validators.js';
 
 describe( 'Error Reporting Unit Tests', () => 
 {
-    const createCtx = ( mode: any = 'relaxed' ): ValidationContext => ( {
+    const createCtx = ( mode: any = 'relaxed' ): ValidationContext => ({
         success : true,
         errors  : [],
         mode
-    } );
+    });
 
     it( 'should report multiple sibling errors in objects', () => 
     {
@@ -18,13 +18,13 @@ describe( 'Error Reporting Unit Tests', () =>
         validators.props( v, v, 'user', ctx, [
             ['name', false, validators.string],
             ['age', false, validators.number]
-        ] );
+        ]);
 
         expect( ctx.success ).toBe( false );
         expect( ctx.errors ).toHaveLength( 2 );
-        expect( ctx.errors[0] ).toEqual( { path : 'user.name', error : 'Type<string>', value : 123 } );
-        expect( ctx.errors[1] ).toEqual( { path : 'user.age', error : 'Type<number>', value : 'abc' } );
-    } );
+        expect( ctx.errors[0]).toEqual({ path : 'user.name', error : 'Type<string>', value : 123 });
+        expect( ctx.errors[1]).toEqual({ path : 'user.age', error : 'Type<number>', value : 'abc' });
+    });
 
     it( 'should resolve nested paths correctly', () => 
     {
@@ -33,27 +33,27 @@ describe( 'Error Reporting Unit Tests', () =>
         
         const addressValidator = ( v: any, path: string, ctx: any ) => 
         {
-            if( !validators.object( v, path, ctx ) ) {return v}
-            validators.props( v, v, path, ctx, [['street', false, validators.string]] );
+            if( !validators.object( v, path, ctx )) { return v }
+            validators.props( v, v, path, ctx, [['street', false, validators.string]]);
 
             return v;
         };
 
         const infoValidator = ( v: any, path: string, ctx: any ) => 
         {
-            if( !validators.object( v, path, ctx ) ) {return v}
-            validators.props( v, v, path, ctx, [['address', false, addressValidator]] );
+            if( !validators.object( v, path, ctx )) { return v }
+            validators.props( v, v, path, ctx, [['address', false, addressValidator]]);
 
             return v;
         };
 
-        validators.props( v, v, 'root', ctx, [['info', false, infoValidator]] );
+        validators.props( v, v, 'root', ctx, [['info', false, infoValidator]]);
 
         expect( ctx.success ).toBe( false );
         expect( ctx.errors[0].path ).toBe( 'root.info.address.street' );
         expect( ctx.errors[0].error ).toBe( 'Type<string>' );
         expect( ctx.errors[0].value ).toBe( 123 );
-    } );
+    });
 
     it( 'should report all errors in a failing union', () => 
     {
@@ -61,7 +61,7 @@ describe( 'Error Reporting Unit Tests', () =>
         const v = true;
         
         // Union of string | number
-        validators.union( v, 'val', ctx, [validators.string, validators.number] );
+        validators.union( v, 'val', ctx, [validators.string, validators.number]);
 
         expect( ctx.success ).toBe( false );
         // Should have 3 errors: union itself + string branch + number branch
@@ -69,7 +69,7 @@ describe( 'Error Reporting Unit Tests', () =>
         expect( ctx.errors[0].error ).toBe( 'Type<Union>' );
         expect( ctx.errors[1].error ).toBe( 'Type<string>' );
         expect( ctx.errors[2].error ).toBe( 'Type<number>' );
-    } );
+    });
 
     it( 'should report multiple errors in arrays', () => 
     {
@@ -83,22 +83,22 @@ describe( 'Error Reporting Unit Tests', () =>
         expect( ctx.errors ).toHaveLength( 2 );
         expect( ctx.errors[0].path ).toBe( 'tags[1]' );
         expect( ctx.errors[1].path ).toBe( 'tags[3]' );
-    } );
+    });
 
     it( 'should report unknown properties in strict mode', () => 
     {
         const ctx = createCtx( 'strict' );
         const v = { name : 'John', extra : 'bad' };
         
-        validators.object( v, 'user', ctx, ['name'] );
+        validators.object( v, 'user', ctx, ['name']);
 
         expect( ctx.success ).toBe( false );
-        expect( ctx.errors[0] ).toEqual( {
+        expect( ctx.errors[0]).toEqual({
             path  : 'user',
             error : 'PropertyNotAllowed<extra>',
             value : 'bad'
-        } );
-    } );
+        });
+    });
 
     it( 'should stop at depth if parent type is wrong', () => 
     {
@@ -107,17 +107,17 @@ describe( 'Error Reporting Unit Tests', () =>
         
         const infoValidator = ( v: any, path: string, ctx: any ) => 
         {
-            if( !validators.object( v, path, ctx ) ) {return v} // Should exit here
-            validators.props( v, v, path, ctx, [['first', false, validators.string]] );
+            if( !validators.object( v, path, ctx )) { return v } // Should exit here
+            validators.props( v, v, path, ctx, [['first', false, validators.string]]);
 
             return v;
         };
 
-        validators.props( v, v, 'root', ctx, [['info', false, infoValidator]] );
+        validators.props( v, v, 'root', ctx, [['info', false, infoValidator]]);
 
         expect( ctx.success ).toBe( false );
         expect( ctx.errors ).toHaveLength( 1 );
         expect( ctx.errors[0].path ).toBe( 'root.info' );
         expect( ctx.errors[0].error ).toBe( 'Type<Object>' );
-    } );
-} );
+    });
+});

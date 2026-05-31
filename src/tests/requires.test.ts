@@ -3,36 +3,36 @@ import { validators, ValidationContext } from '../runtime/validators.js';
 
 describe( 'Requires Validation Unit Tests', () => 
 {
-    const createCtx = ( root: any ): ValidationContext => ( {
+    const createCtx = ( root: any ): ValidationContext => ({
         success : true,
         errors  : [],
         mode    : 'relaxed',
         root
-    } );
+    });
 
     it( 'should validate absolute required paths when field is present', () => 
     {
         const data = { host : 'localhost', port : 80 };
         const ctx = createCtx( data );
         
-        validators.requires( data.port, 'port', ctx, ['host'] );
+        validators.requires( data.port, 'port', ctx, ['host']);
         expect( ctx.success ).toBe( true );
 
         const dataMissing = { port : 80 };
         const ctxMissing = createCtx( dataMissing );
-        validators.requires( dataMissing.port, 'port', ctxMissing, ['host'] );
+        validators.requires( dataMissing.port, 'port', ctxMissing, ['host']);
         expect( ctxMissing.success ).toBe( false );
         expect( ctxMissing.errors[0].error ).toBe( 'Requires<host>' );
-    } );
+    });
 
     it( 'should skip validation if the field itself is undefined or null', () => 
     {
         const data = {};
         const ctx = createCtx( data );
         
-        validators.requires( undefined, 'port', ctx, ['host'] );
+        validators.requires( undefined, 'port', ctx, ['host']);
         expect( ctx.success ).toBe( true );
-    } );
+    });
 
     it( 'should resolve and validate relative sibling paths (.path)', () => 
     {
@@ -48,7 +48,7 @@ describe( 'Requires Validation Unit Tests', () =>
         const ctx = createCtx( data );
         // Current path of email is "profile.details.email". Target is ".password".
         // Password is at "profile.details.password".
-        validators.requires( data.profile.details.email, 'profile.details.email', ctx, ['.password'] );
+        validators.requires( data.profile.details.email, 'profile.details.email', ctx, ['.password']);
         expect( ctx.success ).toBe( true );
 
         const dataMissing = {
@@ -59,11 +59,11 @@ describe( 'Requires Validation Unit Tests', () =>
             }
         };
         const ctxMissing = createCtx( dataMissing );
-        validators.requires( dataMissing.profile.details.email, 'profile.details.email', ctxMissing, ['.password'] );
+        validators.requires( dataMissing.profile.details.email, 'profile.details.email', ctxMissing, ['.password']);
         expect( ctxMissing.success ).toBe( false );
         expect( ctxMissing.errors[0].path ).toBe( 'profile.details.email' );
         expect( ctxMissing.errors[0].error ).toBe( 'Requires<.password>' );
-    } );
+    });
 
     it( 'should resolve and validate relative grandparent/cousin paths (..path)', () => 
     {
@@ -79,7 +79,7 @@ describe( 'Requires Validation Unit Tests', () =>
         const ctx = createCtx( data );
         // Current path of email is "profile.details.email". Target is "..status".
         // status is at "profile.status".
-        validators.requires( data.profile.details.email, 'profile.details.email', ctx, ['..status'] );
+        validators.requires( data.profile.details.email, 'profile.details.email', ctx, ['..status']);
         expect( ctx.success ).toBe( true );
 
         const dataMissing = {
@@ -90,10 +90,10 @@ describe( 'Requires Validation Unit Tests', () =>
             }
         };
         const ctxMissing = createCtx( dataMissing );
-        validators.requires( dataMissing.profile.details.email, 'profile.details.email', ctxMissing, ['..status'] );
+        validators.requires( dataMissing.profile.details.email, 'profile.details.email', ctxMissing, ['..status']);
         expect( ctxMissing.success ).toBe( false );
         expect( ctxMissing.errors[0].error ).toBe( 'Requires<..status>' );
-    } );
+    });
 
     it( 'should supply { parent, root, path } context parameter to custom validation functions', () => 
     {
@@ -120,10 +120,10 @@ describe( 'Requires Validation Unit Tests', () =>
 
         validators.custom( data.auth.password, 'auth.password', ctx, customFn );
         expect( ctx.success ).toBe( true );
-        expect( passedParent ).toEqual( { password : 'password123' } );
+        expect( passedParent ).toEqual({ password : 'password123' });
         expect( passedRoot ).toEqual( data );
         expect( passedPath ).toBe( 'auth.password' );
-    } );
+    });
 
     it( 'should supply index parameter in context if the field is the array item itself', () => 
     {
@@ -160,5 +160,5 @@ describe( 'Requires Validation Unit Tests', () =>
         validators.custom( data.items[1].score, 'items[1].score', ctx, customNestedFn );
         expect( ctx.success ).toBe( true );
         expect( passedNestedIndex ).toBeUndefined();
-    } );
-} );
+    });
+});
