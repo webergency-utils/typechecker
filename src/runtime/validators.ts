@@ -624,8 +624,20 @@ function getValueAtPath( obj: any, path: string ): any
         {
             return undefined;
         }
-        const cleanPart = part.replace( /\[\d+\]/g, '' );
-        current = current[cleanPart];
+        const matches = part.split( '[' );
+        const baseKey = matches[0];
+        current = current[baseKey];
+
+        for( let i = 1; i < matches.length; i++ ) 
+        {
+            if( current === null || current === undefined || typeof current !== 'object' ) 
+            {
+                return undefined;
+            }
+            const idxStr = matches[i].replace( ']', '' );
+            const idx = parseInt( idxStr, 10 );
+            current = current[idx];
+        }
     }
 
     return current;

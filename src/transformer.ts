@@ -4,7 +4,6 @@ export { buildValidator, generateHash, buildJsonSchema } from './engine/resolver
 import { hoistRegistrations } from './engine/hoister.js';
 import { templateToAst, injectNodes } from './engine/generators.js';
 
-const TARGET_DECORATORS = ['Query', 'Body', 'Param'];
 const RUNTIME_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate', 'jsonSchema'];
 
 export default function transformer( program: ts.Program ) 
@@ -139,70 +138,6 @@ export default function transformer( program: ts.Program )
                     }
                 }
 
-                // Handle decorators
-                if( ts.isParameter( node ) && ts.canHaveDecorators( node )) 
-                {
-                    const decorators = ts.getDecorators( node );
-
-                    if( decorators ) 
-                    {
-                        const updatedDecorators = decorators.map( decorator => 
-                        {
-                            if( ts.isCallExpression( decorator.expression ) && ts.isIdentifier( decorator.expression.expression )) 
-                            {
-                                const decName = decorator.expression.expression.text;
-
-                                if( TARGET_DECORATORS.includes( decName )) 
-                                {
-                                    const typeNode = node.type;
-
-                                    if( typeNode ) 
-                                    {
-                                        const type = checker.getTypeFromTypeNode( typeNode );
-                                        const hash = generateHash( type, checker );
-
-                                        if( !validatorCache.has( hash )) 
-                                        {
-                                            buildValidator( type, checker, validatorCache, requiredUtils );
-                                        }
-
-                                        if( !schemasCache.has( hash )) 
-                                        {
-                                            const schemaObj = buildJsonSchema( type, checker );
-                                            schemasCache.set( hash, objectToAst( schemaObj ));
-                                        }
-
-                                        const mdStoreAccess = ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'MetadataStore' ), 'getValidator' );
-                                        const getCall = ts.factory.createCallExpression( mdStoreAccess, undefined, [ts.factory.createStringLiteral( hash )]);
-
-                                        const decoratorArgs = [...decorator.expression.arguments];
-                                        decoratorArgs[1] = getCall;
-                    
-                                        return ts.factory.updateDecorator( decorator, 
-                                            ts.factory.createCallExpression(
-                                                decorator.expression.expression,
-                                                decorator.expression.typeArguments,
-                                                decoratorArgs
-                                            )
-                                        );
-                                    }
-                                }
-                            }
-
-                            return decorator;
-                        });
-            
-                        return ts.factory.updateParameterDeclaration(
-                            node,
-                            ts.getModifiers( node ),
-                            node.dotDotDotToken,
-                            node.name,
-                            node.questionToken,
-                            node.type,
-                            node.initializer
-                        );
-                    }
-                }
 
                 return ts.visitEachChild( node, visitor, context );
             };

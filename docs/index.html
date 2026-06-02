@@ -467,6 +467,7 @@
           <ul class="nav-links">
             <li><a href="#apis">Validation APIs</a></li>
             <li><a href="#with-modifiers">WithModifiers Utility</a></li>
+            <li><a href="#zod-compatibility">Zod Compatibility</a></li>
           </ul>
         </div>
 
@@ -747,8 +748,58 @@ npx ts-patch install</code></pre>
               <td><code>Any</code></td>
               <td>Enforces cross-field dependencies (supports absolute and relative sibling <code>.sibling</code>, grandparent <code>..cousin</code> paths).</td>
             </tr>
+            <tr>
+              <td><code>constraint.Message&lt;Msg&gt;</code></td>
+              <td><code>Any</code></td>
+              <td>Attaches a fallback custom error message to a property's constraints.</td>
+            </tr>
           </tbody>
         </table>
+
+        <h3>Custom Error Messages</h3>
+        <p>
+          You can customize the error message returned on validation failure. Most constraint tags support a second generic parameter for the message. Alternatively, you can use the <code>constraint.Message&lt;Msg&gt;</code> tag to set a fallback message for the property.
+        </p>
+        <div class="code-container">
+          <div class="code-header">
+            <span class="code-title">custom-messages.ts</span>
+          </div>
+          <pre><code><span class="keyword">import</span> { validate, constraint, Message } from '@webergency-utils/typechecker';
+
+<span class="keyword">interface</span> <span class="type">User</span> {
+  <span class="comment">// 1. Direct message in constraint</span>
+  age: <span class="type">number</span> & constraint.<span class="type">Minimum</span>&lt;<span class="number">18</span>, <span class="string">"Must be 18 or older"</span>&gt;;
+
+  <span class="comment">// 2. Suffixing fallback message with Message&lt;T&gt;</span>
+  email: <span class="type">string</span> & constraint.<span class="type">Format</span>&lt;<span class="string">'email'</span>&gt; & Message&lt;<span class="string">"Please provide a valid email address"</span>&gt;;
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- Section: Zod Compatibility -->
+      <section id="zod-compatibility">
+        <h2>Zod Compatibility</h2>
+        <p>
+          For projects integrating with libraries that expect Zod-style validation errors (such as certain form or API libraries), <code>@webergency-utils/typechecker</code> provides helper utilities and custom error classes to output Zod-compatible issues.
+        </p>
+        <div class="code-container">
+          <div class="code-header">
+            <span class="code-title">zod-compat.ts</span>
+          </div>
+          <pre><code><span class="keyword">import</span> { <span class="function">validate</span>, <span class="function">toZodIssues</span>, <span class="type">ZodLikeError</span> } from '@webergency-utils/typechecker';
+
+<span class="keyword">const</span> result = <span class="function">validate</span>&lt;<span class="type">User</span>&gt;(data);
+
+<span class="keyword">if</span> (!result.success) {
+  <span class="comment">// 1. toZodIssues() - converts typechecker errors into Zod issue format</span>
+  <span class="keyword">const</span> zodIssues = <span class="function">toZodIssues</span>(result.errors);
+  console.log(zodIssues); 
+  <span class="comment">// Outputs: [{ code: 'custom', path: ['age'], message: 'Type&lt;number&gt;', received: 'invalid' }]</span>
+
+  <span class="comment">// 2. ZodLikeError - standard Error instance containing Zod-like issues</span>
+  <span class="keyword">throw</span> <span class="keyword">new</span> <span class="type">ZodLikeError</span>(result.errors);
+}</code></pre>
+        </div>
       </section>
 
       <!-- Section: format -->
@@ -796,6 +847,30 @@ npx ts-patch install</code></pre>
             <tr>
               <td><code>format.Duration</code></td>
               <td>ISO-8601 duration format (e.g., PT1H).</td>
+            </tr>
+            <tr>
+              <td><code>format.Time</code></td>
+              <td>Time string format (HH:MM:SS).</td>
+            </tr>
+            <tr>
+              <td><code>format.Byte</code></td>
+              <td>Base64 encoded string format.</td>
+            </tr>
+            <tr>
+              <td><code>format.Password</code></td>
+              <td>Placeholder format tag (always valid).</td>
+            </tr>
+            <tr>
+              <td><code>format.Regex</code></td>
+              <td>Valid RegExp string validation.</td>
+            </tr>
+            <tr>
+              <td><code>format.Hostname</code></td>
+              <td>Valid domain name/hostname validation.</td>
+            </tr>
+            <tr>
+              <td><code>format.URI</code></td>
+              <td>Valid URI validation.</td>
             </tr>
           </tbody>
         </table>
@@ -850,6 +925,11 @@ npx ts-patch install</code></pre>
               <td><code>transform.ToDate</code></td>
               <td><code>Any</code></td>
               <td>Coerces string timestamp into a Date object.</td>
+            </tr>
+            <tr>
+              <td><code>transform.Custom&lt;Fn&gt;</code></td>
+              <td><code>Any</code></td>
+              <td>Applies a custom mapping function (receives <code>(val) => any</code>).</td>
             </tr>
           </tbody>
         </table>

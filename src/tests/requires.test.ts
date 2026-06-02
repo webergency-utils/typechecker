@@ -151,14 +151,17 @@ describe( 'Requires Validation Unit Tests', () =>
 
         // Path does not end with [1] (nested property), so index should be undefined
         let passedNestedIndex: number | undefined;
+        let passedNestedParent: any;
         const customNestedFn = ( val: any, context: any ) => 
         {
             passedNestedIndex = context.index;
+            passedNestedParent = context.parent;
 
             return val > 90;
         };
         validators.custom( data.items[1].score, 'items[1].score', ctx, customNestedFn );
         expect( ctx.success ).toBe( true );
         expect( passedNestedIndex ).toBeUndefined();
+        expect( passedNestedParent ).toEqual({ id : '2', score : 100 });
     });
 });

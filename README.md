@@ -51,35 +51,7 @@ Update your `tsconfig.json` to include the transformer in the `compilerOptions.p
 
 ## Usage
 
-### 1. Decorator-Based Validation (Server Endpoints)
-
-The transformer automatically intercepts decorators imported from `@webergency-utils/server` (`@Body`, `@Query`, `@Param`). It hashes the underlying TypeScript type, generates a highly optimized validation function, and hoists it to the top of the file using the `MetadataStore`.
-
-```typescript
-import { Controller, Post, Body } from '@webergency-utils/server';
-
-interface UserDTO {
-  id: string;
-  name: string;
-  age?: number;
-}
-
-@Controller('/users')
-export class UserController {
-  // @webergency-utils/typechecker automatically generates a validator for UserDTO,
-  // registers it, and transforms this to @Body("hash_id", "strict")
-  @Post('/')
-  createUser(@Body() user: UserDTO) {
-    return { success: true, user };
-  }
-}
-```
-
----
-
-### 2. Manual Runtime Validation APIs
-
-You can manually validate unknown data anywhere in your code. The transformer intercepts these calls and replaces them with direct, optimized validation functions.
+You can validate unknown data anywhere in your code. The transformer intercepts these calls and replaces them with direct, optimized validation functions.
 
 ```typescript
 import { is, assert, assertGuard, validate } from '@webergency-utils/typechecker';
@@ -213,37 +185,158 @@ This flattened, grouped output is incredibly powerful—it tells the developer (
 
 ---
 
-## Supported JSON-Schema Validation Tags
+### 5. Deep/External Type Validation (WithModifiers)
 
-Add strict runtime metadata to your TypeScript primitives using standard intersection types:
+If you have deeply nested objects or external types that you cannot edit directly, you can add validation tags to specific properties using dot-notation path references. This prevents you from having to retype the entire structure.
 
-### String Tags
-- `MinLength<N>`: Minimum string length.
-- `MaxLength<N>`: Maximum string length.
-- `Pattern<RegExp>`: Regular expression validation.
-- `Format<T>`: Structural formats: `'email'`, `'uuid'`, `'date'`, `'date-time'`, `'url'`, `'ipv4'`, `'ipv6'`.
+```typescript
+import { WithModifiers, constraint, format } from '@webergency-utils/typechecker';
 
-### Number Tags
-- `Minimum<N>`: Minimum numeric value (inclusive).
-- `Maximum<N>`: Maximum numeric value (inclusive).
-- `ExclusiveMinimum<N>`: Greater than `N`.
-- `ExclusiveMaximum<N>`: Less than `N`.
-- `MultipleOf<N>`: Must be a multiple of `N`.
+// External type we cannot edit directly
+interface ExternalUser {
+  id: string;
+  profile?: {
+    details: {
+      email: string;
+      password: string;
+    }
+  }
+}
 
-### Array Tags
-- `MinItems<N>`: Minimum array items count.
-- `MaxItems<N>`: Maximum array items count.
-- `UniqueItems`: Enforces all elements in the array to be deeply unique.
+// Decorate specific paths using dot notation
+type ValidatedUser = WithModifiers<ExternalUser, {
+  'profile.details.email': format.Email;
+  'profile.details.password': constraint.MinLength<8>;
+}>;
+```
+
+### 6. Cross-Field Dependencies (Requires)
+
+You can specify that a property requires the presence of other properties in the same object using absolute paths or relative dot-notation paths (e.g., `.sibling`, `..grandparent.cousin`):
+
+```typescript
+import { WithModifiers, constraint } from '@webergency-utils/typechecker';
+
+interface DBConfig {
+  ssl?: boolean;
+  cert?: string;
+  auth?: {
+    username?: string;
+    password?: string;
+  }
+}
+
+type SecureConfig = WithModifiers<DBConfig, {
+  // Absolute check: if "ssl" is defined, "cert" must exist at root
+  'ssl': constraint.Requires<'cert'>;
+
+  // Relative check: if "auth.password" is defined, its sibling "username" must exist
+  'auth.password': constraint.Requires<'.username'>;
+}>;
+```
+
+### 7. Custom Error Messages
+
+You can specify custom error messages for constraint violations. Most constraint tags accept a custom message as an optional template argument, or you can use the `Message<Msg>` tag:
+
+```typescript
+import { validate, constraint, Message } from '@webergency-utils/typechecker';
+
+interface User {
+  // Direct message in constraint tag
+  age: number & constraint.Minimum<18, "Must be 18 or older">;
+
+  // Fallback property message via Message<T>
+  email: string & constraint.Format<'email'> & Message<"Please supply a valid email address">;
+}
+```
+
+### 8. Zod Compatibility
+
+If you are integrating with libraries that expect Zod-style validation errors (such as React Hook Form or API gateways), you can convert the validation errors using the `toZodIssues` helper or throw a `ZodLikeError` which wraps the issues:
+
+```typescript
+import { validate, toZodIssues, ZodLikeError } from '@webergency-utils/typechecker';
+
+const result = validate<User>(data);
+if (!result.success) {
+  // 1. Convert errors array to Zod-compliant issues
+  const zodIssues = toZodIssues(result.errors);
+  console.log(zodIssues); // [{ code: "custom", path: ["age"], message: "Minimum<18>", received: 15 }]
+
+  // 2. Or throw a Zod-like Error
+  throw new ZodLikeError(result.errors);
+}
+```
+
+---
+
+## Supported Validation & Modifier Namespaces
+
+The library provides validation tags and modifiers grouped into four logical namespaces. These can be imported directly or used via their namespaces (e.g., `constraint.MinLength` vs `MinLength`).
+
+### 1. `constraint` Namespace
+Impose structural and value-based constraints on primitives:
+
+- `MinLength<N, Msg?>`: Minimum string length.
+- `MaxLength<N, Msg?>`: Maximum string length.
+- `Length<Min, Max>`: Helper combining MinLength and MaxLength.
+- `Pattern<RegExp, Msg?>`: Regular expression validation.
+- `Minimum<N, Msg?>` / `Maximum<N, Msg?>`: Inclusive numeric bounds (supports `number | bigint`).
+- `ExclusiveMinimum<N, Msg?>` / `ExclusiveMaximum<N, Msg?>`: Exclusive numeric bounds.
+- `Range<Min, Max>`: Helper combining Minimum and Maximum.
+- `MultipleOf<N, Msg?>`: Enforces that the value is a multiple of `N`.
+- `MinItems<N, Msg?>` / `MaxItems<N, Msg?>`: Array size constraints.
+- `UniqueItems<Msg?>`: Enforces that all elements in an array or Set are deeply unique.
+- `Custom<Fn, Msg?>`: Executes a custom validation function: `(val, ctx) => boolean`.
+- `Requires<Paths, Msg?>`: Enforces cross-field dependency validation.
+- `Message<Msg>`: Attaches a fallback custom error message to a property.
+
+### 2. `format` Namespace
+Pre-defined string formatting shortcuts:
+
+- `format.Email`: RFC 5322 Email.
+- `format.UUID`: UUID (v1-v5) format.
+- `format.URL`: Full URL validation (HTTP/HTTPS/FTP).
+- `format.IPv4` / `format.IPv6`: IP address validation.
+- `format.DateTime`: ISO-8601 Date Time string.
+- `format.Date`: ISO Date (YYYY-MM-DD).
+- `format.Time`: Time string (HH:MM:SS).
+- `format.Duration`: ISO-8601 duration (e.g., PT1H).
+- `format.ObjectId`: 24-character MongoDB ObjectId.
+- `format.Byte`: Base64 encoded string.
+- `format.Password`: Always valid string, placeholder for password parameters.
+- `format.Regex`: Valid regular expression string.
+- `format.Hostname`: Valid domain name/hostname.
+- `format.URI`: Valid URI.
+
+### 3. `transform` Namespace
+Coerce or sanitize values before validation:
+
+- `transform.Trim`: Trims whitespace from both ends of a string.
+- `transform.LowerCase`: Converts string to lowercase.
+- `transform.UpperCase`: Converts string to uppercase.
+- `transform.Capitalize`: Capitalizes the first letter of a string.
+- `transform.ToNumber`: Coerces inputs to numbers.
+- `transform.ToBoolean`: Coerces inputs to booleans.
+- `transform.ToDate`: Coerces string timestamp to a Date object.
+- `transform.Custom<Fn>`: Applies a custom mapping function `(val) => any`.
+
+### 4. `tag` Namespace
+Define defaults for optional fields:
+
+- `tag.Default<Value>`: Injects the specified `Value` if the property is `undefined` at validation time.
 
 #### Example:
 ```typescript
-import { MinLength, Minimum, Format, UniqueItems } from '@webergency-utils/typechecker';
+import { MinLength, Minimum, Format, UniqueItems, tag, transform, constraint } from '@webergency-utils/typechecker';
 
 interface Profile {
-  email: string & Format<'email'>;
+  email: string & Format<'email'> & transform.Trim & transform.LowerCase;
   password: string & MinLength<8>;
-  age: number & Minimum<18>;
+  age: number & Minimum<18> & constraint.Message<"Must be 18+">;
   luckyNumbers: number[] & UniqueItems;
+  role: string & tag.Default<"user">;
 }
 ```
 
