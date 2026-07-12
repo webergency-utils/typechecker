@@ -11,7 +11,10 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["node"]
+    "types": ["node"],
+    "paths": {
+      "typescript": ["./node_modules/@typescript/typescript6/lib/typescript.d.ts"]
+    }
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "src/tests/**/*"]
