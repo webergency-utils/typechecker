@@ -1,3 +1,5 @@
+import { ResolveDefaults } from './runtime/tags.js';
+
 export interface IValidation<T> {
     success : boolean
     data?   : T
@@ -14,13 +16,12 @@ export interface ValidationOptions {
     errorFactory? : ( errors: any[]) => Error
 }
 
-export declare function is<T>( input: unknown, options?: ValidationMode | ValidationOptions ): input is T;
-export declare function assert<T>( input: unknown, options?: ValidationMode | ValidationOptions ): T;
-export declare function assertGuard<T>( input: unknown, options?: ValidationMode | ValidationOptions ): asserts input is T;
-export declare function validate<T>( input: unknown, options?: ValidationMode | ValidationOptions ): IValidation<T>;
+export declare function is<T>( input: unknown, options?: ValidationMode | ValidationOptions ): input is ResolveDefaults<T>;
+export declare function assert<T>( input: unknown, options?: ValidationMode | ValidationOptions ): ResolveDefaults<T>;
+export declare function assertGuard<T>( input: unknown, options?: ValidationMode | ValidationOptions ): asserts input is ResolveDefaults<T>;
+export declare function validate<T>( input: unknown, options?: ValidationMode | ValidationOptions ): IValidation<ResolveDefaults<T>>;
 export declare function jsonSchema<T>(): any;
 
 export * from './runtime/validators.js';
 export * from './runtime/tags.js';
 export * from './runtime/casing.js';
-
