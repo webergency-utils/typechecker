@@ -22,4 +22,5 @@ export declare function jsonSchema<T>(): any;
 
 export * from './runtime/validators.js';
 export * from './runtime/tags.js';
+export * from './runtime/casing.js';
 
