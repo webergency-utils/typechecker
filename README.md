@@ -327,6 +327,27 @@ Define defaults for optional fields:
 
 - `tag.Default<Value>`: Injects the specified `Value` if the property is `undefined` at validation time.
 
+### Assignability & compile-time constants
+
+Constraint tags use **optional** phantom properties (same pattern as `tag.Default`), so plain values assign to tagged types:
+
+```typescript
+const age: number & Minimum<18> = 18; // OK
+const plain: { age: number } = { age: 5 };
+const tagged: { age: number & Minimum<18> } = plain; // OK
+```
+
+When the TypeScript plugin is enabled, **compile-time constants** that violate constraints produce diagnostics:
+
+```typescript
+const tooYoung: number & Minimum<18> = 5;           // Error: does not satisfy Minimum<18>
+const short: string & MinLength<3> = 'ab';           // Error: does not satisfy MinLength<3>
+const empty: string[] & MinItems<1> = [];            // Error: does not satisfy MinItems<1>
+const dupes: number[] & UniqueItems = [1, 1];        // Error: does not satisfy UniqueItems
+```
+
+Non-constants (`number`, variables, function results) are not checked statically — use `is` / `assert` / `validate` at runtime.
+
 #### Example:
 ```typescript
 import { MinLength, Minimum, Format, UniqueItems, tag, transform, constraint } from '@webergency-utils/typechecker';

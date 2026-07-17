@@ -76,6 +76,8 @@ type ApplyModifiers<T, EntriesList extends any[]> =
  */
 export type WithModifiers<T, M> = ApplyModifiers<T, TuplifyUnion<Entries<M>>>;
 
+type IsAny<T> = 0 extends 1 & T ? true : false;
+
 /**
  * Recursively resolves object properties, removing the optional `?` modifier 
  * from any properties that have a `tag.Default` applied.
@@ -86,8 +88,8 @@ export type ResolveDefaults<T> = T extends Date | symbol | string | number | boo
         ? Array<ResolveDefaults<U>>
         : T extends object
             ? {
-                  [K in keyof T as NonNullable<T[K]> extends { readonly __default: any } ? K : never]-?: ResolveDefaults<Exclude<T[K], undefined>>
+                  [K in keyof T as IsAny<T[K]> extends true ? never : '__default' extends keyof NonNullable<T[K]> ? K : never]-?: ResolveDefaults<Exclude<T[K], undefined>>
               } & {
-                  [K in keyof T as NonNullable<T[K]> extends { readonly __default: any } ? never : K]: ResolveDefaults<T[K]>
+                  [K in keyof T as IsAny<T[K]> extends true ? K : '__default' extends keyof NonNullable<T[K]> ? never : K]: ResolveDefaults<T[K]>
               } extends infer O ? { [K in keyof O]: O[K] } : never
             : T;

@@ -40,6 +40,42 @@ function getStringLiteralValue( type: ts.Type ): string | undefined
     return undefined;
 }
 
+/** Optional tag phantoms are `V | undefined` — strip undefined before reading literals/symbols. */
+function stripUndefinedFromType( type: ts.Type ): ts.Type
+{
+    if( !type.isUnion()){ return type }
+
+    const nonUndefined = type.types.filter( t => !( t.getFlags() & ts.TypeFlags.Undefined ));
+
+    if( nonUndefined.length === 1 ){ return nonUndefined[0] }
+
+    if( nonUndefined.length > 1 )
+    {
+        // Keep union of remaining members (e.g. string literal | other)
+        return type;
+    }
+
+    return type;
+}
+
+function getTagPropertyValue( type: ts.Type ): any
+{
+    const actual = stripUndefinedFromType( type );
+    let val = ( actual as any ).value;
+
+    if( val === undefined && ( actual.getFlags() & ts.TypeFlags.BooleanLiteral ))
+    {
+        val = ( actual as any ).intrinsicName === 'true';
+    }
+
+    if( val === undefined && ( actual.getFlags() & ts.TypeFlags.Null ))
+    {
+        val = null;
+    }
+
+    return val;
+}
+
 function minifyTypeString( str: string ): string 
 {
     return str
@@ -122,17 +158,8 @@ export function buildValidator(
                 if( pName.startsWith( '__' )) 
                 {
                     const pType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0]);
-                    let val = ( pType as any ).value;
-
-                    if( val === undefined && ( pType.getFlags() & ts.TypeFlags.BooleanLiteral )) 
-                    {
-                        val = ( pType as any ).intrinsicName === 'true';
-                    }
-
-                    if( val === undefined && ( pType.getFlags() & ts.TypeFlags.Null )) 
-                    {
-                        val = null;
-                    }
+                    const actualType = stripUndefinedFromType( pType );
+                    const val = getTagPropertyValue( pType );
 
                     if( pName === '__default' ) 
                     {
@@ -174,7 +201,7 @@ export function buildValidator(
                     {
                         let fnName: string | undefined;
                         let filePath: string | undefined;
-                        const symbol = pType.getSymbol() || pType.aliasSymbol;
+                        const symbol = actualType.getSymbol() || actualType.aliasSymbol || pType.getSymbol() || pType.aliasSymbol;
 
                         if( symbol ) 
                         {
@@ -206,7 +233,7 @@ export function buildValidator(
                         }
                         else 
                         {
-                            const str = checker.typeToString( pType );
+                            const str = checker.typeToString( actualType );
                             const match = str.match( /typeof\s+([a-zA-Z0-9_]+)/ );
 
                             if( match ) { fnName = match[1] }
@@ -227,7 +254,7 @@ export function buildValidator(
                     {
                         let fnName: string | undefined;
                         let filePath: string | undefined;
-                        const symbol = pType.getSymbol() || pType.aliasSymbol;
+                        const symbol = actualType.getSymbol() || actualType.aliasSymbol || pType.getSymbol() || pType.aliasSymbol;
 
                         if( symbol ) 
                         {
@@ -259,7 +286,7 @@ export function buildValidator(
                         }
                         else 
                         {
-                            const str = checker.typeToString( pType );
+                            const str = checker.typeToString( actualType );
                             const match = str.match( /typeof\s+([a-zA-Z0-9_]+)/ );
 
                             if( match ) { fnName = match[1] }
@@ -312,13 +339,13 @@ export function buildValidator(
                     {
                         let reqVal: string | string[];
 
-                        if( pType.isStringLiteral()) 
+                        if( actualType.isStringLiteral()) 
                         {
-                            reqVal = pType.value;
+                            reqVal = actualType.value;
                         }
                         else 
                         {
-                            const typeArgs = ( pType as ts.TypeReference ).typeArguments || [];
+                            const typeArgs = ( actualType as ts.TypeReference ).typeArguments || [];
                             const items: string[] = [];
 
                             for( const arg of typeArgs ) 
@@ -926,17 +953,8 @@ function buildJsonSchemaInternal(
                 if( pName.startsWith( '__' )) 
                 {
                     const pType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0]);
-                    let val = ( pType as any ).value;
-
-                    if( val === undefined && ( pType.getFlags() & ts.TypeFlags.BooleanLiteral )) 
-                    {
-                        val = ( pType as any ).intrinsicName === 'true';
-                    }
-
-                    if( val === undefined && ( pType.getFlags() & ts.TypeFlags.Null )) 
-                    {
-                        val = null;
-                    }
+                    const actualType = stripUndefinedFromType( pType );
+                    const val = getTagPropertyValue( pType );
 
                     if( pName === '__default' ) { constraints.default = val }
                     else if( pName === '__minLength' ) { constraints.minLength = val }
@@ -955,13 +973,13 @@ function buildJsonSchemaInternal(
                     {
                         let reqVal: string | string[];
 
-                        if( pType.isStringLiteral()) 
+                        if( actualType.isStringLiteral()) 
                         {
-                            reqVal = pType.value;
+                            reqVal = actualType.value;
                         }
                         else 
                         {
-                            const typeArgs = ( pType as ts.TypeReference ).typeArguments || [];
+                            const typeArgs = ( actualType as ts.TypeReference ).typeArguments || [];
                             const items: string[] = [];
 
                             for( const arg of typeArgs ) 

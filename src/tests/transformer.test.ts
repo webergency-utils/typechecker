@@ -103,6 +103,20 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).toContain( 'v = "localhost";' );
     });
 
+    it('should transform types with tag.Default boolean initializers', () => {
+        const code = `
+            import { validate, tag } from './src/index.js';
+            interface Config {
+                isCool?: boolean & tag.Default<false>;
+                isFast?: boolean & tag.Default<true>;
+            }
+            const res = validate<Config>({});
+        `;
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'v = false;' );
+        expect( compiled ).toContain( 'v = true;' );
+    });
+
     it( 'should transform types with transform namespace and custom mappers', () => 
     {
         const code = `

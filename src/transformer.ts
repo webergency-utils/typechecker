@@ -3,12 +3,15 @@ import { buildValidator, generateHash, buildJsonSchema, objectToAst } from './en
 export { buildValidator, generateHash, buildJsonSchema } from './engine/resolver.js';
 import { hoistRegistrations } from './engine/hoister.js';
 import { templateToAst, injectNodes } from './engine/generators.js';
+import { installStaticConstraintDiagnostics } from './engine/staticAsserts.js';
 
 const RUNTIME_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate', 'jsonSchema'];
 
 export default function transformer( program: ts.Program ) 
 {
     const checker = program.getTypeChecker();
+
+    installStaticConstraintDiagnostics( program );
 
     return ( context: ts.TransformationContext ) => 
     {
