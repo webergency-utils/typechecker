@@ -2,23 +2,23 @@ import ts from 'typescript';
 
 export interface IStaticConstraint
 {
-    type    : string
-    value   : any
-    message?: string
+    type     : string
+    value    : any
+    message? : string
 }
 
 const CONSTRAINT_KEYS: Record<string, string> =
 {
-    __minLength         : 'minLength',
-    __maxLength         : 'maxLength',
-    __minimum           : 'minimum',
-    __maximum           : 'maximum',
-    __exclusiveMinimum  : 'exclusiveMinimum',
-    __exclusiveMaximum  : 'exclusiveMaximum',
-    __multipleOf        : 'multipleOf',
-    __minItems          : 'minItems',
-    __maxItems          : 'maxItems',
-    __uniqueItems       : 'uniqueItems'
+    __minLength        : 'minLength',
+    __maxLength        : 'maxLength',
+    __minimum          : 'minimum',
+    __maximum          : 'maximum',
+    __exclusiveMinimum : 'exclusiveMinimum',
+    __exclusiveMaximum : 'exclusiveMaximum',
+    __multipleOf       : 'multipleOf',
+    __minItems         : 'minItems',
+    __maxItems         : 'maxItems',
+    __uniqueItems      : 'uniqueItems'
 };
 
 function stripUndefined( type: ts.Type ): ts.Type
@@ -36,7 +36,7 @@ function getLiteralValue( type: ts.Type ): any
 {
     const actual = stripUndefined( type );
 
-    if( ( actual as any ).value !== undefined ){ return ( actual as any ).value }
+    if(( actual as any ).value !== undefined ){ return ( actual as any ).value }
 
     if( actual.getFlags() & ts.TypeFlags.BooleanLiteral )
     {
@@ -118,9 +118,9 @@ export function extractStaticConstraints( type: ts.Type, checker: ts.TypeChecker
 }
 
 type ConstantValue =
-    | { kind: 'number'; value: number | bigint }
-    | { kind: 'string'; value: string }
-    | { kind: 'array'; value: any[] };
+    | { kind : 'number', value : number | bigint }
+    | { kind : 'string', value : string }
+    | { kind : 'array', value : any[] };
 
 function unwrapExpression( expr: ts.Expression ): ts.Expression
 {
@@ -234,7 +234,7 @@ export function evaluateStaticConstraints(
         {
             const v = constant.value;
             const n = c.value;
-            let ok = true;
+            let ok: boolean;
 
             if( typeof v === 'bigint' || typeof n === 'bigint' )
             {
@@ -305,13 +305,13 @@ function createDiagnostic( node: ts.Node, message: string ): ts.Diagnostic
     const length = node.getWidth();
 
     return {
-        file             : node.getSourceFile(),
+        file        : node.getSourceFile(),
         start,
         length,
-        messageText      : message,
-        category         : ts.DiagnosticCategory.Error,
-        code             : 90001,
-        source           : 'webergency-typechecker'
+        messageText : message,
+        category    : ts.DiagnosticCategory.Error,
+        code        : 90001,
+        source      : 'webergency-typechecker'
     };
 }
 

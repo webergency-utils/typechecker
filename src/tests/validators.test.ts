@@ -630,6 +630,185 @@ describe( 'Validators', () =>
             expect( ctx.success ).toBe( true );
             expect( result.next.next.value ).toBe( 'grandchild' );
         });
+
+        it( 'should strip additional properties in strip mode', () => 
+        {
+            const schema = 
+            {
+                type       : 'object',
+                properties : 
+                {
+                    name : { type : 'string' }
+                }
+            };
+
+            const validateFn = MetadataStore.getOrCompileSchema( schema );
+
+            ctx.mode = 'strip';
+
+            const payload = 
+            {
+                name  : 'John',
+                extra : 'remove me'
+            };
+
+            const result = validateFn( payload, 'path', ctx );
+
+            expect( ctx.success ).toBe( true );
+            expect( result ).toEqual({ name : 'John' });
+            expect( result.extra ).toBeUndefined();
+        });
+
+        it( 'should not create empty object if there are no additional properties in strip mode', () => 
+        {
+            const schema = 
+            {
+                type       : 'object',
+                properties : 
+                {
+                    name : { type : 'string' }
+                }
+            };
+
+            const validateFn = MetadataStore.getOrCompileSchema( schema );
+
+            ctx.mode = 'strip';
+
+            const payload = 
+            {
+                name : 'John'
+            };
+
+            const result = validateFn( payload, 'path', ctx );
+
+            expect( ctx.success ).toBe( true );
+            expect( result ).toBe( payload );
+        });
+
+        it( 'should support dynamic schema validation for tuples', () => 
+        {
+            const schema = 
+            {
+                type  : 'array',
+                items : 
+                [
+                    { type : 'string' },
+                    { type : 'number' }
+                ]
+            };
+
+            const validateFn = MetadataStore.getOrCompileSchema( schema );
+
+            // Valid tuple
+            ctx.success = true;
+            ctx.errors = [];
+            const result1 = validateFn(['hello', 123], 'path', ctx );
+
+            expect( ctx.success ).toBe( true );
+            expect( result1 ).toEqual(['hello', 123]);
+
+            // Invalid tuple
+            ctx.success = true;
+            ctx.errors = [];
+            validateFn([123, 'hello'], 'path', ctx );
+
+            expect( ctx.success ).toBe( false );
+        });
+
+        it( 'should strip additional properties in strip mode when keys length is equal but different keys are present', () => 
+        {
+            const schema = 
+            {
+                type       : 'object',
+                properties : 
+                {
+                    name : { type : 'string' }
+                }
+            };
+
+            const validateFn = MetadataStore.getOrCompileSchema( schema );
+
+            ctx.mode = 'strip';
+
+            const payload = 
+            {
+                extra : 'remove me'
+            };
+
+            const result = validateFn( payload, 'path', ctx );
+
+            expect( ctx.success ).toBe( true );
+            expect( result ).toEqual({});
+            expect( result.extra ).toBeUndefined();
+        });
+
+        it( 'should fallback to identity validator for empty or unknown schema types', () => 
+        {
+            const schema = {};
+            const validateFn = MetadataStore.getOrCompileSchema( schema );
+
+            const result = validateFn( 'anything goes', 'path', ctx );
+
+            expect( ctx.success ).toBe( true );
+            expect( result ).toBe( 'anything goes' );
+        });
+
+        it( 'should compile null or non-object subschema as identity', () => 
+        {
+            const schema = 
+            {
+                type       : 'object',
+                properties : 
+                {
+                    name : 'not-an-object' as any
+                }
+            };
+
+            const validateFn = MetadataStore.getOrCompileSchema( schema );
+            const result = validateFn({ name : 'hello' }, 'path', ctx );
+
+            expect( result ).toEqual({ name : 'hello' });
+        });
+
+        it( 'should throw when ref targets a non-existent definition', () => 
+        {
+            const schema = 
+            {
+                $ref : '#/$defs/NonExistent'
+            };
+
+            expect(() => MetadataStore.getOrCompileSchema( schema )).toThrow( 'Schema reference not found: #/$defs/NonExistent' );
+        });
+
+        it( 'should validate integer type and reject float values', () => 
+        {
+            const schema = 
+            {
+                type : 'integer'
+            };
+
+            const validateFn = MetadataStore.getOrCompileSchema( schema );
+
+            ctx.success = true;
+            ctx.errors = [];
+            validateFn( 1.5, 'path', ctx );
+
+            expect( ctx.success ).toBe( false );
+            expect( ctx.errors[0].error ).toBe( 'Type<integer>' );
+        });
+
+        it( 'should return cached compiled schema on subsequent calls', () => 
+        {
+            const schema = 
+            {
+                type : 'string'
+            };
+
+            const fn1 = MetadataStore.getOrCompileSchema( schema );
+            const fn2 = MetadataStore.getOrCompileSchema( schema );
+
+            expect( fn1 ).toBe( fn2 );
+        });
     });
 
     describe( 'Set and Map validations', () => 
@@ -721,6 +900,64 @@ describe( 'Validators', () =>
                     errorFactory : ( errors ) => new CustomValidationError( errors )
                 });
             }).toThrow( CustomValidationError );
+        });
+
+        it( 'should validate and return status object', () => 
+        {
+            const dummyVal = ( v: any, path: string, subCtx: any ) => 
+            {
+                if( v !== 'hello' ) 
+                {
+                    subCtx.success = false;
+                    subCtx.errors.push({ path, error : 'not_hello', value : v });
+                }
+
+                return v;
+            };
+
+            // Success case
+            const resSuccess = MetadataStore.validate( dummyVal, 'hello' );
+
+            expect( resSuccess.success ).toBe( true );
+            expect( resSuccess.data ).toBe( 'hello' );
+            expect( resSuccess.errors ).toEqual([]);
+
+            // Failure case with options object
+            const resFail = MetadataStore.validate( dummyVal, 'world', { mode : 'strict', tryConvert : true } );
+
+            expect( resFail.success ).toBe( false );
+            expect( resFail.data ).toBe( 'world' );
+            expect( resFail.errors ).toHaveLength( 1 );
+            expect( resFail.errors[0]).toEqual({ path : '', error : 'not_hello', value : 'world' });
+        });
+
+        it( 'should check validity using is method', () => 
+        {
+            const dummyVal = ( v: any, path: string, subCtx: any ) => 
+            {
+                if( v !== 'hello' ) 
+                {
+                    subCtx.success = false;
+                }
+
+                return v;
+            };
+
+            expect( MetadataStore.is( dummyVal, 'hello' )).toBe( true );
+            expect( MetadataStore.is( dummyVal, 'world' )).toBe( false );
+        });
+
+        it( 'should throw default validation error when assert fails without errorFactory', () => 
+        {
+            const dummyVal = ( v: any, path: string, subCtx: any ) => 
+            {
+                subCtx.success = false;
+                subCtx.errors.push({ path : 'some.path', error : 'some_error', value : v });
+
+                return v;
+            };
+
+            expect(() => MetadataStore.assert( dummyVal, 'value' )).toThrow( 'Validation Error: some.path: some_error' );
         });
     });
 });

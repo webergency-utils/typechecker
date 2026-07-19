@@ -1,6 +1,6 @@
 {
   "name": "@webergency-utils/typechecker",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "type": "module",
   "description": "TypeScript compiler plugin for runtime validation",
   "author": "radixxko",
@@ -24,6 +24,12 @@
       "import": "./dist/transformer.js",
       "require": "./dist/transformer.js",
       "default": "./dist/transformer.js"
+    },
+    "./plugin": {
+      "types": "./dist/plugin.d.ts",
+      "import": "./dist/plugin.js",
+      "require": "./dist/plugin.js",
+      "default": "./dist/plugin.js"
     }
   },
   "files": [
@@ -31,11 +37,11 @@
   ],
   "scripts": {
     "lint": "eslint .",
-    "clean": "rm -rf ./dist/* node_modules package-lock.json && npm i",
-    "commit": "node -e \"const version = require('./package.json').version.trim(); require('child_process').execSync('git add . && git commit -m \\\"Version ' + version + '\\\"');\"",
-    "build": "npm run clean && tsc && node update_imports.js",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
+    "coverage": "vitest run --coverage",
+    "clean": "rm -rf ./dist/* node_modules package-lock.json && npm i",
+    "build": "npm run clean && tsc && node update_imports.js",
+    "commit": "node -e \"const version = require('./package.json').version.trim(); require('child_process').execSync('git add . && git commit -m \\\"Version ' + version + '\\\"');\"",
     "version": "npm run build && npm publish --access public && npm run commit && git push"
   },
   "repository": {

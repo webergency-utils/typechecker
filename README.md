@@ -1,38 +1,64 @@
 # @webergency-utils/typechecker
 
-`@webergency-utils/typechecker` is a high-performance, zero-runtime-dependency TypeScript compiler plugin (transformer) that converts your static TypeScript types into optimized, hashed, and hoisted runtime validators.
+[![npm version](https://img.shields.io/npm/v/%40webergency-utils%2Ftypechecker)](https://www.npmjs.com/package/@webergency-utils/typechecker) [![Maintenance](https://img.shields.io/badge/maintenance-active-brightgreen.svg)](#maintenance) [![npm downloads](https://img.shields.io/npm/dm/%40webergency-utils%2Ftypechecker)](https://www.npmjs.com/package/@webergency-utils/typechecker) [![License](https://img.shields.io/npm/l/%40webergency-utils%2Ftypechecker)](https://www.npmjs.com/package/@webergency-utils/typechecker)
 
-It is designed to work seamlessly with the `@webergency-utils/server` library, automatically enforcing strict data validation at compile time, and provides standard validation API wrappers matching `typia` with extended options for coercion and array handling.
+An ahead-of-time (AOT) type validation engine and TypeScript compiler plugin that compiles TypeScript types directly into optimized runtime validation functions. It intercepts type definitions at build time to enforce value constraints, formatting, and defaults with zero runtime reflection and no third-party schema dependencies.
 
----
+## TL;DR
 
-## Features
+```typescript
+import { validate, constraint, format } from '@webergency-utils/typechecker';
 
-- **⚡ Blazing Fast**: No runtime schema parsing or generic reflection. Code is generated at compile time as highly optimized JavaScript pipelines.
-- **📦 Zero Dependency**: The generated code has absolutely zero external dependencies.
-- **🔄 Advanced Type Checking**: Full support for Unions, Intersections, Nested Objects, Tuples, and Optional Properties.
-- **🏷️ Tag-Based Validation**: Custom JSON-Schema validation tags directly inside your TypeScript types (e.g. `MinLength<8>`, `Format<'email'>`).
-- **🛡️ Multiple Validation Modes**: Easily switch between `'strict'`, `'relaxed'`, and `'strip'` modes.
-- **📈 Coercion & Coalescing**: Extended options for type conversion and single-value array wrapping (highly useful for HTTP Query parameters!).
+interface User {
+  id: string & format.UUID;
+  name: string & constraint.MinLength<2>;
+  age: number & constraint.Minimum<18>;
+}
 
----
+const input: unknown = {
+  id: '550e8400-e29b-41d4-a716-446655440000',
+  name: 'Alice',
+  age: 25,
+};
 
-## Installation
+// Validate input against the User type definition
+const result = validate<User>(input);
 
-Since this library is a TypeScript compiler plugin, you will need a tool like `ts-patch` or `ts-node` to hook into the compilation process.
+if (result.success) {
+  // TypeScript narrows type to User here
+  console.log('User is valid:', result.data);
+} else {
+  console.error('Validation failed:', result.errors);
+}
+```
+
+## Installation & Setup
+
+Since this package is a TypeScript compiler plugin (transformer), you must compile your project using a compiler patcher like `ts-patch` to hook into TS compilation.
+
+### 1. Install Dependencies
+
+Install the core package, along with `ts-patch` as a development dependency:
 
 ```bash
 npm install @webergency-utils/typechecker
-npm install -D ts-patch
+npm install --save-dev ts-patch
 ```
 
-Run `ts-patch install` to patch your local TypeScript installation.
+### 2. Inject Compiler Hook
 
----
+Run the patcher command to set up `ts-patch` inside your local TypeScript installation:
 
-## Configuration
+```bash
+npx ts-patch install
+```
 
-Update your `tsconfig.json` to include the transformer in the `compilerOptions.plugins` array:
+> [!NOTE]
+> It is recommended to add `ts-patch install` to your `package.json` `prepare` script so it runs automatically after every dependency installation.
+
+### 3. Configure tsconfig.json
+
+Register the typechecker transform plugin under the `plugins` array of `compilerOptions` in your `tsconfig.json`:
 
 ```json
 {
@@ -49,329 +75,283 @@ Update your `tsconfig.json` to include the transformer in the `compilerOptions.p
 
 ---
 
-## Usage
+## Architecture & Internals
 
-You can validate unknown data anywhere in your code. The transformer intercepts these calls and replaces them with direct, optimized validation functions.
+The package utilizes a custom TypeScript compiler transformer and language service plugin to deliver highly efficient type-safe runtime validations.
+
+### Build-Time Compilation Flow
+
+```mermaid
+graph TD
+    A[TypeScript Source Code] --> B[ts-patch / Compiler Hook]
+    B --> C[TypeScript compiler plugin / Transformer]
+    C --> D[Extract types via compiler TypeChecker]
+    D --> E[Generate optimized JS validator function]
+    E --> F[Hoisted Validator Registry & MetadataStore registration]
+    F --> G[Replace source call with MetadataStore invocation]
+    G --> H[Emit optimized JavaScript files]
+```
+
+1. **Build-Time Transformation**: The compiler transformer intercepts calls to validation helper functions (`validate`, `is`, `assert`, `assertGuard`, `jsonSchema`) containing generic arguments.
+2. **Type Extraction & Analysis**: It parses the target TS type structure, extracting intersection constraints, formats, transforms, and defaults recursively.
+3. **Hoisted Registry**: The transformer generates highly optimized, direct JavaScript validator functions for each resolved type shape, generates a unique hash, and registers them in a global `MetadataStore`.
+4. **Call Replacement**: The transformer replaces the original compile-time call expressions with direct, zero-reflection references to the runtime `MetadataStore`.
+
+### Static Constraint Diagnostics
+
+The package includes an IDE / Language Service plugin that statically checks literal values against type constraints during editing or compilation:
 
 ```typescript
-import { is, assert, assertGuard, validate } from '@webergency-utils/typechecker';
+import { constraint } from '@webergency-utils/typechecker';
 
-interface Payload {
-  id: string;
-  active: boolean;
-}
-
-const data: unknown = JSON.parse('{"id": "123", "active": true}');
-
-// 1. is() - returns a boolean (type guard)
-if (is<Payload>(data)) {
-  console.log(data.id); // Narrowed to 'Payload'
-}
-
-// 2. assert() - returns the narrowed value or throws an error
-const validData = assert<Payload>(data);
-
-// 3. assertGuard() - asserts the type for the current scope in-place
-assertGuard<Payload>(data);
-console.log(data.id); // Narrowed in-place
-
-// 4. validate() - returns a structured validation result with errors
-const result = validate<Payload>(data);
-if (result.success) {
-  console.log(result.data);
-} else {
-  console.error(result.errors); // Array of formatted errors
-}
+// This yields a compilation error directly in the IDE:
+// Type '5' is not assignable to type 'number & Minimum<18>'.
+const age: number & constraint.Minimum<18> = 5;
 ```
 
 ---
 
-### 3. Extended Options & Validation Modes
+## Glossary
 
-All validation APIs accept either a string `ValidationMode` or a custom `ValidationOptions` object:
-
-```typescript
-export type ValidationMode = 'strict' | 'relaxed' | 'strip';
-
-export interface ValidationOptions {
-  mode?: ValidationMode;    // default: 'strict'
-  tryConvert?: boolean;     // Converts string numbers, booleans, and dates (ideal for query parameters)
-  wrapArrays?: boolean;     // Wraps a single value into an array if the type expects an array
-}
-```
-
-#### Examples:
-```typescript
-// Relaxed Mode (ignores additional properties)
-const user = assert<User>(data, 'relaxed');
-
-// Strip Mode (strips out any unknown properties from returned object)
-const cleanUser = assert<User>(data, 'strip');
-
-// Query-String Coercion
-const query = assert<SearchQuery>(rawQuery, {
-  mode: 'strip',
-  tryConvert: true, // Coerces "18" -> 18, "true" -> true, etc.
-  wrapArrays: true  // Coerces "tag" -> ["tag"] if tags: string[] is expected
-});
-```
+- [validate](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/index.ts#L22): Validates a value against a type, returning a structured result containing the validation status and a detailed list of errors.
+- [is](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/index.ts#L19): A type guard function that returns `true` if a value is valid, narrowing its type for TypeScript.
+- [assert](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/index.ts#L20): Validates a value and returns it, throwing a validation error on failure.
+- [assertGuard](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/index.ts#L21): A type assertion function that throws if a value does not match the target type, narrowing the type in the outer scope.
+- [jsonSchema](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/index.ts#L23): Generates and returns a raw JSON Schema draft-07 representation matching a TypeScript type at compile time.
+- [WithModifiers](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/runtime/tags.ts#L79): A utility type that applies constraint, format, or transformation tags to properties of deeply nested or external types using dot-separated path mappings.
+- [ResolveDefaults](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/runtime/tags.ts#L87): A helper type that removes the optional flag (`?`) from properties that have defined default values.
+- [convertPropertyCasing](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/runtime/casing.ts#L190): A runtime utility to recursively change the casing of object keys.
+- [toZodIssues](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/runtime/validators.ts#L991): Utility to transform internal typechecker validation errors into Zod-compatible issue structures.
+- [ZodLikeError](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/runtime/validators.ts#L1017): Error class wrapping validation errors in a structure compatible with libraries expecting Zod errors.
 
 ---
 
-### 4. Error Reporting & Grouping
+## API Reference
 
-When validation fails using `validate<T>()`, you receive a highly structured array of errors. To make this easy to consume for humans, LLMs, and UI libraries (like React Hook Form), the library provides a `groupErrorsByPath` helper that organizes these errors by their exact JSON path.
+### Validation Functions
 
-The error strings follow a deterministic, parser-friendly `Constraint<Value>` format.
+#### `validate<T>(input: unknown, options?: ValidationMode | ValidationOptions): IValidation<ResolveDefaults<T>>`
 
-```typescript
-import { validate, groupErrorsByPath, Minimum } from '@webergency-utils/typechecker';
+Validates input data against type `T` and returns a structured validation result.
 
-interface Payload {
-  id: string;
-  role: "admin" | "user";
-  age: number & Minimum<18>;
-  metadata: { tag: string } | { priority: number };
-}
+- **Parameters**:
+  - `input`: The value to validate.
+  - `options` (optional): Either a `ValidationMode` string ('strict' | 'relaxed' | 'strip') or a `ValidationOptions` object.
+- **Returns**: `IValidation<ResolveDefaults<T>>` containing validation status, converted/stripped data, and error details.
+- **Example**:
+  ```typescript
+  const result = validate<User>(data, 'strip');
+  ```
 
-const data = {
-  id: 123,           // Error: expected string, got number
-  role: "guest",     // Error: literal union mismatch
-  age: 15,           // Error: minimum constraint failed
-  metadata: { }      // Error: complex union mismatch
-};
+#### `is<T>(input: unknown, options?: ValidationMode | ValidationOptions): input is ResolveDefaults<T>`
 
-const result = validate<Payload>(data);
-if (!result.success) {
-  const grouped = groupErrorsByPath(result.errors);
-  console.log(JSON.stringify(grouped, null, 2));
-}
-```
+A type guard function checking if the input matches type `T`.
 
-**Output:**
-```json
-{
-  "id": {
-    "value": 123,
-    "errors": ["Type<string>"]
-  },
-  "role": {
-    "value": "guest",
-    "errors": [
-      "Literal<'admin'>",
-      "Literal<'user'>"
-    ]
-  },
-  "age": {
-    "value": 15,
-    "errors": ["Minimum<18>"]
-  },
-  "metadata": {
-    "value": {},
-    "errors": ["Type<{tag:string}|{priority:number}>"]
-  },
-  "metadata.tag": {
-    "value": undefined,
-    "errors": ["Type<string>"]
-  },
-  "metadata.priority": {
-    "value": undefined,
-    "errors": ["Type<number>"]
+- **Parameters**:
+  - `input`: The value to check.
+  - `options` (optional): Either a `ValidationMode` string or a `ValidationOptions` object.
+- **Returns**: `boolean` (`true` if valid, `false` otherwise). Narrows type of `input` to `ResolveDefaults<T>` on success.
+- **Example**:
+  ```typescript
+  if (is<User>(data)) {
+    console.log(data.name);
   }
-}
-```
+  ```
 
-This flattened, grouped output is incredibly powerful—it tells the developer (or an AI agent) exactly *why* a complex union or object failed down to the very specific branch and missing property constraint.
+#### `assert<T>(input: unknown, options?: ValidationMode | ValidationOptions): ResolveDefaults<T>`
 
----
+Validates input data and returns it, throwing a validation error on failure.
 
-### 5. Deep/External Type Validation (WithModifiers)
+- **Parameters**:
+  - `input`: The value to validate.
+  - `options` (optional): Either a `ValidationMode` string or a `ValidationOptions` object.
+- **Returns**: `ResolveDefaults<T>` (the validated value with defaults resolved).
+- **Throws**: `Error` containing a list of path and constraint failures, or a custom error via `options.errorFactory`.
+- **Example**:
+  ```typescript
+  const user = assert<User>(data);
+  ```
 
-If you have deeply nested objects or external types that you cannot edit directly, you can add validation tags to specific properties using dot-notation path references. This prevents you from having to retype the entire structure.
+#### `assertGuard<T>(input: unknown, options?: ValidationMode | ValidationOptions): asserts input is ResolveDefaults<T>`
 
-```typescript
-import { WithModifiers, constraint, format } from '@webergency-utils/typechecker';
+An assertion guard that throws a validation error if the input does not match type `T`.
 
-// External type we cannot edit directly
-interface ExternalUser {
-  id: string;
-  profile?: {
-    details: {
-      email: string;
-      password: string;
-    }
-  }
-}
+- **Parameters**:
+  - `input`: The value to check.
+  - `options` (optional): Either a `ValidationMode` string or a `ValidationOptions` object.
+- **Returns**: `void`. Narrows the type of `input` in the enclosing scope on success.
+- **Throws**: `Error` if validation fails.
+- **Example**:
+  ```typescript
+  assertGuard<User>(data);
+  ```
 
-// Decorate specific paths using dot notation
-type ValidatedUser = WithModifiers<ExternalUser, {
-  'profile.details.email': format.Email;
-  'profile.details.password': constraint.MinLength<8>;
-}>;
-```
+#### `jsonSchema<T>(): any`
 
-### 6. Cross-Field Dependencies (Requires)
+Generates a raw JSON Schema draft-07 object matching type `T` at compile time.
 
-You can specify that a property requires the presence of other properties in the same object using absolute paths or relative dot-notation paths (e.g., `.sibling`, `..grandparent.cousin`):
-
-```typescript
-import { WithModifiers, constraint } from '@webergency-utils/typechecker';
-
-interface DBConfig {
-  ssl?: boolean;
-  cert?: string;
-  auth?: {
-    username?: string;
-    password?: string;
-  }
-}
-
-type SecureConfig = WithModifiers<DBConfig, {
-  // Absolute check: if "ssl" is defined, "cert" must exist at root
-  'ssl': constraint.Requires<'cert'>;
-
-  // Relative check: if "auth.password" is defined, its sibling "username" must exist
-  'auth.password': constraint.Requires<'.username'>;
-}>;
-```
-
-### 7. Custom Error Messages
-
-You can specify custom error messages for constraint violations. Most constraint tags accept a custom message as an optional template argument, or you can use the `Message<Msg>` tag:
-
-```typescript
-import { validate, constraint, Message } from '@webergency-utils/typechecker';
-
-interface User {
-  // Direct message in constraint tag
-  age: number & constraint.Minimum<18, "Must be 18 or older">;
-
-  // Fallback property message via Message<T>
-  email: string & constraint.Format<'email'> & Message<"Please supply a valid email address">;
-}
-```
-
-### 8. Zod Compatibility
-
-If you are integrating with libraries that expect Zod-style validation errors (such as React Hook Form or API gateways), you can convert the validation errors using the `toZodIssues` helper or throw a `ZodLikeError` which wraps the issues:
-
-```typescript
-import { validate, toZodIssues, ZodLikeError } from '@webergency-utils/typechecker';
-
-const result = validate<User>(data);
-if (!result.success) {
-  // 1. Convert errors array to Zod-compliant issues
-  const zodIssues = toZodIssues(result.errors);
-  console.log(zodIssues); // [{ code: "custom", path: ["age"], message: "Minimum<18>", received: 15 }]
-
-  // 2. Or throw a Zod-like Error
-  throw new ZodLikeError(result.errors);
-}
-```
+- **Returns**: `any` (a JSON Schema object).
+- **Example**:
+  ```typescript
+  const userSchema = jsonSchema<User>();
+  ```
 
 ---
 
-## Supported Validation & Modifier Namespaces
+### Utility Functions and Classes
 
-The library provides validation tags and modifiers grouped into four logical namespaces. These can be imported directly or used via their namespaces (e.g., `constraint.MinLength` vs `MinLength`).
+#### `convertPropertyCasing<T, C extends CasingFormat>(obj: T, casing: C, options?: ConvertCasingOptions): ConvertPropertyCasing<T, C>`
 
-### 1. `constraint` Namespace
-Impose structural and value-based constraints on primitives:
+Recursively converts all property keys of an object to the specified casing format.
 
-- `MinLength<N, Msg?>`: Minimum string length.
-- `MaxLength<N, Msg?>`: Maximum string length.
-- `Length<Min, Max>`: Helper combining MinLength and MaxLength.
-- `Pattern<RegExp, Msg?>`: Regular expression validation.
-- `Minimum<N, Msg?>` / `Maximum<N, Msg?>`: Inclusive numeric bounds (supports `number | bigint`).
-- `ExclusiveMinimum<N, Msg?>` / `ExclusiveMaximum<N, Msg?>`: Exclusive numeric bounds.
-- `Range<Min, Max>`: Helper combining Minimum and Maximum.
-- `MultipleOf<N, Msg?>`: Enforces that the value is a multiple of `N`.
-- `MinItems<N, Msg?>` / `MaxItems<N, Msg?>`: Array size constraints.
-- `UniqueItems<Msg?>`: Enforces that all elements in an array or Set are deeply unique.
-- `Custom<Fn, Msg?>`: Executes a custom validation function: `(val, ctx) => boolean`.
-- `Requires<Paths, Msg?>`: Enforces cross-field dependency validation.
-- `Message<Msg>`: Attaches a fallback custom error message to a property.
+- **Parameters**:
+  - `obj`: The source object.
+  - `casing`: A `CasingFormat` string value (`'snake_case' | 'SNAKE_CASE' | 'camelCase' | 'camelCaseID' | 'PascalCase' | 'PascalCaseID' | 'kebab-case' | 'dot.case'`).
+  - `options` (optional): `ConvertCasingOptions` object.
+- **Returns**: The casing-converted object with updated TypeScript property keys.
+- **Example**:
+  ```typescript
+  const apiResponse = convertPropertyCasing(user, 'camelCase');
+  ```
 
-### 2. `format` Namespace
-Pre-defined string formatting shortcuts:
+#### `toZodIssues(errors: IValidationError[]): any[]`
 
-- `format.Email`: RFC 5322 Email.
-- `format.UUID`: UUID (v1-v5) format.
-- `format.URL`: Full URL validation (HTTP/HTTPS/FTP).
-- `format.IPv4` / `format.IPv6`: IP address validation.
-- `format.DateTime`: ISO-8601 Date Time string.
-- `format.Date`: ISO Date (YYYY-MM-DD).
-- `format.Time`: Time string (HH:MM:SS).
-- `format.Duration`: ISO-8601 duration (e.g., PT1H).
-- `format.ObjectId`: 24-character MongoDB ObjectId.
-- `format.Byte`: Base64 encoded string.
-- `format.Password`: Always valid string, placeholder for password parameters.
+Converts internal validation errors into Zod-compatible issues.
+
+- **Parameters**:
+  - `errors`: Array of `IValidationError`.
+- **Returns**: An array of Zod-like issues.
+
+#### `class ZodLikeError extends Error`
+
+An error class wrapper that transforms internal validation errors into a Zod-like error structure.
+
+- **Constructor**: `constructor(errors: IValidationError[])`
+- **Properties**:
+  - `name`: `'ZodError'`
+  - `issues`: Zod-like issue array.
+
+---
+
+### Interfaces and Types
+
+#### `interface ValidationOptions`
+
+Configuration options to customize validator behavior.
+
+| Property | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `mode` | `'strict' \| 'relaxed' \| 'strip'` | `'strict'` | Validation mode strategy (strict key checking, relaxed, or key stripping). |
+| `tryConvert` | `boolean` | `false` | Coerces compatible input primitives (e.g. numeric strings to numbers, ISO strings to Date). |
+| `wrapArrays` | `boolean` | `false` | Wraps non-array values into single-element arrays if an array is expected. |
+| `schema` | `any` | `undefined` | Custom JSON Schema instance. |
+| `errorFactory` | `(errors: IValidationError[]) => Error` | `undefined` | Custom error factory for `assert` throwing. |
+
+#### `interface IValidation<T>`
+
+Result object returned by `validate`.
+
+- `success`: `boolean`
+- `data?`: `T`
+- `errors?`: `IValidationError[]`
+
+#### `interface IValidationError`
+
+Details of a validation check failure.
+
+- `path`: `string`
+- `value`: `any`
+- `error`: `string` (the constraint description or custom message)
+
+#### `type WithModifiers<T, M>`
+
+Applies constraint, format, or transformation tags to properties of type `T` using a path mapping `M`.
+
+- **Generics**:
+  - `T`: The baseline type to wrap.
+  - `M`: A key-value map where keys are dot-separated paths (e.g., `'profile.email'`) and values are tags.
+
+---
+
+### Tags & Modifiers
+
+#### `constraint` Namespace
+
+Used to apply value constraints to types.
+
+| Tag | Description |
+| :--- | :--- |
+| `constraint.MinLength<N, Msg?>` | Restricts string length to $\ge N$. |
+| `constraint.MaxLength<N, Msg?>` | Restricts string length to $\le N$. |
+| `constraint.Length<Min, Max>` | Shorthand for `MinLength<Min> & MaxLength<Max>`. |
+| `constraint.Pattern<Regex, Msg?>` | Validates string using regular expression `Regex`. |
+| `constraint.Minimum<N, Msg?>` | Inclusive minimum value restriction for `number | bigint`. |
+| `constraint.Maximum<N, Msg?>` | Inclusive maximum value restriction for `number | bigint`. |
+| `constraint.Range<Min, Max>` | Shorthand for `Minimum<Min> & Maximum<Max>`. |
+| `constraint.ExclusiveMinimum<N, Msg?>` | Exclusive minimum value restriction for `number | bigint`. |
+| `constraint.ExclusiveMaximum<N, Msg?>` | Exclusive maximum value restriction for `number | bigint`. |
+| `constraint.MultipleOf<N, Msg?>` | Restricts `number | bigint` to multiples of `N`. |
+| `constraint.MinItems<N, Msg?>` | Restricts array length to $\ge N$. |
+| `constraint.MaxItems<N, Msg?>` | Restricts array length to $\le N$. |
+| `constraint.UniqueItems<Msg?>` | Restricts arrays to deeply unique items. |
+| `constraint.Custom<Fn, Msg?>` | Runs a custom validation function: `(val, ctx) => boolean`. |
+| `constraint.Requires<Path | [Paths], Msg?>` | Enforces that other object property paths exist. |
+| `constraint.Message<Msg>` | Fallback custom error message. |
+
+#### `format` Namespace
+
+Standard formats for string primitives.
+
+- `format.Email`: RFC-5322 email.
+- `format.UUID`: UUID (v1-v5).
+- `format.URL`: HTTP/HTTPS/FTP URLs.
+- `format.IPv4` / `format.IPv6`: IP addresses.
+- `format.Date`: ISO date `YYYY-MM-DD`.
+- `format.DateTime`: ISO date-time.
+- `format.ObjectId`: MongoDB 24-character hex ObjectId.
+- `format.Duration`: ISO-8601 duration.
+- `format.Time`: Time string `HH:MM:SS`.
+- `format.Byte`: Base64 string.
+- `format.Password`: Any string (always valid placeholder).
 - `format.Regex`: Valid regular expression string.
-- `format.Hostname`: Valid domain name/hostname.
+- `format.Hostname`: Valid domain name.
 - `format.URI`: Valid URI.
 
-### 3. `transform` Namespace
-Coerce or sanitize values before validation:
+#### `transform` Namespace
 
-- `transform.Trim`: Trims whitespace from both ends of a string.
+Sanitizes and converts input values during validation.
+
+- `transform.Trim`: Trims string whitespace.
 - `transform.LowerCase`: Converts string to lowercase.
 - `transform.UpperCase`: Converts string to uppercase.
-- `transform.Capitalize`: Capitalizes the first letter of a string.
+- `transform.Capitalize`: Capitalizes the first letter.
 - `transform.ToNumber`: Coerces inputs to numbers.
 - `transform.ToBoolean`: Coerces inputs to booleans.
-- `transform.ToDate`: Coerces string timestamp to a Date object.
-- `transform.Custom<Fn>`: Applies a custom mapping function `(val) => any`.
+- `transform.ToDate`: Coerces inputs to Date objects.
+- `transform.Custom<Fn>`: Custom mapping function: `(val) => any`.
 
-### 4. `tag` Namespace
-Define defaults for optional fields:
+#### `tag` Namespace
 
-- `tag.Default<Value>`: Injects the specified `Value` if the property is `undefined` at validation time.
-
-### Assignability & compile-time constants
-
-Constraint tags use **optional** phantom properties (same pattern as `tag.Default`), so plain values assign to tagged types:
-
-```typescript
-const age: number & Minimum<18> = 18; // OK
-const plain: { age: number } = { age: 5 };
-const tagged: { age: number & Minimum<18> } = plain; // OK
-```
-
-When the TypeScript plugin is enabled, **compile-time constants** that violate constraints produce diagnostics:
-
-```typescript
-const tooYoung: number & Minimum<18> = 5;           // Error: does not satisfy Minimum<18>
-const short: string & MinLength<3> = 'ab';           // Error: does not satisfy MinLength<3>
-const empty: string[] & MinItems<1> = [];            // Error: does not satisfy MinItems<1>
-const dupes: number[] & UniqueItems = [1, 1];        // Error: does not satisfy UniqueItems
-```
-
-Non-constants (`number`, variables, function results) are not checked statically — use `is` / `assert` / `validate` at runtime.
-
-#### Example:
-```typescript
-import { MinLength, Minimum, Format, UniqueItems, tag, transform, constraint } from '@webergency-utils/typechecker';
-
-interface Profile {
-  email: string & Format<'email'> & transform.Trim & transform.LowerCase;
-  password: string & MinLength<8>;
-  age: number & Minimum<18> & constraint.Message<"Must be 18+">;
-  luckyNumbers: number[] & UniqueItems;
-  role: string & tag.Default<"user">;
-}
-```
+- `tag.Default<Value>`: Injects `Value` when a property is undefined. Removes the optional modifier (`?`) when resolved with `ResolveDefaults<T>`.
 
 ---
 
-## How it Works
+## Troubleshooting
 
-1. **AST Analysis**: The transformer scans compile-time type signatures and generates highly nested, direct runtime checks.
-2. **Circular References**: Safely handles recursive and circular types by generating self-referencing lazy functions.
-3. **Hoisting & Deduping**: Identical type validations are hoisted to top-level constants and shared, minimizing footprint.
-4. **Clean Emitted JS**: The output compiles into vanilla JS, utilizing direct, blazing-fast validation logic.
+### `validate`, `is`, or `assert` calls return empty results or throw at runtime
+- **Cause**: The compiler transformer did not execute during build.
+- **Diagnostics Check**: Inspect your built `.js` code. If the output still contains `validate<User>(data)` or other generic validation calls as functions, compilation was bypassed.
+- **Fix**:
+  1. Verify `npx ts-patch install` was executed successfully.
+  2. Verify the transformer plugin is registered in `tsconfig.json`.
+  3. Ensure your bundler or compiler CLI compiles using patched `tsc`.
 
 ---
 
-## License
+## Maintenance
 
-MIT © radixxko / [webergency-utils](https://github.com/webergency-utils)
+This package is actively maintained.
+
+Bug reports and pull requests are welcome. Security issues and critical
+regressions are prioritized. New features are considered when they align
+with the package's existing scope.

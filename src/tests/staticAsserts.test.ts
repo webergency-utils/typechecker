@@ -49,7 +49,7 @@ describe( 'Static constraint diagnostics', () =>
         return diags.map( d => String( d.messageText ));
     }
 
-    function expectError( sourceCode: string, ...substrings: string[] ) 
+    function expectError( sourceCode: string, ...substrings: string[]) 
     {
         const diags = diagnosticsFor( sourceCode );
         const msgs = messages( diags );

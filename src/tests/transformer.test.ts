@@ -103,7 +103,8 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).toContain( 'v = "localhost";' );
     });
 
-    it('should transform types with tag.Default boolean initializers', () => {
+    it( 'should transform types with tag.Default boolean initializers', () => 
+    {
         const code = `
             import { validate, tag } from './src/index.js';
             interface Config {

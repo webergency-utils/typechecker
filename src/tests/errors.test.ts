@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { validators, ValidationContext } from '../runtime/validators.js';
+import 
+{ 
+    validators, ValidationContext, toZodIssues, 
+    ZodLikeError, groupErrorsByPath 
+} 
+from '../runtime/validators.js';
 
 describe( 'Error Reporting Unit Tests', () => 
 {
@@ -119,5 +124,95 @@ describe( 'Error Reporting Unit Tests', () =>
         expect( ctx.errors ).toHaveLength( 1 );
         expect( ctx.errors[0].path ).toBe( 'root.info' );
         expect( ctx.errors[0].error ).toBe( 'Type<Object>' );
+    });
+
+    describe( 'toZodIssues & ZodLikeError', () => 
+    {
+        it( 'should map validation errors to zod-like issues', () => 
+        {
+            // Arrange
+            const errors = 
+            [
+                { path : 'user.name', error : 'Type<string>', value : 123 },
+                { path : 'items[0].id', error : 'Type<number>', value : 'abc' }
+            ];
+
+            // Act
+            const issues = toZodIssues( errors );
+
+            // Assert
+            expect( issues ).toHaveLength( 2 );
+
+            const expectedFirst = 
+            {
+                code     : 'custom',
+                path     : ['user', 'name'],
+                message  : 'Type<string>',
+                received : 123
+            };
+
+            const expectedSecond = 
+            {
+                code     : 'custom',
+                path     : ['items', 0, 'id'],
+                message  : 'Type<number>',
+                received : 'abc'
+            };
+
+            expect( issues[0]).toEqual( expectedFirst );
+            expect( issues[1]).toEqual( expectedSecond );
+        });
+
+        it( 'should construct ZodLikeError with zod-like issues', () => 
+        {
+            // Arrange
+            const errors = 
+            [
+                { path : 'user.name', error : 'Type<string>', value : 123 }
+            ];
+
+            // Act
+            const err = new ZodLikeError( errors );
+
+            // Assert
+            expect( err.name ).toBe( 'ZodError' );
+            expect( err.message ).toBe( 'Validation failed' );
+            expect( err.issues ).toHaveLength( 1 );
+            expect( err.issues[0].path ).toEqual(['user', 'name']);
+        });
+    });
+
+    describe( 'groupErrorsByPath', () => 
+    {
+        it( 'should group validation errors by path', () => 
+        {
+            // Arrange
+            const errors = 
+            [
+                { path : 'user.name', error : 'Type<string>', value : 123 },
+                { path : 'user.name', error : 'MinLength<3>', value : 123 },
+                { path : 'user.age', error : 'Type<number>', value : 'abc' }
+            ];
+
+            // Act
+            const grouped = groupErrorsByPath( errors );
+
+            // Assert
+            const expectedGrouped = 
+            {
+                'user.name' : 
+                {
+                    value  : 123,
+                    errors : ['Type<string>', 'MinLength<3>']
+                },
+                'user.age' : 
+                {
+                    value  : 'abc',
+                    errors : ['Type<number>']
+                }
+            };
+
+            expect( grouped ).toEqual( expectedGrouped );
+        });
     });
 });

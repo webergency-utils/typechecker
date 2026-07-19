@@ -7,12 +7,12 @@ describe( 'ResolveDefaults', () =>
     {
         interface TestInterface 
         {
-            a?: string & tag.Default<'a'>;
-            b?: string;
-            c: number;
+            a? : string & tag.Default<'a'>
+            b? : string
+            c  : number
             d: {
-                e?: number & tag.Default<1>;
-            };
+                e? : number & tag.Default<1>
+            }
         }
 
         type Resolved = ResolveDefaults<TestInterface>;
@@ -32,8 +32,8 @@ describe( 'ResolveDefaults', () =>
 
     test( 'allows assigning plain T to T & tag.Default', () => 
     {
-        type AType = { foo: string };
-        type BType = { foo: string & tag.Default<'v'> };
+        type AType = { foo : string };
+        type BType = { foo : string & tag.Default<'v'> };
 
         const aObj: AType = { foo : 'test' };
         const bObj: BType = aObj;
@@ -61,7 +61,7 @@ describe( 'constraint tag assignability', () =>
 
     test( 'allows assigning untagged object shapes into tagged shapes', () => 
     {
-        type Plain = { age: number; name: string };
+        type Plain = { age : number, name : string };
         type Tagged = {
             age  : number & constraint.Minimum<18>
             name : string & constraint.MinLength<3>
