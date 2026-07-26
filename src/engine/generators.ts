@@ -107,7 +107,7 @@ export function createConstrainedPrimitiveCheck( baseType: string, constraints: 
 
         if( c.type === 'multipleOf' ) { return `validators.multipleOf(v, path, ctx, ${valStr}${msgArg})` }
 
-        if( c.type === 'pattern' ) { return `validators.pattern(v, path, ctx, new RegExp(${JSON.stringify( c.value )}), ${JSON.stringify( 'Pattern<' + c.value + '>' )}${msgArg})` }
+        if( c.type === 'pattern' ) { return `validators.pattern(v, path, ctx, validators.safeRegExp(${JSON.stringify( c.value )}), ${JSON.stringify( 'Pattern<' + c.value + '>' )}${msgArg})` }
 
         if( c.type === 'format' ) { return `v = validators.format(v, path, ctx, ${JSON.stringify( c.value )}${msgArg})` }
 
@@ -250,7 +250,7 @@ export function createArrayCheck( elementValidator: ts.Expression, requiredUtils
 export function createTemplateLiteralCheck( regexStr: string, expected: string, requiredUtils: Set<string> ): ts.Expression 
 {
     requiredUtils.add( 'validators' );
-    const tpl = `(v, path, ctx) => validators.templateLiteral(v, path, ctx, new RegExp(${JSON.stringify( regexStr )}), ${JSON.stringify( expected )})`;
+    const tpl = `(v, path, ctx) => validators.templateLiteral(v, path, ctx, validators.safeRegExp(${JSON.stringify( regexStr )}), ${JSON.stringify( expected )})`;
 
     return stripPositions( templateToAst( tpl ));
 }
@@ -296,6 +296,11 @@ export function createObjectCheck( props: any[], requiredUtils: Set<string>, exp
     );
 
     const allowedKeys = props.map( p => ts.factory.createStringLiteral( p.name ));
+    const allowedKeySet = ts.factory.createNewExpression(
+        ts.factory.createIdentifier( 'Set' ),
+        undefined,
+        [ts.factory.createArrayLiteralExpression( allowedKeys )]
+    );
 
     if( indexValidator )
     {
@@ -311,7 +316,7 @@ export function createObjectCheck( props: any[], requiredUtils: Set<string>, exp
         `;
 
         return injectNodes( templateToAst( tpl ), {
-            '__KEYS__'     : ts.factory.createArrayLiteralExpression( allowedKeys ),
+            '__KEYS__'     : allowedKeySet,
             '__EXPECTED__' : ts.factory.createStringLiteral( expected ),
             '__PROPS__'    : ts.factory.createArrayLiteralExpression( propDefinitions, true ),
             '__INDEX__'    : indexValidator
@@ -330,7 +335,7 @@ export function createObjectCheck( props: any[], requiredUtils: Set<string>, exp
     `;
     
     return injectNodes( templateToAst( tpl ), {
-        '__KEYS__'     : ts.factory.createArrayLiteralExpression( allowedKeys ),
+        '__KEYS__'     : allowedKeySet,
         '__EXPECTED__' : ts.factory.createStringLiteral( expected ),
         '__PROPS__'    : ts.factory.createArrayLiteralExpression( propDefinitions, true )
     });
@@ -391,7 +396,7 @@ export function createIntersectionCheck( checks: ts.Expression[], requiredUtils:
         let data = validators.objectShell(v, ctx);
         for (let i = 0; i < checks.length; i++) {
             const val = checks[i](v, path, ctx);
-            if (typeof val === "object" && val !== null && !Array.isArray(val) && typeof data === "object" && data !== null && !Array.isArray(data)) Object.assign(data, val);
+            if (typeof val === "object" && val !== null && !Array.isArray(val) && typeof data === "object" && data !== null && !Array.isArray(data)) validators.assign(data, val);
             else data = val;
         }
         return data;

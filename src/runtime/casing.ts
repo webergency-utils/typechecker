@@ -204,11 +204,34 @@ export function convertPropertyCasing<T, C extends CasingFormat>
     }
 
     const result: any = {};
+    const sourceKeys = new Map<string, string>();
 
     for( const [ key, value ] of Object.entries( obj ))
     {
         const newKey = formatCasing( key, casing, options );
-        result[ newKey ] = convertPropertyCasing( value, casing, options );
+        const previousKey = sourceKeys.get( newKey );
+
+        if( previousKey !== undefined )
+        {
+            throw new Error( `Casing conversion collision: ${previousKey} and ${key} both map to ${newKey}` );
+        }
+
+        sourceKeys.set( newKey, key );
+        const nested = convertPropertyCasing( value, casing, options );
+
+        if( newKey !== '__proto__' && newKey !== 'constructor' && newKey !== 'prototype' )
+        {
+            result[ newKey ] = nested;
+        }
+        else
+        {
+            Object.defineProperty( result, newKey, {
+                value        : nested,
+                enumerable   : true,
+                configurable : true,
+                writable     : true
+            });
+        }
     }
 
     return result;

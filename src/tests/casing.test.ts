@@ -213,4 +213,22 @@ describe( 'Casing Conversion Utilities', () =>
         // When unknown, it normalizes and strips underscores, returning core string without further transformations
         expect( result ).toEqual({ user_id : 1 });
     });
+
+    it( 'should reject key collisions instead of silently discarding data', () =>
+    {
+        expect(() => convertPropertyCasing(
+            { user_id : 1, userId : 2 },
+            'camelCase'
+        )).toThrow( 'Casing conversion collision: user_id and userId both map to userId' );
+    });
+
+    it( 'should preserve __proto__ as an own property without changing the output prototype', () =>
+    {
+        const input = JSON.parse( '{"__proto__":{"isAdmin":true}}' );
+        const result: any = convertPropertyCasing( input, 'camelCase' );
+
+        expect( Object.getPrototypeOf( result )).toBe( Object.prototype );
+        expect( Object.hasOwn( result, '__proto__' )).toBe( true );
+        expect( result.isAdmin ).toBeUndefined();
+    });
 });

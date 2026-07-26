@@ -2,8 +2,11 @@ import ts from 'typescript';
 
 export function hoistRegistrations( sourceFile: ts.SourceFile, cache: Map<string, ts.Expression>, requiredUtils: Set<string>, schemasMap?: Map<string, ts.Expression> ) 
 {
-    if( cache.size === 0 && requiredUtils.size === 0 ) { return sourceFile }
+    const hasSchemas = !!( schemasMap && schemasMap.size > 0 );
 
+    if( cache.size === 0 && requiredUtils.size === 0 && !hasSchemas ) { return sourceFile }
+
+    const declaredNames = collectDeclaredNames( sourceFile.statements );
     const utilityStatements: ts.Statement[] = [
         // 1. import "@webergency-utils/typechecker/runtime";
         ts.factory.createImportDeclaration(
@@ -13,10 +16,11 @@ export function hoistRegistrations( sourceFile: ts.SourceFile, cache: Map<string
             undefined
         )
     ];
+    const utilityNames = new Set<string>();
 
-    if( !hasVariableDeclaration( sourceFile.statements, 'validators' ) &&
-        !hasVariableDeclaration( utilityStatements, 'validators' )) 
+    if( !declaredNames.has( 'validators' ) && !utilityNames.has( 'validators' )) 
     {
+        utilityNames.add( 'validators' );
         utilityStatements.push(
             ts.factory.createVariableStatement(
                 undefined,
@@ -35,9 +39,9 @@ export function hoistRegistrations( sourceFile: ts.SourceFile, cache: Map<string
         );
     }
 
-    if( !hasVariableDeclaration( sourceFile.statements, 'MetadataStore' ) &&
-        !hasVariableDeclaration( utilityStatements, 'MetadataStore' )) 
+    if( !declaredNames.has( 'MetadataStore' ) && !utilityNames.has( 'MetadataStore' )) 
     {
+        utilityNames.add( 'MetadataStore' );
         utilityStatements.push(
             ts.factory.createVariableStatement(
                 undefined,
@@ -58,20 +62,22 @@ export function hoistRegistrations( sourceFile: ts.SourceFile, cache: Map<string
 
     const variablePrepends: ts.Statement[] = [];
     const registrationAppends: ts.Statement[] = [];
+    const prependedNames = new Set<string>( utilityNames );
 
     for( const [hash, expr] of cache.entries()) 
     {
+        const valName = `__val_${hash}`;
+
         // const __val_hash = expr;
-        if( !hasVariableDeclaration( sourceFile.statements, `__val_${hash}` ) &&
-            !hasVariableDeclaration( utilityStatements, `__val_${hash}` ) &&
-            !hasVariableDeclaration( variablePrepends, `__val_${hash}` )) 
+        if( !declaredNames.has( valName ) && !prependedNames.has( valName )) 
         {
+            prependedNames.add( valName );
             variablePrepends.push(
                 ts.factory.createVariableStatement(
                     undefined,
                     ts.factory.createVariableDeclarationList([
                         ts.factory.createVariableDeclaration(
-                            ts.factory.createIdentifier( `__val_${hash}` ),
+                            ts.factory.createIdentifier( valName ),
                             undefined,
                             undefined,
                             expr
@@ -89,7 +95,7 @@ export function hoistRegistrations( sourceFile: ts.SourceFile, cache: Map<string
                     undefined,
                     [
                         ts.factory.createStringLiteral( hash ),
-                        ts.factory.createIdentifier( `__val_${hash}` )
+                        ts.factory.createIdentifier( valName )
                     ]
                 )
             )
@@ -192,23 +198,22 @@ function findInsertionIndex( statements: readonly ts.Statement[]): number
 }
 
 
-function hasVariableDeclaration( statements: readonly ts.Statement[], name: string ): boolean 
+function collectDeclaredNames( statements: readonly ts.Statement[]): Set<string>
 {
+    const names = new Set<string>();
+
     for( const statement of statements ) 
     {
-        if( ts.isVariableStatement( statement )) 
+        if( !ts.isVariableStatement( statement )){ continue }
+
+        for( const decl of statement.declarationList.declarations ) 
         {
-            for( const decl of statement.declarationList.declarations ) 
+            if( ts.isIdentifier( decl.name )) 
             {
-                if( ts.isIdentifier( decl.name ) && decl.name.text === name ) 
-                {
-                    return true;
-                }
+                names.add( decl.name.text );
             }
         }
     }
 
-    return false;
+    return names;
 }
-
-

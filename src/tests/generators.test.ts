@@ -152,7 +152,7 @@ describe( 'generators', () =>
             expect( union ).toContain( 'validators.union' );
             expect( tpl ).toContain( 'validators.templateLiteral' );
             expect( inter ).toContain( 'validators.objectShell' );
-            expect( inter ).toContain( 'Object.assign' );
+            expect( inter ).toContain( 'validators.assign' );
         });
 
         it( 'should emit object checks with and without index signatures', () => 
@@ -179,8 +179,10 @@ describe( 'generators', () =>
 
             // Assert
             expect( closed ).toContain( 'validators.stripExtras' );
+            expect( closed ).toContain( 'new Set(' );
             expect( closed ).toContain( '"Type<Row>"' );
             expect( open ).toContain( 'validators.additionalProps' );
+            expect( open ).toContain( 'new Set(' );
             expect( open ).not.toContain( 'validators.stripExtras' );
         });
     });
@@ -235,6 +237,7 @@ describe( 'generators', () =>
             expect( code ).toContain( 'validators.minLength' );
             expect( code ).toContain( 'too long' );
             expect( code ).toContain( '1n' );
+            expect( code ).toContain( 'validators.safeRegExp' );
             expect( code ).toContain( 'validators.format' );
             expect( code ).toContain( 'validators.custom' );
             expect( code ).toContain( 'validators.requires' );

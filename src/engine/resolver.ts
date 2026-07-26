@@ -209,18 +209,19 @@ export function buildValidator(
     type: ts.Type,
     checker: ts.TypeChecker,
     validatorsMap: Map<string, ts.Expression>,
-    requiredUtils: Set<string>
+    requiredUtils: Set<string>,
+    hash?: string
 ): ts.Expression 
 {
-    const hash = generateHash( type, checker );
+    const resolvedHash = hash ?? generateHash( type, checker );
 
-    if( validatorsMap.has( hash )) 
+    if( validatorsMap.has( resolvedHash )) 
     {
-        return ts.factory.createIdentifier( `__val_${hash}` );
+        return ts.factory.createIdentifier( `__val_${resolvedHash}` );
     }
 
     // Set placeholder to handle circularity
-    validatorsMap.set( hash, ts.factory.createIdentifier( `PENDING_${hash}` ));
+    validatorsMap.set( resolvedHash, ts.factory.createIdentifier( `PENDING_${resolvedHash}` ));
 
     let result: ts.Expression;
     const flags = type.getFlags();
@@ -736,10 +737,10 @@ export function buildValidator(
         }
     }
 
-    validatorsMap.delete( hash );
-    validatorsMap.set( hash, result );
+    validatorsMap.delete( resolvedHash );
+    validatorsMap.set( resolvedHash, result );
 
-    return ts.factory.createIdentifier( `__val_${hash}` );
+    return ts.factory.createIdentifier( `__val_${resolvedHash}` );
 }
 
 function buildStructuralSignature( type: ts.Type, checker: ts.TypeChecker, visited: Set<number> = new Set()): string 
@@ -891,11 +892,19 @@ function buildStructuralSignature( type: ts.Type, checker: ts.TypeChecker, visit
     return 'any';
 }
 
+const hashByType = new WeakMap<object, string>();
+
 export function generateHash( type: ts.Type, checker: ts.TypeChecker ): string 
 {
-    const structuralSig = buildStructuralSignature( type, checker );
+    const cached = hashByType.get( type as object );
 
-    return createHash( 'sha256' ).update( structuralSig ).digest( 'hex' ).substring( 0, 16 );
+    if( cached ){ return cached }
+
+    const structuralSig = buildStructuralSignature( type, checker );
+    const hash = createHash( 'sha256' ).update( structuralSig ).digest( 'hex' ).substring( 0, 16 );
+    hashByType.set( type as object, hash );
+
+    return hash;
 }
 
 export function objectToAst( val: any ): ts.Expression 

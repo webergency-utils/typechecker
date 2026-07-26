@@ -61,7 +61,7 @@ export interface AssertGuardOptions extends GuardOptions {
 
 /** Options for `validate` / `validateSchema`. */
 export interface ValidationOptions extends GuardOptions {
-    /** `true`: always write onto the input. `false` (default): always allocate new containers. */
+    /** `true`: write in place while validating. `false` (default): allocate new containers. */
     mutate?       : boolean
 }
 
@@ -90,6 +90,183 @@ function isPlainObject( v: any ): boolean
     const proto = Object.getPrototypeOf( v );
 
     return proto === Object.prototype || proto === null;
+}
+
+function setOwnProperty( target: any, key: PropertyKey, value: any ): void
+{
+    if( key !== '__proto__' && key !== 'constructor' && key !== 'prototype' )
+    {
+        target[key] = value;
+
+        return;
+    }
+
+    Object.defineProperty( target, key, {
+        value,
+        enumerable   : true,
+        configurable : true,
+        writable     : true
+    });
+}
+
+function assignOwnProperties( target: any, source: any ): void
+{
+    for( const key of Object.keys( source ))
+    {
+        setOwnProperty( target, key, source[key]);
+    }
+}
+
+function keySetHas( keys: string[] | Set<string>, key: string ): boolean
+{
+    return keys instanceof Set ? keys.has( key ) : keys.includes( key );
+}
+
+function commitContainer( target: any, source: any ): boolean
+{
+    if( target === source ){ return true }
+
+    if( Array.isArray( target ) && Array.isArray( source ))
+    {
+        target.length = source.length;
+
+        for( let i = 0; i < source.length; i++ ){ target[i] = source[i] }
+
+        return true;
+    }
+
+    if( target instanceof Set && source instanceof Set )
+    {
+        target.clear();
+
+        for( const value of source ){ target.add( value ) }
+
+        return true;
+    }
+
+    if( target instanceof Map && source instanceof Map )
+    {
+        target.clear();
+
+        for( const [ key, value ] of source ){ target.set( key, value ) }
+
+        return true;
+    }
+
+    if( isPlainObject( target ) && isPlainObject( source ))
+    {
+        for( const key of Object.keys( target ))
+        {
+            if( !Object.hasOwn( source, key )){ delete target[key] }
+        }
+
+        for( const key of Object.keys( source ))
+        {
+            if( !Object.hasOwn( target, key ) || target[key] !== source[key])
+            {
+                setOwnProperty( target, key, source[key]);
+            }
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+const regexSafetyCache = new WeakMap<RegExp, boolean>();
+
+function isSafeRegexSource( source: string ): boolean
+{
+    if( source.length > 1024 || /\\[1-9]/.test( source )){ return false }
+
+    const groups: { hasRepeat : boolean, hasAlternation : boolean }[] = [];
+    let inClass = false;
+    let escaped = false;
+
+    for( let i = 0; i < source.length; i++ )
+    {
+        const ch = source[i];
+
+        if( escaped )
+        {
+            escaped = false;
+            continue;
+        }
+
+        if( ch === '\\' )
+        {
+            escaped = true;
+            continue;
+        }
+
+        if( ch === '[' )
+        {
+            inClass = true;
+            continue;
+        }
+
+        if( ch === ']' && inClass )
+        {
+            inClass = false;
+            continue;
+        }
+
+        if( inClass ){ continue }
+
+        if( ch === '(' )
+        {
+            groups.push({ hasRepeat : false, hasAlternation : false });
+            continue;
+        }
+
+        if( ch === '|' && groups.length > 0 )
+        {
+            groups[groups.length - 1].hasAlternation = true;
+            continue;
+        }
+
+        if( ch === '*' || ch === '+' || ch === '{' )
+        {
+            if( groups.length > 0 ){ groups[groups.length - 1].hasRepeat = true }
+            continue;
+        }
+
+        if( ch === ')' && groups.length > 0 )
+        {
+            const group = groups.pop()!;
+            const next = source[i + 1];
+            const isRepeated = next === '*' || next === '+' || next === '{';
+
+            if( isRepeated && ( group.hasRepeat || group.hasAlternation )){ return false }
+
+            if( isRepeated && groups.length > 0 ){ groups[groups.length - 1].hasRepeat = true }
+        }
+    }
+
+    return true;
+}
+
+function isRegexSafe( regex: RegExp ): boolean
+{
+    const cached = regexSafetyCache.get( regex );
+
+    if( cached !== undefined ){ return cached }
+
+    const safe = isSafeRegexSource( regex.source );
+    regexSafetyCache.set( regex, safe );
+
+    return safe;
+}
+
+function createSafeRegex( source: string, flags?: string ): RegExp
+{
+    if( !isSafeRegexSource( source )){ throw new Error( `Unsafe regular expression: ${source}` ) }
+
+    const regex = flags === undefined ? new RegExp( source ) : new RegExp( source, flags );
+    regexSafetyCache.set( regex, true );
+
+    return regex;
 }
 
 function testRegex( regex: RegExp, value: string ): boolean 
@@ -177,9 +354,13 @@ export function coerceQueryNumber( v: any ): any
 
     if( typeof v === 'string' && v.trim() !== '' )
     {
-        const parsed = parseFloat( v );
+        const normalized = v.trim();
 
-        if( !Number.isNaN( parsed )){ return parsed }
+        if( !/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test( normalized )){ return v }
+
+        const parsed = Number( normalized );
+
+        if( Number.isFinite( parsed )){ return parsed }
     }
 
     return v;
@@ -402,18 +583,39 @@ function isUriTemplate( value: string ): boolean
 
 function parseFormatDate( value: string ): Date | undefined 
 {
-    if( typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test( value )){ return undefined }
+    if( typeof value !== 'string' ){ return undefined }
 
-    const parsed = new Date( value );
+    const match = value.match( /^(\d{4})-(\d{2})-(\d{2})$/ );
 
-    if( Number.isNaN( parsed.getTime())){ return undefined }
+    if( !match ){ return undefined }
+
+    const year = Number( match[1]);
+    const month = Number( match[2]);
+    const day = Number( match[3]);
+    const parsed = new Date( 0 );
+
+    parsed.setUTCHours( 0, 0, 0, 0 );
+    parsed.setUTCFullYear( year, month - 1, day );
+
+    if( parsed.getUTCFullYear() !== year ||
+        parsed.getUTCMonth() !== month - 1 ||
+        parsed.getUTCDate() !== day )
+    {
+        return undefined;
+    }
 
     return parsed;
 }
 
 function parseFormatDateTime( value: string ): Date | undefined 
 {
-    if( typeof value !== 'string' ){ return undefined }
+    if( typeof value !== 'string' ||
+        !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/i.test( value ))
+    {
+        return undefined;
+    }
+
+    if( !parseFormatDate( value.slice( 0, 10 ))){ return undefined }
 
     const parsed = new Date( value );
 
@@ -422,33 +624,267 @@ function parseFormatDateTime( value: string ): Date | undefined
     return parsed;
 }
 
-function stableStringify( value: any, seen: WeakSet<object> = new WeakSet()): string | undefined 
+function deepEqual( left: any, right: any, seen: WeakMap<object, WeakSet<object>> = new WeakMap()): boolean
 {
-    if( value === null || typeof value !== 'object' ) 
+    if( left === right ){ return true }
+
+    if( left === null || right === null || typeof left !== 'object' || typeof right !== 'object' )
     {
-        return JSON.stringify( value );
+        return false;
     }
 
-    if( seen.has( value )) { return undefined }
+    const seenRight = seen.get( left );
 
-    seen.add( value );
+    if( seenRight?.has( right )){ return true }
 
-    if( Array.isArray( value )) 
+    if( seenRight ){ seenRight.add( right ) }
+    else { seen.set( left, new WeakSet([right])) }
+
+    if( Array.isArray( left ) || Array.isArray( right ))
     {
-        const parts = value.map( item => 
+        if( !Array.isArray( left ) || !Array.isArray( right ) || left.length !== right.length ){ return false }
+
+        for( let i = 0; i < left.length; i++ )
         {
-            const s = stableStringify( item, seen );
+            if( !deepEqual( left[i], right[i], seen )){ return false }
+        }
 
-            return s === undefined ? '"[Circular]"' : s;
-        });
-
-        return `[${parts.join( ',' )}]`;
+        return true;
     }
 
-    const keys = Object.keys( value ).sort();
-    const parts = keys.map( key => `${JSON.stringify( key )}:${stableStringify( value[key], seen ) ?? '"[Circular]"'}` );
+    if( left instanceof Date || right instanceof Date )
+    {
+        return left instanceof Date && right instanceof Date && left.getTime() === right.getTime();
+    }
 
-    return `{${parts.join( ',' )}}`;
+    if( left instanceof RegExp || right instanceof RegExp )
+    {
+        return left instanceof RegExp &&
+            right instanceof RegExp &&
+            left.source === right.source &&
+            left.flags === right.flags;
+    }
+
+    if( left instanceof Set || right instanceof Set )
+    {
+        if( !( left instanceof Set ) || !( right instanceof Set ) || left.size !== right.size ){ return false }
+
+        const unmatched = [ ...right ];
+
+        for( const value of left )
+        {
+            const index = unmatched.findIndex( candidate => deepEqual( value, candidate ));
+
+            if( index === -1 ){ return false }
+
+            unmatched.splice( index, 1 );
+        }
+
+        return true;
+    }
+
+    if( left instanceof Map || right instanceof Map )
+    {
+        if( !( left instanceof Map ) || !( right instanceof Map ) || left.size !== right.size ){ return false }
+
+        const unmatched = [ ...right.entries() ];
+
+        for( const [ key, value ] of left )
+        {
+            const index = unmatched.findIndex(([ candidateKey, candidateValue ]) =>
+                deepEqual( key, candidateKey ) && deepEqual( value, candidateValue )
+            );
+
+            if( index === -1 ){ return false }
+
+            unmatched.splice( index, 1 );
+        }
+
+        return true;
+    }
+
+    const leftKeys = Object.keys( left ).sort();
+    const rightKeys = Object.keys( right ).sort();
+
+    if( leftKeys.length !== rightKeys.length ){ return false }
+
+    for( let i = 0; i < leftKeys.length; i++ )
+    {
+        const key = leftKeys[i];
+
+        if( key !== rightKeys[i] || !deepEqual( left[key], right[key], seen )){ return false }
+    }
+
+    return true;
+}
+
+function mixHash( h: number, part: number ): number
+{
+    return Math.imul( h ^ ( part >>> 0 ), 16777619 );
+}
+
+function mixStringHash( h: number, value: string ): number
+{
+    const len = value.length;
+    h = mixHash( h, len );
+
+    // Fast paths for short property names / small strings.
+    if( len === 1 ){ return mixHash( h, value.charCodeAt( 0 )) }
+
+    if( len === 2 )
+    {
+        return mixHash( mixHash( h, value.charCodeAt( 0 )), value.charCodeAt( 1 ));
+    }
+
+    if( len === 3 )
+    {
+        h = mixHash( h, value.charCodeAt( 0 ));
+        h = mixHash( h, value.charCodeAt( 1 ));
+
+        return mixHash( h, value.charCodeAt( 2 ));
+    }
+
+    for( let i = 0; i < len; i++ )
+    {
+        h = mixHash( h, value.charCodeAt( i ));
+    }
+
+    return h;
+}
+
+const uniqueFloat64Buf = new ArrayBuffer( 8 );
+const uniqueFloat64View = new Float64Array( uniqueFloat64Buf );
+const uniqueFloat64Words = new Int32Array( uniqueFloat64Buf );
+
+function mixNumberHash( h: number, value: number ): number
+{
+    if( Object.is( value, -0 )){ return mixHash( h, 0x30000001 ) }
+
+    if( Number.isNaN( value )){ return mixHash( h, 0x30000002 ) }
+
+    if( value === Infinity ){ return mixHash( h, 0x30000003 ) }
+
+    if( value === -Infinity ){ return mixHash( h, 0x30000004 ) }
+
+    uniqueFloat64View[0] = value;
+
+    return mixHash( mixHash( h, uniqueFloat64Words[0]), uniqueFloat64Words[1]);
+}
+
+/**
+ * Order-independent content hash for plain objects / arrays.
+ * Returns `undefined` for cycles and non-plain values (caller uses deepEqual list).
+ * Collisions are resolved with `deepEqual`.
+ */
+function uniqueContentHash( value: any, seen?: WeakSet<object> ): number | undefined
+{
+    if( value === null ){ return 0x10000001 }
+
+    if( value === undefined ){ return 0x10000002 }
+
+    const type = typeof value;
+
+    if( type === 'string' ){ return mixStringHash( 0x20000000, value ) >>> 0 }
+
+    if( type === 'number' ){ return mixNumberHash( 0x30000000, value ) >>> 0 }
+
+    if( type === 'boolean' ){ return value ? 0x40000001 : 0x40000002 }
+
+    if( type === 'bigint' )
+    {
+        // Split into 32-bit limbs — avoids string alloc for common small bigints.
+        let h = 0x50000000;
+        let n = value < 0n ? -value : value;
+
+        if( value < 0n ){ h = mixHash( h, 1 ) }
+
+        while( n > 0n )
+        {
+            h = mixHash( h, Number( n & 0xffffffffn ));
+            n >>= 32n;
+        }
+
+        return h >>> 0;
+    }
+
+    if( type !== 'object' ){ return undefined }
+
+    if( value instanceof Date ){ return mixNumberHash( 0x60000000, value.getTime() ) >>> 0 }
+
+    if( value instanceof RegExp ){ return mixStringHash( 0x70000000, `${value.source}/${value.flags}` ) >>> 0 }
+
+    if( value instanceof Map || value instanceof Set || ArrayBuffer.isView( value ) || value instanceof ArrayBuffer )
+    {
+        return undefined;
+    }
+
+    if( seen?.has( value )){ return undefined }
+
+    if( Array.isArray( value ))
+    {
+        const cycleSet = seen ?? new WeakSet<object>();
+        cycleSet.add( value );
+        let h = mixHash( 0x80000000, value.length );
+
+        for( let i = 0; i < value.length; i++ )
+        {
+            const child = uniqueContentHash( value[i], cycleSet );
+
+            if( child === undefined ){ return undefined }
+
+            h = mixHash( h, child );
+        }
+
+        return h >>> 0;
+    }
+
+    const proto = Object.getPrototypeOf( value );
+
+    if( proto !== Object.prototype && proto !== null ){ return undefined }
+
+    const keys = Object.keys( value );
+    const keyCount = keys.length;
+
+    if( keyCount > 1 )
+    {
+        // Avoid Array#sort when already ordered (common for same-shape rows).
+        let ordered = true;
+
+        for( let i = 1; i < keyCount; i++ )
+        {
+            if( keys[i] < keys[i - 1])
+            {
+                ordered = false;
+                break;
+            }
+        }
+
+        if( !ordered ){ keys.sort() }
+    }
+
+    let cycleSet = seen;
+    let h = mixHash( 0x90000000, keyCount );
+
+    for( let i = 0; i < keyCount; i++ )
+    {
+        const key = keys[i];
+        const childValue = value[key];
+        h = mixStringHash( h, key );
+
+        if( childValue !== null && typeof childValue === 'object' )
+        {
+            cycleSet ??= new WeakSet<object>();
+            cycleSet.add( value );
+        }
+
+        const child = uniqueContentHash( childValue, cycleSet );
+
+        if( child === undefined ){ return undefined }
+
+        h = mixHash( h, child );
+    }
+
+    return h >>> 0;
 }
 
 export const validators = {
@@ -456,6 +892,13 @@ export const validators = {
     coerceQueryBoolean,
     coerceQueryDate,
     coerceJsonDate,
+    safeRegExp : createSafeRegex,
+    assign : ( target: any, source: any ) =>
+    {
+        assignOwnProperties( target, source );
+
+        return target;
+    },
 
     string : ( v: any, path: string, ctx: ValidationContext ) => 
     {
@@ -729,13 +1172,21 @@ export const validators = {
                 return v;
             }
         }
-        const mutate = shouldMutate( ctx );
-        const data = mutate ? v : [];
-
-        for( let i = 0; i < v.length; i++ ) 
+        if( shouldMutate( ctx ))
         {
-            const val = childValidator( v[i], path + '[' + i + ']', ctx );
-            data[i] = val;
+            for( let i = 0; i < v.length; i++ )
+            {
+                v[i] = childValidator( v[i], path + '[' + i + ']', ctx );
+            }
+
+            return v;
+        }
+
+        const data: any[] = [];
+
+        for( let i = 0; i < v.length; i++ )
+        {
+            data[i] = childValidator( v[i], path + '[' + i + ']', ctx );
         }
 
         return data;
@@ -752,7 +1203,7 @@ export const validators = {
 
             if( ctx.success ) 
             {
-                data[key] = result;
+                setOwnProperty( data, key, result );
             }
             else if( isOptional && val === undefined ) 
             {
@@ -773,31 +1224,31 @@ export const validators = {
         return { ...v };
     },
 
-    stripExtras : ( data: any, ctx: ValidationContext, allowedKeys?: string[]) => 
+    stripExtras : ( data: any, ctx: ValidationContext, allowedKeys?: string[] | Set<string>) => 
     {
         if( !shouldMutate( ctx ) || ctx.mode !== 'strip' || !allowedKeys || !data || typeof data !== 'object' ) { return data }
 
         for( const k of Object.keys( data )) 
         {
-            if( !allowedKeys.includes( k )) { delete data[k] }
+            if( !keySetHas( allowedKeys, k )) { delete data[k] }
         }
 
         return data;
     },
 
-    additionalProps : ( v: any, data: any, path: string, ctx: ValidationContext, knownKeys: string[], childValidator: Function ) => 
+    additionalProps : ( v: any, data: any, path: string, ctx: ValidationContext, knownKeys: string[] | Set<string>, childValidator: Function ) => 
     {
         if( !isPlainObject( v )){ return }
 
         for( const key of Object.keys( v )) 
         {
-            if( knownKeys.includes( key )){ continue }
+            if( keySetHas( knownKeys, key )){ continue }
 
-            data[key] = childValidator( v[key], path + '.' + key, ctx );
+            setOwnProperty( data, key, childValidator( v[key], path + '.' + key, ctx ));
         }
     },
 
-    object : ( v: any, path: string, ctx: ValidationContext, allowedKeys?: string[], expected: string = 'Type<Object>' ) => 
+    object : ( v: any, path: string, ctx: ValidationContext, allowedKeys?: string[] | Set<string>, expected: string = 'Type<Object>' ) => 
     {
         if( !isPlainObject( v )) 
         {
@@ -825,7 +1276,7 @@ export const validators = {
         {
             for( const k of Object.keys( v )) 
             {
-                if( !allowedKeys.includes( k )) 
+                if( !keySetHas( allowedKeys, k )) 
                 {
                     report( ctx, path, `PropertyNotAllowed<${k}>`, v[k]);
                 }
@@ -891,7 +1342,19 @@ export const validators = {
     {
         if( typeof v === 'bigint' || typeof n === 'bigint' ) 
         {
-            if( BigInt( v ) % BigInt( n ) !== 0n ) { report( ctx, path, `MultipleOf<${n}>`, v, message ) }
+            try
+            {
+                const divisor = BigInt( n );
+
+                if( divisor === 0n || BigInt( v ) % divisor !== 0n )
+                {
+                    report( ctx, path, `MultipleOf<${n}>`, v, message );
+                }
+            }
+            catch
+            {
+                report( ctx, path, `MultipleOf<${n}>`, v, message );
+            }
         }
         else if( !isMultipleOfNumber( v, n )) 
         {
@@ -903,6 +1366,13 @@ export const validators = {
 
     pattern : ( v: string, path: string, ctx: ValidationContext, regex: RegExp, expected: string, message?: string ) => 
     {
+        if( !isRegexSafe( regex ))
+        {
+            report( ctx, path, 'UnsafePattern', v, message );
+
+            return v;
+        }
+
         if( !testRegex( regex, v )) { report( ctx, path, expected, v, message ) }
 
         return v;
@@ -941,7 +1411,7 @@ export const validators = {
 
             case 'byte': regex = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/; break;
             case 'password': break; // Anything is a password
-            case 'regex': try { new RegExp( v ) }
+            case 'regex': try { createSafeRegex( v ) }
             catch{ isValid = false }; break;
             case 'hostname': isValid = isHostname( v ); break;
             case 'idn-hostname': isValid = isIdnHostname( v ); break;
@@ -979,21 +1449,228 @@ export const validators = {
 
     uniqueItems : ( v: any[], path: string, ctx: ValidationContext, message?: string ) => 
     {
-        const seen = new Set<any>();
+        // Typed scalar sets avoid per-item string encoding (SameValueZero for numbers,
+        // with an explicit -0 flag because Set collapses -0 with 0).
+        let seenStrings: Set<string> | undefined;
+        let seenNumbers: Set<number> | undefined;
+        let seenBigints: Set<bigint> | undefined;
+        let seenDates: Set<number> | undefined;
+        let seenRegex: Set<string> | undefined;
+        let seenNull = false;
+        let seenUndefined = false;
+        let seenTrue = false;
+        let seenFalse = false;
+        let seenNegZero = false;
+        // First item per hash; collision buckets allocated only when a hash repeats.
+        const firstByHash = new Map<number, any>();
+        const collisionBuckets = new Map<number, any[]>();
+        const complex: any[] = [];
 
-        for( let i = 0; i < v.length; i++ ) 
+        for( let i = 0; i < v.length; i++ )
         {
             const item = v[i];
-            const key = typeof item === 'object' && item !== null
-                ? stableStringify( item ) ?? item
-                : item;
 
-            if( seen.has( key )) 
+            if( item === null )
             {
-                report( ctx, path, 'UniqueItems', v, message );
-                break;
+                if( seenNull )
+                {
+                    report( ctx, path, 'UniqueItems', v, message );
+
+                    return v;
+                }
+
+                seenNull = true;
+                continue;
             }
-            seen.add( key );
+
+            if( item === undefined )
+            {
+                if( seenUndefined )
+                {
+                    report( ctx, path, 'UniqueItems', v, message );
+
+                    return v;
+                }
+
+                seenUndefined = true;
+                continue;
+            }
+
+            const type = typeof item;
+
+            if( type === 'string' )
+            {
+                seenStrings ??= new Set();
+
+                if( seenStrings.has( item ))
+                {
+                    report( ctx, path, 'UniqueItems', v, message );
+
+                    return v;
+                }
+
+                seenStrings.add( item );
+                continue;
+            }
+
+            if( type === 'number' )
+            {
+                if( Object.is( item, -0 ))
+                {
+                    if( seenNegZero )
+                    {
+                        report( ctx, path, 'UniqueItems', v, message );
+
+                        return v;
+                    }
+
+                    seenNegZero = true;
+                    continue;
+                }
+
+                seenNumbers ??= new Set();
+
+                if( seenNumbers.has( item ))
+                {
+                    report( ctx, path, 'UniqueItems', v, message );
+
+                    return v;
+                }
+
+                seenNumbers.add( item );
+                continue;
+            }
+
+            if( type === 'boolean' )
+            {
+                if( item )
+                {
+                    if( seenTrue )
+                    {
+                        report( ctx, path, 'UniqueItems', v, message );
+
+                        return v;
+                    }
+
+                    seenTrue = true;
+                }
+                else
+                {
+                    if( seenFalse )
+                    {
+                        report( ctx, path, 'UniqueItems', v, message );
+
+                        return v;
+                    }
+
+                    seenFalse = true;
+                }
+
+                continue;
+            }
+
+            if( type === 'bigint' )
+            {
+                seenBigints ??= new Set();
+
+                if( seenBigints.has( item ))
+                {
+                    report( ctx, path, 'UniqueItems', v, message );
+
+                    return v;
+                }
+
+                seenBigints.add( item );
+                continue;
+            }
+
+            if( type === 'object' )
+            {
+                if( item instanceof Date )
+                {
+                    const time = item.getTime();
+                    seenDates ??= new Set();
+
+                    if( seenDates.has( time ))
+                    {
+                        report( ctx, path, 'UniqueItems', v, message );
+
+                        return v;
+                    }
+
+                    seenDates.add( time );
+                    continue;
+                }
+
+                if( item instanceof RegExp )
+                {
+                    const key = `${item.source}/${item.flags}`;
+                    seenRegex ??= new Set();
+
+                    if( seenRegex.has( key ))
+                    {
+                        report( ctx, path, 'UniqueItems', v, message );
+
+                        return v;
+                    }
+
+                    seenRegex.add( key );
+                    continue;
+                }
+
+                const hash = uniqueContentHash( item );
+
+                if( hash !== undefined )
+                {
+                    const first = firstByHash.get( hash );
+
+                    if( first === undefined )
+                    {
+                        firstByHash.set( hash, item );
+                        continue;
+                    }
+
+                    let bucket = collisionBuckets.get( hash );
+
+                    if( !bucket )
+                    {
+                        if( deepEqual( item, first ))
+                        {
+                            report( ctx, path, 'UniqueItems', v, message );
+
+                            return v;
+                        }
+
+                        collisionBuckets.set( hash, [first, item]);
+                        continue;
+                    }
+
+                    for( let j = 0; j < bucket.length; j++ )
+                    {
+                        if( deepEqual( item, bucket[j]))
+                        {
+                            report( ctx, path, 'UniqueItems', v, message );
+
+                            return v;
+                        }
+                    }
+
+                    bucket.push( item );
+                    continue;
+                }
+            }
+
+            for( let j = 0; j < complex.length; j++ )
+            {
+                if( deepEqual( item, complex[j]))
+                {
+                    report( ctx, path, 'UniqueItems', v, message );
+
+                    return v;
+                }
+            }
+
+            complex.push( item );
         }
 
         return v;
@@ -1013,28 +1690,51 @@ export const validators = {
     union : ( v: any, path: string, ctx: ValidationContext, checks: Function[], expected: string = 'Type<Union>' ) => 
     {
         const unionErrors: IValidationError[] = [];
+        // Speculative arms always use a side tree so a failed arm cannot poison the next.
+        const subCtx: ValidationContext =
+        {
+            success : true,
+            errors  : [],
+            mode    : ctx.mode,
+            from    : undefined,
+            mutate  : false,
+            root    : ctx.root
+        };
+
+        const accept = ( val: any ) =>
+        {
+            if( shouldMutate( ctx ) && commitContainer( v, val )){ return v }
+
+            return val;
+        };
 
         // Pass 1: No conversion
-        for( const check of checks ) 
+        for( const check of checks )
         {
-            const subCtx = { ...ctx, success : true, errors : [], from : undefined };
+            subCtx.success = true;
+            subCtx.errors.length = 0;
+            subCtx.from = undefined;
             const val = check( v, path, subCtx );
 
-            if( subCtx.success ) { return val }
+            if( subCtx.success ){ return accept( val ) }
+
             unionErrors.push( ...subCtx.errors );
         }
 
         // Pass 2: With conversion (only when caller opted in)
-        if( ctx.from ) 
+        if( ctx.from )
         {
             unionErrors.length = 0;
 
-            for( const check of checks ) 
+            for( const check of checks )
             {
-                const subCtx = { ...ctx, success : true, errors : [] };
+                subCtx.success = true;
+                subCtx.errors.length = 0;
+                subCtx.from = ctx.from;
                 const val = check( v, path, subCtx );
 
-                if( subCtx.success ) { return val }
+                if( subCtx.success ){ return accept( val ) }
+
                 unionErrors.push( ...subCtx.errors );
             }
         }
@@ -1076,10 +1776,19 @@ export const validators = {
                 return v;
             }
         }
-        const mutate = shouldMutate( ctx );
-        const data = mutate ? v : [];
+        if( shouldMutate( ctx ))
+        {
+            for( let i = 0; i < checks.length; i++ )
+            {
+                v[i] = checks[i]( v[i], path + '[' + i + ']', ctx );
+            }
 
-        for( let i = 0; i < checks.length; i++ ) 
+            return v;
+        }
+
+        const data: any[] = [];
+
+        for( let i = 0; i < checks.length; i++ )
         {
             data[i] = checks[i]( v[i], path + '[' + i + ']', ctx );
         }
@@ -1180,7 +1889,7 @@ export const validators = {
 
         for( const key of Object.keys( v )) 
         {
-            data[key] = childValidator( v[key], path + '.' + key, ctx );
+            setOwnProperty( data, key, childValidator( v[key], path + '.' + key, ctx ));
         }
 
         return data;
@@ -1217,14 +1926,25 @@ export const validators = {
                 return v;
             }
         }
-        const mutate = shouldMutate( ctx );
         const source = [...v];
-
-        if( mutate ) { v.clear() }
-        const data = mutate ? v : new Set();
         let index = 0;
 
-        for( const item of source ) 
+        if( shouldMutate( ctx ))
+        {
+            v.clear();
+
+            for( const item of source )
+            {
+                v.add( childValidator( item, `${path}[${index}]`, ctx ));
+                index++;
+            }
+
+            return v;
+        }
+
+        const data = new Set();
+
+        for( const item of source )
         {
             data.add( childValidator( item, `${path}[${index}]`, ctx ));
             index++;
@@ -1260,13 +1980,26 @@ export const validators = {
                 return v;
             }
         }
-        const mutate = shouldMutate( ctx );
+
         const source = [...v.entries()];
 
-        if( mutate ) { v.clear() }
-        const data = mutate ? v : new Map();
+        if( shouldMutate( ctx ))
+        {
+            v.clear();
 
-        for( const [key, val] of source ) 
+            for( const [key, val] of source )
+            {
+                const validatedKey = keyValidator( key, `${path}.key(${JSON.stringify( key )})`, ctx );
+                const validatedVal = valueValidator( val, `${path}[${JSON.stringify( key )}]`, ctx );
+                v.set( validatedKey, validatedVal );
+            }
+
+            return v;
+        }
+
+        const data = new Map();
+
+        for( const [key, val] of source )
         {
             const validatedKey = keyValidator( key, `${path}.key(${JSON.stringify( key )})`, ctx );
             const validatedVal = valueValidator( val, `${path}[${JSON.stringify( key )}]`, ctx );
@@ -1444,9 +2177,11 @@ export class MetadataStoreClass
 
     getOrCompileSchema( schema: any ): Function 
     {
-        if( typeof schema !== 'object' || schema === null ) 
+        if( typeof schema === 'boolean' ){ return compileSchema( schema ) }
+
+        if( typeof schema !== 'object' || schema === null )
         {
-            throw new Error( 'Invalid JSON Schema: must be a non-null object' );
+            throw new Error( 'Invalid JSON Schema: must be a non-null object or boolean' );
         }
         let compiled = this.compiledSchemas.get( schema );
 
@@ -1464,14 +2199,15 @@ export class MetadataStoreClass
         const opt = options;
         const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
         const from = typeof opt === 'object' ? opt?.from : undefined;
-        // Always mutate — no returned data. Root must stay the same binding (res === value).
         const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate : true, root : value };
         const res = validator( value, '', ctx );
 
         if( !ctx.success ){ return false }
 
-        // Primitive / replaced roots cannot update the caller's binding — treat as not matching.
-        return res === value;
+        if( res === value ){ return true }
+
+        // Fallback when a branch returned a side tree (e.g. union) that still needs copying.
+        return commitContainer( value, res );
     }
 
     assert( validator: Function, value: any, options?: ValidationMode | AssertOptions ): any 
@@ -1492,6 +2228,13 @@ export class MetadataStoreClass
             throw new Error( 'Validation Error: ' + ctx.errors.map( e => e.path ? `${e.path}: ${e.error}` : e.error ).join( ', ' ));
         }
 
+        if( mutate )
+        {
+            if( res === value || commitContainer( value, res )){ return value }
+
+            return res;
+        }
+
         return res;
     }
 
@@ -1500,11 +2243,10 @@ export class MetadataStoreClass
         const opt = options;
         const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
         const from = typeof opt === 'object' ? opt?.from : undefined;
-        // Always mutate — no returned data. Root must stay the same binding (res === value).
         const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate : true, root : value };
         const res = validator( value, '', ctx );
 
-        if( ctx.success && res === value ){ return }
+        if( ctx.success && ( res === value || commitContainer( value, res ))){ return }
 
         // Root was replaced (e.g. primitive coerce) — binding unchanged; report a normal type failure.
         if( ctx.success && res !== value ) 
@@ -1513,6 +2255,11 @@ export class MetadataStoreClass
             ctx.errors.length = 0;
             ctx.from = undefined;
             validator( value, '', ctx );
+
+            if( ctx.success )
+            {
+                report( ctx, '', 'RootNotRewritable', value );
+            }
         }
 
         if( typeof opt === 'object' && opt?.errorFactory ) 
@@ -1522,7 +2269,7 @@ export class MetadataStoreClass
         throw new Error( 'Validation Error: ' + ctx.errors.map( e => e.path ? `${e.path}: ${e.error}` : e.error ).join( ', ' ));
     }
 
-    validate( validator: Function, value: any, options?: ValidationMode | ValidationOptions ): { success : boolean, errors : IValidationError[], data : any } 
+    validate( validator: Function, value: any, options?: ValidationMode | ValidationOptions ): { success : boolean, errors : IValidationError[], data? : any }
     {
         const opt = options;
         const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
@@ -1531,21 +2278,33 @@ export class MetadataStoreClass
         const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate, root : value };
         const res = validator( value, '', ctx );
 
-        return { success : ctx.success, errors : ctx.errors, data : res };
+        if( !ctx.success ){ return { success : false, errors : ctx.errors } }
+
+        if( mutate )
+        {
+            if( res === value || commitContainer( value, res ))
+            {
+                return { success : true, errors : [], data : value };
+            }
+
+            return { success : true, errors : [], data : res };
+        }
+
+        return { success : true, errors : [], data : res };
     }
 }
 
 export function groupErrorsByPath( errors: IValidationError[]): Record<string, { value : any, errors : string[] }> 
 {
-    const grouped: Record<string, { value : any, errors : string[] }> = {};
+    const grouped: Record<string, { value : any, errors : string[] }> = Object.create( null );
 
     const visit = ( list: IValidationError[]) => 
     {
         for( const err of list ) 
         {
-            if( !grouped[err.path]) 
+            if( !Object.hasOwn( grouped, err.path ))
             {
-                grouped[err.path] = { value : err.value, errors : [] };
+                setOwnProperty( grouped, err.path, { value : err.value, errors : [] });
             }
 
             if( !grouped[err.path].errors.includes( err.error )) 
@@ -1564,6 +2323,27 @@ export function groupErrorsByPath( errors: IValidationError[]): Record<string, {
 
 export const MetadataStore = new MetadataStoreClass();
 
+const UNSUPPORTED_SCHEMA_KEYWORDS =
+[
+    'enum',
+    'oneOf',
+    'not',
+    'if',
+    'then',
+    'else',
+    'patternProperties',
+    'propertyNames',
+    'dependencies',
+    'dependentRequired',
+    'dependentSchemas',
+    'contains',
+    'minContains',
+    'maxContains',
+    'prefixItems',
+    'unevaluatedProperties',
+    'unevaluatedItems'
+];
+
 export function compileSchema( schema: any ): ( v: any, path: string, ctx: any ) => any 
 {
     const rootDefs = schema.$defs || schema.definitions || {};
@@ -1571,9 +2351,43 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
 
     function build( subSchema: any ): ( v: any, path: string, ctx: any ) => any 
     {
-        if( !subSchema || typeof subSchema !== 'object' ) 
+        if( subSchema === true || subSchema === undefined )
         {
             return ( v ) => v;
+        }
+
+        if( subSchema === false )
+        {
+            return ( v, path, ctx ) =>
+            {
+                report( ctx, path, 'Schema<false>', v );
+
+                return v;
+            };
+        }
+
+        if( !subSchema || typeof subSchema !== 'object' )
+        {
+            throw new Error( 'Invalid JSON Schema: subschemas must be objects or booleans' );
+        }
+
+        for( const keyword of UNSUPPORTED_SCHEMA_KEYWORDS )
+        {
+            if( keyword in subSchema )
+            {
+                throw new Error( `Unsupported JSON Schema keyword: ${keyword}` );
+            }
+        }
+
+        if( Array.isArray( subSchema.type ))
+        {
+            throw new Error( 'Unsupported JSON Schema keyword: type arrays' );
+        }
+
+        if( typeof subSchema.type === 'string' &&
+            !['string', 'number', 'integer', 'boolean', 'null', 'array', 'object'].includes( subSchema.type ))
+        {
+            throw new Error( `Unsupported JSON Schema type: ${subSchema.type}` );
         }
 
         if( subSchema.$ref ) 
@@ -1676,34 +2490,109 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
             };
         }
 
+        if( 'x-typescript-type' in subSchema )
+        {
+            throw new Error( `Unsupported x-typescript-type: ${subSchema['x-typescript-type']}` );
+        }
+
         if( subSchema.allOf ) 
         {
             const checks = subSchema.allOf.map(( s: any ) => build( s ));
+            const mergeKeys = subSchema.allOf.map(( s: any ) =>
+            {
+                if( s?.type !== 'object' ||
+                    ( 'additionalProperties' in s && s.additionalProperties !== false ))
+                {
+                    return undefined;
+                }
+
+                return new Set<string>( Object.keys( s.properties || {}));
+            });
+            const allObjectSchemas = subSchema.allOf.length > 0 &&
+                subSchema.allOf.every(( s: any ) => s?.type === 'object' );
+            const allowsAdditional = !allObjectSchemas ||
+                subSchema.allOf.some(( s: any ) =>
+                    'additionalProperties' in s && s.additionalProperties !== false
+                );
+            const combinedKeys = allowsAdditional
+                ? undefined
+                : new Set<string>( subSchema.allOf.flatMap(( s: any ) => Object.keys( s.properties || {})));
 
             return ( v, path, ctx ) => 
             {
-                const prevMode = ctx.mode;
-
-                if( ctx.mode !== 'strip' ){ ctx.mode = 'relaxed' }
-                let data = validators.objectShell( v, ctx );
-
-                for( const check of checks ) 
+                const errors: IValidationError[] = [];
+                let data: any = undefined;
+                const subCtx: ValidationContext =
                 {
-                    const val = check( v, path, ctx );
+                    success : true,
+                    errors  : [],
+                    mode    : 'relaxed',
+                    from    : ctx.from,
+                    mutate  : false,
+                    root    : ctx.root
+                };
 
-                    if( isPlainObject( val ) && isPlainObject( data )) 
+                for( let i = 0; i < checks.length; i++ )
+                {
+                    const check = checks[i];
+                    subCtx.success = true;
+                    subCtx.errors.length = 0;
+                    subCtx.from = ctx.from;
+                    subCtx.root = ctx.root;
+                    const val = check( v, path, subCtx );
+
+                    errors.push( ...subCtx.errors );
+
+                    if( data === undefined )
                     {
-                        Object.assign( data, val );
+                        data = isPlainObject( val ) ? {} : val;
                     }
-                    else 
+
+                    if( isPlainObject( val ) && isPlainObject( data ))
+                    {
+                        const keys = mergeKeys[i] || new Set( Object.keys( val ));
+
+                        for( const key of keys )
+                        {
+                            if( Object.hasOwn( val, key )){ setOwnProperty( data, key, val[key]) }
+                        }
+                    }
+                    else if( data !== val )
                     {
                         data = val;
                     }
                 }
 
-                ctx.mode = prevMode;
+                if( errors.length > 0 )
+                {
+                    ctx.success = false;
+                    ctx.errors.push( ...errors );
 
-                return data;
+                    return v;
+                }
+
+                if( combinedKeys && isPlainObject( v ) && isPlainObject( data ))
+                {
+                    for( const key of Object.keys( v ))
+                    {
+                        if( combinedKeys.has( key )){ continue }
+
+                        if( ctx.mode === 'strict' )
+                        {
+                            report( ctx, path, `PropertyNotAllowed<${key}>`, v[key]);
+                        }
+                        else if( ctx.mode === 'strip' )
+                        {
+                            delete data[key];
+                        }
+                    }
+                }
+
+                if( !ctx.success ){ return v }
+
+                if( shouldMutate( ctx ) && commitContainer( v, data )){ return v }
+
+                return data === undefined ? v : data;
             };
         }
 
@@ -1711,7 +2600,7 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
         {
             const minLength = subSchema.minLength;
             const maxLength = subSchema.maxLength;
-            const pattern = subSchema.pattern ? new RegExp( subSchema.pattern ) : undefined;
+            const pattern = subSchema.pattern ? createSafeRegex( subSchema.pattern ) : undefined;
             const patternStr = subSchema.pattern;
             const format = subSchema.format;
 
@@ -1829,7 +2718,7 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
                 return [key, isOptional, check] as [string, boolean, any];
             });
 
-            const knownKeys = Object.keys( subSchema.properties || {});
+            const knownKeys = new Set<string>( Object.keys( subSchema.properties || {}));
             const additional = 'additionalProperties' in subSchema
                 ? subSchema.additionalProperties
                 : false;

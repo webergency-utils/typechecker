@@ -224,6 +224,10 @@ Generates a raw JSON Schema draft-07 object matching type `T` at compile time.
 
 Validates `input` against a **runtime JSON Schema** value (not a TypeScript generic).
 
+Only the documented schema subset is compiled. Recognized validation keywords that are not implemented
+(for example `enum`, `oneOf`, and `not`) throw during schema compilation instead of silently accepting data.
+Schema `pattern` values are rejected when they exceed the safety limit or contain common catastrophic-backtracking constructs.
+
 - **Parameters**:
   - `schema`: JSON Schema object.
   - `input`: The value to validate.
@@ -252,6 +256,8 @@ Like `assertGuard`, but against a JSON Schema value. Root replacement throws.
 #### `convertPropertyCasing<T, C extends CasingFormat>(obj: T, casing: C, options?: ConvertCasingOptions): ConvertPropertyCasing<T, C>`
 
 Recursively converts all property keys of an object to the specified casing format.
+If two source keys normalize to the same output key, conversion throws instead of silently discarding a value.
+Special keys such as `__proto__` are preserved as own data properties without changing the result prototype.
 
 - **Parameters**:
   - `obj`: The source object.
@@ -339,7 +345,7 @@ Extends `GuardOptions` for `validate` / `validateSchema` (adds `mutate`; no `err
 | :--- | :--- | :--- | :--- |
 | `mode` | `ValidationMode` | `'strict'` | Unknown-key policy (`strict` / `relaxed` / `strip`). Not coercion — see `ValidationMode` above. |
 | `from` | `'json' \| 'query' \| ((val, ctx) => any)` | `undefined` | Input conversion mode. `'json'` revives JSON-impossible types. `'query'` also coerces querystring shapes. A custom function is `(val, { key, path, parent, root, index?, kind }) => any` and runs only on type mismatch. `kind` is a `CoercionKind` dispatch tag (not `typeof` / a TS type). `key` is the nearest named path segment (for `[n]` leaves, the closest named key above). |
-| `mutate` | `boolean` | `false` | `true`: always write onto the input. `false`: always allocate new containers. |
+| `mutate` | `boolean` | `false` | `true`: write in place while validating (half-changed input on failure is allowed; union arms still use a side tree). `false`: always allocate new containers. |
 
 #### `interface AssertOptions`
 
@@ -360,7 +366,7 @@ Extends `ValidationOptions` for `assert` / `assertSchema`.
 Result object returned by `validate`.
 
 - `success`: `boolean`
-- `data?`: `T`
+- `data?`: `T` — present only when `success` is `true`
 - `errors?`: `IValidationError[]`
 
 #### `interface IValidationError`
@@ -443,7 +449,7 @@ Sanitizes and converts input values during validation.
 - `transform.LowerCase`: Converts string to lowercase.
 - `transform.UpperCase`: Converts string to uppercase.
 - `transform.Capitalize`: Capitalizes the first letter.
-- `transform.ToNumber`: Same coercion as `from: 'query'` for numbers (non-empty numeric strings → `parseFloat`).
+- `transform.ToNumber`: Same coercion as `from: 'query'` for numbers. The entire trimmed string must be a finite decimal/scientific number; partial strings, hexadecimal syntax, `NaN`, and infinities are rejected.
 - `transform.ToBoolean`: Same coercion as `from: 'query'` for booleans (`true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`); unknown values are left unchanged and fail the boolean check.
 - `transform.ToDate`: Same coercion as `from: 'query'` for dates (parseable strings and finite timestamps).
 - `transform.Custom<Fn>`: Custom mapping function: `(val) => any`.

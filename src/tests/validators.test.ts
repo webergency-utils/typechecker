@@ -654,13 +654,14 @@ describe( 'Validators', () =>
             ctx.success = true;
             ctx.errors = [];
             expect( validators.format( '2024-02-31', 'path', ctx, 'date' )).toBe( '2024-02-31' );
-            expect( ctx.success ).toBe( true );
+            expect( ctx.success ).toBe( false );
 
+            ctx.success = true;
+            ctx.errors = [];
             ctx.from = 'query';
             const overflow = validators.format( '2024-02-31', 'path', ctx, 'date' );
-            expect( ctx.success ).toBe( true );
-            expect( overflow ).toBeInstanceOf( Date );
-            expect( Number.isNaN(( overflow as Date ).getTime())).toBe( false );
+            expect( ctx.success ).toBe( false );
+            expect( overflow ).toBe( '2024-02-31' );
             delete ctx.from;
 
             ctx.success = true;
@@ -702,6 +703,16 @@ describe( 'Validators', () =>
             ctx.success = true;
             ctx.errors = [];
             validators.uniqueItems([{ a : 1, b : 2 }, { b : 2, a : 1 }], 'path', ctx );
+            expect( ctx.success ).toBe( false );
+
+            ctx.success = true;
+            ctx.errors = [];
+            expect( validators.uniqueItems([0, -0], 'path', ctx )).toEqual([0, -0]);
+            expect( ctx.success ).toBe( true );
+
+            ctx.success = true;
+            ctx.errors = [];
+            validators.uniqueItems([Number.NaN, Number.NaN], 'path', ctx );
             expect( ctx.success ).toBe( false );
         });
 
@@ -1088,7 +1099,7 @@ describe( 'Validators', () =>
             expect( result.extra ).toBeUndefined();
         });
 
-        it( 'should fallback to identity validator for empty or unknown schema types', () => 
+        it( 'should treat an empty schema as accepting any value', () =>
         {
             const schema = {};
             const validateFn = MetadataStore.getOrCompileSchema( schema );
@@ -1097,9 +1108,12 @@ describe( 'Validators', () =>
 
             expect( ctx.success ).toBe( true );
             expect( result ).toBe( 'anything goes' );
+            expect(() => MetadataStore.getOrCompileSchema({ type : 'unknown' })).toThrow(
+                'Unsupported JSON Schema type: unknown'
+            );
         });
 
-        it( 'should compile null or non-object subschema as identity', () => 
+        it( 'should reject malformed non-object subschemas', () =>
         {
             const schema = 
             {
@@ -1110,10 +1124,9 @@ describe( 'Validators', () =>
                 }
             };
 
-            const validateFn = MetadataStore.getOrCompileSchema( schema );
-            const result = validateFn({ name : 'hello' }, 'path', ctx );
-
-            expect( result ).toEqual({ name : 'hello' });
+            expect(() => MetadataStore.getOrCompileSchema( schema )).toThrow(
+                'Invalid JSON Schema: subschemas must be objects or booleans'
+            );
         });
 
         it( 'should throw when ref targets a non-existent definition', () => 
@@ -1293,7 +1306,7 @@ describe( 'Validators', () =>
             const resFail = MetadataStore.validate( dummyVal, 'world', { mode : 'strict', from : 'query' } );
 
             expect( resFail.success ).toBe( false );
-            expect( resFail.data ).toBe( 'world' );
+            expect( resFail.data ).toBeUndefined();
             expect( resFail.errors ).toHaveLength( 1 );
             expect( resFail.errors[0]).toEqual({ path : '', error : 'not_hello', value : 'world' });
         });

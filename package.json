@@ -1,6 +1,6 @@
 {
   "name": "@webergency-utils/typechecker",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "type": "module",
   "description": "TypeScript compiler plugin for runtime validation",
   "author": "radixxko",
@@ -42,6 +42,7 @@
   "scripts": {
     "lint": "eslint .",
     "test": "vitest run",
+    "bench": "npm run build && node scripts/perf-microbench.mjs",
     "fuzz": "npm run build:fuzz && jazzer fuzz_typechecker.cjs",
     "coverage": "vitest run --coverage",
     "clean": "rm -rf ./dist ./dist-fuzz",

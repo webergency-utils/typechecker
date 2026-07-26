@@ -64,6 +64,51 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).toContain( 'mutate: true' );
     });
 
+    it( 'should transform aliased helper imports', () =>
+    {
+        const code = `
+            import { validate as check, validateSchema as checkSchema } from '../index.js';
+            const value = check<number>(123);
+            const schemaValue = checkSchema({ type: 'number' }, 123);
+        `;
+        const compiled = compileAndTransform( code );
+
+        expect( compiled ).toContain( 'MetadataStore.getValidator(' );
+        expect( compiled ).toContain( 'MetadataStore.getOrCompileSchema(' );
+        expect( compiled ).not.toContain( 'check<number>' );
+        expect( compiled ).not.toContain( 'checkSchema(' );
+    });
+
+    it( 'should transform namespace helper imports', () =>
+    {
+        const code = `
+            import * as typechecker from '../index.js';
+            const value = typechecker.validate<number>(123);
+            const schemaValue = typechecker.validateSchema({ type: 'number' }, 123);
+        `;
+        const compiled = compileAndTransform( code );
+
+        expect( compiled ).toContain( 'MetadataStore.getValidator(' );
+        expect( compiled ).toContain( 'MetadataStore.getOrCompileSchema(' );
+        expect( compiled ).not.toContain( 'typechecker.validate<number>' );
+        expect( compiled ).not.toContain( 'typechecker.validateSchema(' );
+    });
+
+    it( 'should not transform helpers imported from unrelated modules', () =>
+    {
+        const code = `
+            import { validate } from 'unrelated-validator';
+            import * as other from 'other-library';
+            const direct = validate<number>(123);
+            const namespaced = other.validate<number>(123);
+        `;
+        const compiled = compileAndTransform( code );
+
+        expect( compiled ).toContain( 'validate<number>(123)' );
+        expect( compiled ).toContain( 'other.validate<number>(123)' );
+        expect( compiled ).not.toContain( 'MetadataStore' );
+    });
+
     it( 'should transform types with constraint and format namespace constraints and custom validations', () => 
     {
         const code = `
@@ -166,12 +211,27 @@ describe( 'Transformer Call Expression Replacements', () =>
         const compiled = compileAndTransform( code );
         expect( compiled ).toContain( 'MetadataStore.registerSchema' );
         expect( compiled ).toContain( 'MetadataStore.getSchema' );
+        expect( compiled ).not.toContain( 'MetadataStore.registerValidator' );
         expect( compiled ).toContain( '"type": "object"' );
         expect( compiled ).toContain( '"email"' );
         expect( compiled ).toContain( '"age"' );
         expect( compiled ).toContain( '"minimum": 18' );
         expect( compiled ).toContain( '"maximum": 99' );
         expect( compiled ).toContain( '"type": "boolean"' );
+    });
+
+    it( 'should register validators without schemas for validate helpers', () =>
+    {
+        const code = `
+            import { validate } from '../index.js';
+            interface Row { id: number; name: string }
+            const res = validate<Row>({ id: 1, name: 'a' });
+        `;
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'MetadataStore.registerValidator' );
+        expect( compiled ).toContain( 'MetadataStore.getValidator' );
+        expect( compiled ).not.toContain( 'MetadataStore.registerSchema' );
+        expect( compiled ).toContain( 'new Set(' );
     });
 
     it( 'should handle deeply nested, circular, and highly complex types in jsonSchema', () => 
@@ -482,22 +542,24 @@ describe( 'Transformer Call Expression Replacements', () =>
     it( 'should transform requires uniqueItems and array length constraints', () => 
     {
         const code = `
-            import { validate, constraint } from './src/index.js';
+            import { validate, jsonSchema, constraint } from './src/index.js';
             interface User {
                 password: string;
                 email: string & constraint.Requires<'.password'>;
                 tags: string[] & constraint.MinItems<1> & constraint.MaxItems<3> & constraint.UniqueItems;
             }
             const res = validate<User>({ password: 'x', email: 'a@b.co', tags: ['a'] });
+            const schema = jsonSchema<User>();
         `;
         const compiled = compileAndTransform( code );
 
-        // Requires currently lands on the registered JSON schema; array bounds emit both schema + runtime helpers when extracted
+        expect( compiled ).toMatch( /validators\.(minItems|maxItems|uniqueItems)/ );
+        expect( compiled ).toContain( 'MetadataStore.registerValidator' );
+        expect( compiled ).toContain( 'MetadataStore.registerSchema' );
         expect( compiled ).toContain( '"requires": ".password"' );
         expect( compiled ).toContain( '"minItems": 1' );
         expect( compiled ).toContain( '"maxItems": 3' );
         expect( compiled ).toContain( '"uniqueItems": true' );
-        expect( compiled ).toMatch( /validators\.(minItems|maxItems|uniqueItems)/ );
     });
 });
 
