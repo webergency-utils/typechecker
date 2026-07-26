@@ -7,8 +7,14 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
-      include: ['src/runtime/**/*.ts'],
-      exclude: ['**/*.test.ts', 'src/runtime/tags.ts']
+      include: [
+        'src/runtime/**/*.ts',
+        'src/engine/**/*.ts',
+        'src/transformer.ts',
+        'src/plugin.ts',
+        'src/index.ts'
+      ],
+      exclude: ['**/*.test.ts', 'src/runtime/tags.ts', 'src/runtime/tags/**']
     }
   }
 });
