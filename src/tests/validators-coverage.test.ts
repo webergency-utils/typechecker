@@ -263,23 +263,23 @@ describe( 'validators coverage edges', () =>
         it( 'should revive number bigint boolean regexp null undefined and literal', () => 
         {
             // Arrange
-            ctx.from = ( _key, value, type ) => 
+            ctx.from = ( _value, c ) => 
             {
-                if( type === 'number' ){ return 7 }
+                if( c.kind === 'number' ){ return 7 }
 
-                if( type === 'bigint' ){ return 9n }
+                if( c.kind === 'bigint' ){ return 9n }
 
-                if( type === 'boolean' ){ return true }
+                if( c.kind === 'boolean' ){ return true }
 
-                if( type === 'RegExp' ){ return /ok/ }
+                if( c.kind === 'RegExp' ){ return /ok/ }
 
-                if( type === 'null' ){ return null }
+                if( c.kind === 'null' ){ return null }
 
-                if( type === 'undefined' ){ return undefined }
+                if( c.kind === 'undefined' ){ return undefined }
 
-                if( type === 'literal' ){ return 'fixed' }
+                if( c.kind === 'literal' ){ return 'fixed' }
 
-                return value;
+                return _value;
             };
 
             // Act / Assert

@@ -1,5 +1,12 @@
 import { ResolveDefaults } from './runtime/tags.js';
-import type { IValidationError } from './runtime/validators.js';
+import type {
+    IValidationError,
+    ValidationMode,
+    GuardOptions,
+    AssertGuardOptions,
+    ValidationOptions,
+    AssertOptions
+} from './runtime/validators.js';
 
 export interface IValidation<T> {
     success : boolean
@@ -7,39 +14,23 @@ export interface IValidation<T> {
     errors? : IValidationError[]
 }
 
-export type ValidationMode = 'strict' | 'relaxed' | 'strip';
-
-export interface ValidationOptions {
-    mode?         : ValidationMode
-    from?         : 'json' | 'query' | (( key: string, value: any, type:
-        | 'string' | 'number' | 'boolean' | 'bigint' | 'function' | 'symbol' | 'never'
-        | 'Date' | 'RegExp' | 'Set' | 'Map' | 'Array' | 'Object' | 'instance'
-        | 'null' | 'undefined' | 'tuple' | 'literal'
-    ) => any )
-    wrapArrays?   : boolean
-    /** When true, write validated/coerced values onto the input. Default false: always return new containers. */
-    mutate?       : boolean
-    schema?       : any
-    errorFactory? : ( errors: any[]) => Error
-}
-
 const TRANSFORMER_MISSING =
     'Typechecker transformer was not applied. Register { "transform": "@webergency-utils/typechecker/transformer" } in tsconfig plugins (requires ts-patch).';
 
-/** Returns whether `input` already matches `T`. Does not coerce; `from` is ignored. */
-export function is<T>( _input: unknown, _options?: ValidationMode | ValidationOptions ): _input is ResolveDefaults<T>
+/** Type guard for `T`. Mutates in place; root-level coercion that replaces the value fails the guard. */
+export function is<T>( _input: unknown, _options?: ValidationMode | GuardOptions ): _input is ResolveDefaults<T>
 {
     throw new Error( TRANSFORMER_MISSING );
 }
 
 /** Validates and returns the (possibly coerced) value. Use `from` when conversion is needed. */
-export function assert<T>( _input: unknown, _options?: ValidationMode | ValidationOptions ): ResolveDefaults<T>
+export function assert<T>( _input: unknown, _options?: ValidationMode | AssertOptions ): ResolveDefaults<T>
 {
     throw new Error( TRANSFORMER_MISSING );
 }
 
-/** Asserts `input` already matches `T`. Does not coerce; `from` is ignored. */
-export function assertGuard<T>( _input: unknown, _options?: ValidationMode | ValidationOptions ): asserts _input is ResolveDefaults<T>
+/** Asserts `input` is `T`. Mutates in place; root-level coercion that replaces the value throws. */
+export function assertGuard<T>( _input: unknown, _options?: ValidationMode | AssertGuardOptions ): asserts _input is ResolveDefaults<T>
 {
     throw new Error( TRANSFORMER_MISSING );
 }
@@ -50,6 +41,30 @@ export function validate<T>( _input: unknown, _options?: ValidationMode | Valida
 }
 
 export function jsonSchema<T>(): any
+{
+    throw new Error( TRANSFORMER_MISSING );
+}
+
+/** Schema type-predicate. Mutates in place; root-level coercion that replaces the value fails. */
+export function isSchema( _schema: any, _input: unknown, _options?: ValidationMode | GuardOptions ): boolean
+{
+    throw new Error( TRANSFORMER_MISSING );
+}
+
+/** Validates `input` against a JSON Schema value and returns the (possibly coerced) data. */
+export function assertSchema<T = any>( _schema: any, _input: unknown, _options?: ValidationMode | AssertOptions ): T
+{
+    throw new Error( TRANSFORMER_MISSING );
+}
+
+/** Schema assertion guard. Mutates in place; root-level coercion that replaces the value throws. */
+export function assertGuardSchema( _schema: any, _input: unknown, _options?: ValidationMode | AssertGuardOptions ): void
+{
+    throw new Error( TRANSFORMER_MISSING );
+}
+
+/** Validates `input` against a JSON Schema value. */
+export function validateSchema<T = any>( _schema: any, _input: unknown, _options?: ValidationMode | ValidationOptions ): IValidation<T>
 {
     throw new Error( TRANSFORMER_MISSING );
 }

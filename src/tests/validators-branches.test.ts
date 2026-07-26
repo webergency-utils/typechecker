@@ -67,11 +67,11 @@ describe( 'validators uncovered branches', () =>
         it( 'should revive strings and arrays via custom from with path keys', () => 
         {
             // Arrange
-            const from = vi.fn(( key: string, value: unknown, type: string ) => 
+            const from = vi.fn(( value: unknown, c: { key : string, kind : string }) => 
             {
-                if( type === 'string' && typeof value === 'number' ){ return String( value ) }
+                if( c.kind === 'string' && typeof value === 'number' ){ return String( value ) }
 
-                if( type === 'Array' && value && typeof value === 'object' && 'items' in ( value as object ))
+                if( c.kind === 'Array' && value && typeof value === 'object' && 'items' in ( value as object ))
                 {
                     return ( value as { items : unknown[] }).items;
                 }
@@ -85,7 +85,11 @@ describe( 'validators uncovered branches', () =>
 
             // Assert
             expect( str ).toBe( '42' );
-            expect( from ).toHaveBeenCalledWith( 'age', 42, 'string' );
+            expect( from ).toHaveBeenCalledWith( 42, expect.objectContaining({
+                key  : 'age',
+                path : 'user.age',
+                kind : 'string'
+            }));
 
             // Arrange
             ctx = { success : true, errors : [], mode : 'strict', from };
@@ -95,7 +99,12 @@ describe( 'validators uncovered branches', () =>
 
             // Assert
             expect( arr ).toEqual([1, 2]);
-            expect( from ).toHaveBeenCalledWith( '0', { items : [1, 2] }, 'Array' );
+            expect( from ).toHaveBeenCalledWith({ items : [1, 2] }, expect.objectContaining({
+                key   : 'rows',
+                path  : 'rows[0]',
+                index : 0,
+                kind  : 'Array'
+            }));
         });
 
         it( 'should report when custom from fails for array and tuple', () => 
@@ -124,15 +133,15 @@ describe( 'validators uncovered branches', () =>
         it( 'should revive tuples, records, sets, and maps via custom from', () => 
         {
             // Arrange
-            ctx.from = ( _key, value, type ) => 
+            ctx.from = ( value, c ) => 
             {
-                if( type === 'tuple' ){ return ['a', 1] }
+                if( c.kind === 'tuple' ){ return ['a', 1] }
 
-                if( type === 'Object' && value instanceof Map ){ return Object.fromEntries( value ) }
+                if( c.kind === 'Object' && value instanceof Map ){ return Object.fromEntries( value ) }
 
-                if( type === 'Set' ){ return new Set([1, 2]) }
+                if( c.kind === 'Set' ){ return new Set([1, 2]) }
 
-                if( type === 'Map' ){ return new Map([['k', 1]]) }
+                if( c.kind === 'Map' ){ return new Map([['k', 1]]) }
 
                 return value;
             };
@@ -170,7 +179,11 @@ describe( 'validators uncovered branches', () =>
             validators.never( 1, 'n', ctx );
 
             // Assert
-            expect( from ).toHaveBeenCalledWith( 'n', 1, 'never' );
+            expect( from ).toHaveBeenCalledWith( 1, expect.objectContaining({
+                key  : 'n',
+                path : 'n',
+                kind : 'never'
+            }));
             expect( ctx.success ).toBe( false );
 
             // Arrange
@@ -179,7 +192,7 @@ describe( 'validators uncovered branches', () =>
                 success : true,
                 errors  : [],
                 mode    : 'strict',
-                from    : ( _k, _v, type ) => type === 'instance' ? date : _v
+                from    : ( _v, c ) => c.kind === 'instance' ? date : _v
             };
 
             // Act
@@ -385,7 +398,7 @@ describe( 'validators uncovered branches', () =>
 
     describe( 'MetadataStore option plumbing', () => 
     {
-        it( 'should thread from through validate and assert but ignore it for is', () => 
+        it( 'should thread from through validate, assert, and in-place is; reject root rewrite on is', () => 
         {
             // Arrange
             const numberOnly = validators.number;

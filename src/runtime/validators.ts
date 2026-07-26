@@ -1,3 +1,4 @@
+/** Controls unknown object keys only — not coercion. Use `from` for conversion. */
 export type ValidationMode = 'strict' | 'relaxed' | 'strip';
 
 export interface IValidationError {
@@ -8,32 +9,64 @@ export interface IValidationError {
     issues?  : IValidationError[]
 }
 
-/** Internal expected-type labels for custom `from` callbacks. Not exported from the package. */
-type BaseType =
+/** Expected runtime kind for custom `from` — a dispatch tag, not `typeof` / a TS type. */
+export type CoercionKind =
     | 'string' | 'number' | 'boolean' | 'bigint' | 'function' | 'symbol' | 'never'
     | 'Date' | 'RegExp' | 'Set' | 'Map' | 'Array' | 'Object' | 'instance'
     | 'null' | 'undefined' | 'tuple' | 'literal';
 
-type FromOption = 'json' | 'query' | (( key: string, value: any, type: BaseType ) => any );
+/** Shared context for `constraint.Custom` and custom `from` callbacks. */
+export interface PathContext {
+    /** Nearest named property; for `[n]` leaves, the closest named segment above. */
+    key     : string
+    path    : string
+    parent  : any
+    root    : any
+    /** Set when the leaf path segment is an array index. */
+    index?  : number
+}
+
+export type FromCoercionContext = PathContext & { kind : CoercionKind }
+
+type FromOption = 'json' | 'query' | (( val: any, ctx: FromCoercionContext ) => any );
 
 export interface ValidationContext {
     success     : boolean
     errors      : IValidationError[]
     mode        : ValidationMode
     from?       : FromOption
-    wrapArrays? : boolean
     mutate?     : boolean
     root?       : any
 }
 
 
-export interface ValidationOptions {
+/** Options for `is` / `isSchema`. Always mutate; no `mutate` / `errorFactory`. */
+export interface GuardOptions {
+    /**
+     * Unknown-key policy for closed objects (default `'strict'`).
+     * - `'strict'` — reject properties not in the type/schema
+     * - `'relaxed'` — allow and keep unknown properties (does **not** coerce values)
+     * - `'strip'` — drop unknown properties from the result (in place when mutating)
+     *
+     * Coercion / revival is controlled only by `from`, never by `mode`.
+     */
     mode?         : ValidationMode
     from?         : FromOption
-    wrapArrays?   : boolean
-    /** When true, write validated/coerced values onto the input. Default false: always return new containers. */
+}
+
+/** Options for `assertGuard` / `assertGuardSchema`. */
+export interface AssertGuardOptions extends GuardOptions {
+    errorFactory? : ( errors: IValidationError[]) => Error
+}
+
+/** Options for `validate` / `validateSchema`. */
+export interface ValidationOptions extends GuardOptions {
+    /** `true`: always write onto the input. `false` (default): always allocate new containers. */
     mutate?       : boolean
-    schema?       : any
+}
+
+/** Options for `assert` / `assertSchema`. */
+export interface AssertOptions extends ValidationOptions {
     errorFactory? : ( errors: IValidationError[]) => Error
 }
 
@@ -94,30 +127,47 @@ function wantsJsonRevive( ctx: ValidationContext ): boolean
     return ctx.from === 'json' || ctx.from === 'query';
 }
 
-function pathKey( path: string ): string
+function isIndexSegment( seg: string ): boolean
 {
-    if( !path ){ return '' }
-
-    const bracket = path.lastIndexOf( '[' );
-    const dot = path.lastIndexOf( '.' );
-
-    if( bracket > dot )
-    {
-        const end = path.lastIndexOf( ']' );
-
-        if( end > bracket ){ return path.slice( bracket + 1, end ) }
-    }
-
-    if( dot >= 0 ){ return path.slice( dot + 1 ) }
-
-    return path;
+    return seg.startsWith( '[' ) && seg.endsWith( ']' );
 }
 
-function fromCustom( ctx: ValidationContext, path: string, value: any, type: BaseType ): any
+function pathContext( path: string, ctx: ValidationContext ): PathContext
+{
+    const pathParts = tokenizePath( path );
+    const parentPath = joinPathSegments( pathParts.slice( 0, -1 ));
+    const parent = getValueAtPath( ctx.root, parentPath );
+    const last = pathParts[pathParts.length - 1];
+    let index: number | undefined;
+
+    if( last && isIndexSegment( last ))
+    {
+        const parsed = parseInt( last.slice( 1, -1 ), 10 );
+
+        if( !Number.isNaN( parsed )){ index = parsed }
+    }
+
+    let key = '';
+
+    for( let i = pathParts.length - 1; i >= 0; i-- )
+    {
+        if( !isIndexSegment( pathParts[i]))
+        {
+            key = pathParts[i];
+            break;
+        }
+    }
+
+    if( index === undefined ){ return { key, path, parent, root : ctx.root } }
+
+    return { key, path, parent, root : ctx.root, index };
+}
+
+function fromCustom( ctx: ValidationContext, path: string, value: any, kind: CoercionKind ): any
 {
     if( typeof ctx.from !== 'function' ){ return value }
 
-    return ctx.from( pathKey( path ), value, type );
+    return ctx.from( value, { ...pathContext( path, ctx ), kind });
 }
 
 /** Query-style number coercion — shared by `from: 'query'` and `transform.ToNumber`. */
@@ -656,7 +706,7 @@ export const validators = {
     {
         if( !Array.isArray( v )) 
         {
-            if( ctx.wrapArrays && v !== undefined && v !== null ) 
+            if( wantsQuery( ctx ) && v !== undefined && v !== null ) 
             {
                 v = [v];
             }
@@ -951,13 +1001,7 @@ export const validators = {
 
     custom : ( v: any, path: string, ctx: ValidationContext, fn: Function, message?: string ) => 
     {
-        const pathParts = tokenizePath( path );
-        const parentPath = joinPathSegments( pathParts.slice( 0, -1 ));
-        const parent = getValueAtPath( ctx.root, parentPath );
-        const last = pathParts[pathParts.length - 1];
-        const index = last && last.startsWith( '[' ) ? parseInt( last.slice( 1, -1 ), 10 ) : undefined;
-
-        if( !fn( v, { parent, root : ctx.root, path, index : Number.isNaN( index as number ) ? undefined : index })) 
+        if( !fn( v, pathContext( path, ctx ))) 
         {
             report( ctx, path, fn.name ? `Custom<${fn.name}>` : 'Custom', v, message );
         }
@@ -1415,27 +1459,28 @@ export class MetadataStoreClass
         return compiled;
     }
 
-    is( validator: Function, value: any, options?: ValidationMode | ValidationOptions ): boolean 
-    {
-        const opt = options;
-        const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
-        // Type predicates require the value already match T — never coerce.
-        const wrapArrays = typeof opt === 'object' ? opt?.wrapArrays : undefined;
-        const mutate = typeof opt === 'object' ? opt?.mutate === true : false;
-        const ctx: ValidationContext = { success : true, errors : [], mode, wrapArrays, mutate, root : value };
-        validator( value, '', ctx );
-
-        return ctx.success;
-    }
-
-    assert( validator: Function, value: any, options?: ValidationMode | ValidationOptions ): any 
+    is( validator: Function, value: any, options?: ValidationMode | GuardOptions ): boolean 
     {
         const opt = options;
         const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
         const from = typeof opt === 'object' ? opt?.from : undefined;
-        const wrapArrays = typeof opt === 'object' ? opt?.wrapArrays : undefined;
+        // Always mutate — no returned data. Root must stay the same binding (res === value).
+        const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate : true, root : value };
+        const res = validator( value, '', ctx );
+
+        if( !ctx.success ){ return false }
+
+        // Primitive / replaced roots cannot update the caller's binding — treat as not matching.
+        return res === value;
+    }
+
+    assert( validator: Function, value: any, options?: ValidationMode | AssertOptions ): any 
+    {
+        const opt = options;
+        const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
+        const from = typeof opt === 'object' ? opt?.from : undefined;
         const mutate = typeof opt === 'object' ? opt?.mutate === true : false;
-        const ctx: ValidationContext = { success : true, errors : [], mode, from, wrapArrays, mutate, root : value };
+        const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate, root : value };
         const res = validator( value, '', ctx );
 
         if( !ctx.success ) 
@@ -1450,24 +1495,31 @@ export class MetadataStoreClass
         return res;
     }
 
-    assertGuard( validator: Function, value: any, options?: ValidationMode | ValidationOptions ): void 
+    assertGuard( validator: Function, value: any, options?: ValidationMode | AssertGuardOptions ): void 
     {
         const opt = options;
         const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
-        // Assertion predicates require the value already match T — never coerce.
-        const wrapArrays = typeof opt === 'object' ? opt?.wrapArrays : undefined;
-        const mutate = typeof opt === 'object' ? opt?.mutate === true : false;
-        const ctx: ValidationContext = { success : true, errors : [], mode, wrapArrays, mutate, root : value };
-        validator( value, '', ctx );
+        const from = typeof opt === 'object' ? opt?.from : undefined;
+        // Always mutate — no returned data. Root must stay the same binding (res === value).
+        const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate : true, root : value };
+        const res = validator( value, '', ctx );
 
-        if( !ctx.success ) 
+        if( ctx.success && res === value ){ return }
+
+        // Root was replaced (e.g. primitive coerce) — binding unchanged; report a normal type failure.
+        if( ctx.success && res !== value ) 
         {
-            if( typeof opt === 'object' && opt?.errorFactory ) 
-            {
-                throw opt.errorFactory( ctx.errors );
-            }
-            throw new Error( 'Validation Error: ' + ctx.errors.map( e => e.path ? `${e.path}: ${e.error}` : e.error ).join( ', ' ));
+            ctx.success = true;
+            ctx.errors.length = 0;
+            ctx.from = undefined;
+            validator( value, '', ctx );
         }
+
+        if( typeof opt === 'object' && opt?.errorFactory ) 
+        {
+            throw opt.errorFactory( ctx.errors );
+        }
+        throw new Error( 'Validation Error: ' + ctx.errors.map( e => e.path ? `${e.path}: ${e.error}` : e.error ).join( ', ' ));
     }
 
     validate( validator: Function, value: any, options?: ValidationMode | ValidationOptions ): { success : boolean, errors : IValidationError[], data : any } 
@@ -1475,9 +1527,8 @@ export class MetadataStoreClass
         const opt = options;
         const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
         const from = typeof opt === 'object' ? opt?.from : undefined;
-        const wrapArrays = typeof opt === 'object' ? opt?.wrapArrays : undefined;
         const mutate = typeof opt === 'object' ? opt?.mutate === true : false;
-        const ctx: ValidationContext = { success : true, errors : [], mode, from, wrapArrays, mutate, root : value };
+        const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate, root : value };
         const res = validator( value, '', ctx );
 
         return { success : ctx.success, errors : ctx.errors, data : res };

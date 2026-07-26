@@ -1,5 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { validate, is, assert, assertGuard, jsonSchema } from '../index.js';
+import {
+    validate,
+    is,
+    assert,
+    assertGuard,
+    jsonSchema,
+    validateSchema,
+    isSchema,
+    assertSchema,
+    assertGuardSchema
+} from '../index.js';
 
 describe( 'Runtime stubs without transformer', () => 
 {
@@ -10,5 +20,9 @@ describe( 'Runtime stubs without transformer', () =>
         expect(() => assert( 1 )).toThrow( /transformer was not applied/ );
         expect(() => assertGuard( 1 )).toThrow( /transformer was not applied/ );
         expect(() => jsonSchema()).toThrow( /transformer was not applied/ );
+        expect(() => validateSchema({ type : 'string' }, 1 )).toThrow( /transformer was not applied/ );
+        expect(() => isSchema({ type : 'string' }, 1 )).toThrow( /transformer was not applied/ );
+        expect(() => assertSchema({ type : 'string' }, 1 )).toThrow( /transformer was not applied/ );
+        expect(() => assertGuardSchema({ type : 'string' }, 1 )).toThrow( /transformer was not applied/ );
     });
 });

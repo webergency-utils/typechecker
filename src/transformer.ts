@@ -2,10 +2,24 @@ import ts from 'typescript';
 import { buildValidator, generateHash, buildJsonSchema, objectToAst } from './engine/resolver.js';
 export { buildValidator, generateHash, buildJsonSchema } from './engine/resolver.js';
 import { hoistRegistrations } from './engine/hoister.js';
-import { templateToAst, injectNodes } from './engine/generators.js';
 import { installStaticConstraintDiagnostics } from './engine/staticAsserts.js';
 
-const RUNTIME_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate', 'jsonSchema'];
+const TYPE_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate', 'jsonSchema'];
+const SCHEMA_FUNCTIONS = ['isSchema', 'assertSchema', 'assertGuardSchema', 'validateSchema'];
+
+function metadataCall( method: string, args: ts.Expression[]): ts.CallExpression 
+{
+    return ts.factory.createCallExpression(
+        ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'MetadataStore' ), method ),
+        undefined,
+        args
+    );
+}
+
+function argOrUndefined( args: ts.NodeArray<ts.Expression>, index: number ): ts.Expression 
+{
+    return args[index] || ts.factory.createIdentifier( 'undefined' );
+}
 
 export default function transformer( program: ts.Program ) 
 {
@@ -23,18 +37,42 @@ export default function transformer( program: ts.Program )
 
             const visitor = ( node: ts.Node ): ts.Node => 
             {
-                // Skip visiting ImportDeclarations to preserve their original symbols and avoid compiler crashes
                 if( ts.isImportDeclaration( node )) 
                 {
                     return node;
                 }
 
-                // Handle runtime function calls (is, assert, assertGuard, validate, jsonSchema)
                 if( ts.isCallExpression( node ) && ts.isIdentifier( node.expression )) 
                 {
                     const fnName = node.expression.text;
 
-                    if( RUNTIME_FUNCTIONS.includes( fnName )) 
+                    if( SCHEMA_FUNCTIONS.includes( fnName )) 
+                    {
+                        requiredUtils.add( 'MetadataStore' );
+                        const schemaArg = argOrUndefined( node.arguments, 0 );
+                        const inputArg = argOrUndefined( node.arguments, 1 );
+                        const optionsArg = argOrUndefined( node.arguments, 2 );
+                        const compiled = metadataCall( 'getOrCompileSchema', [schemaArg]);
+
+                        if( fnName === 'validateSchema' )
+                        {
+                            return metadataCall( 'validate', [compiled, inputArg, optionsArg]);
+                        }
+
+                        if( fnName === 'isSchema' )
+                        {
+                            return metadataCall( 'is', [compiled, inputArg, optionsArg]);
+                        }
+
+                        if( fnName === 'assertSchema' )
+                        {
+                            return metadataCall( 'assert', [compiled, inputArg, optionsArg]);
+                        }
+
+                        return metadataCall( 'assertGuard', [compiled, inputArg, optionsArg]);
+                    }
+
+                    if( TYPE_FUNCTIONS.includes( fnName )) 
                     {
                         const typeArg = node.typeArguments?.[0];
 
@@ -54,99 +92,34 @@ export default function transformer( program: ts.Program )
                                 schemasCache.set( hash, objectToAst( schemaObj ));
                             }
 
-                            let getCall: ts.Expression;
-                            const arg0 = node.arguments[0] || ts.factory.createIdentifier( 'undefined' );
-                            const arg1 = node.arguments[1] || ts.factory.createIdentifier( 'undefined' );
+                            const inputArg = argOrUndefined( node.arguments, 0 );
+                            const optionsArg = argOrUndefined( node.arguments, 1 );
+                            const getValidator = metadataCall( 'getValidator', [ts.factory.createStringLiteral( hash )]);
 
-                            let hasSchema = false;
-                            let schemaExpr: ts.Expression | undefined;
-
-                            if( node.arguments[1]) 
-                            {
-                                const optArg = node.arguments[1];
-                                const optType = checker.getTypeAtLocation( optArg );
-                                const schemaProp = optType.getProperty( 'schema' );
-
-                                if( schemaProp ) 
-                                {
-                                    hasSchema = true;
-
-                                    if( ts.isObjectLiteralExpression( optArg )) 
-                                    {
-                                        const prop = optArg.properties.find( p => 
-                                        {
-                                            if( ts.isPropertyAssignment( p ) && ts.isIdentifier( p.name ) && p.name.text === 'schema' ) { return true }
-
-                                            if( ts.isShorthandPropertyAssignment( p ) && p.name.text === 'schema' ) { return true }
-
-                                            return false;
-                                        });
-
-                                        if( prop ) 
-                                        {
-                                            if( ts.isPropertyAssignment( prop )) 
-                                            {
-                                                schemaExpr = prop.initializer;
-                                            }
-                                            else if( ts.isShorthandPropertyAssignment( prop )) 
-                                            {
-                                                schemaExpr = prop.name;
-                                            }
-                                        }
-                                    }
-
-                                    if( !schemaExpr ) 
-                                    {
-                                        schemaExpr = ts.factory.createPropertyAccessExpression( optArg, 'schema' );
-                                    }
-                                }
-                            }
-
-                            if( hasSchema && schemaExpr ) 
-                            {
-                                const compileAccess = ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'MetadataStore' ), 'getOrCompileSchema' );
-                                getCall = ts.factory.createCallExpression( compileAccess, undefined, [schemaExpr]);
-                            }
-                            else 
-                            {
-                                const mdStoreAccess = ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'MetadataStore' ), 'getValidator' );
-                                getCall = ts.factory.createCallExpression( mdStoreAccess, undefined, [ts.factory.createStringLiteral( hash )]);
-                            }
-              
                             if( fnName === 'jsonSchema' ) 
                             {
-                                const getSchemaAccess = ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'MetadataStore' ), 'getSchema' );
-
-                                return ts.factory.createCallExpression( getSchemaAccess, undefined, [ts.factory.createStringLiteral( hash )]);
+                                return metadataCall( 'getSchema', [ts.factory.createStringLiteral( hash )]);
                             }
-                            else if( fnName === 'validate' ) 
+
+                            if( fnName === 'validate' ) 
                             {
-                                const mdStoreAccess = ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'MetadataStore' ), 'validate' );
-
-                                return ts.factory.createCallExpression( mdStoreAccess, undefined, [getCall, arg0, arg1]);
+                                return metadataCall( 'validate', [getValidator, inputArg, optionsArg]);
                             }
-                            else if( fnName === 'is' ) 
+
+                            if( fnName === 'is' ) 
                             {
-                                const mdStoreAccess = ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'MetadataStore' ), 'is' );
-
-                                return ts.factory.createCallExpression( mdStoreAccess, undefined, [getCall, arg0, arg1]);
+                                return metadataCall( 'is', [getValidator, inputArg, optionsArg]);
                             }
-                            else if( fnName === 'assert' ) 
+
+                            if( fnName === 'assert' ) 
                             {
-                                const mdStoreAccess = ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'MetadataStore' ), 'assert' );
-
-                                return ts.factory.createCallExpression( mdStoreAccess, undefined, [getCall, arg0, arg1]);
+                                return metadataCall( 'assert', [getValidator, inputArg, optionsArg]);
                             }
-                            else if( fnName === 'assertGuard' ) 
-                            {
-                                const mdStoreAccess = ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'MetadataStore' ), 'assertGuard' );
 
-                                return ts.factory.createCallExpression( mdStoreAccess, undefined, [getCall, arg0, arg1]);
-                            }
+                            return metadataCall( 'assertGuard', [getValidator, inputArg, optionsArg]);
                         }
                     }
                 }
-
 
                 return ts.visitEachChild( node, visitor, context );
             };

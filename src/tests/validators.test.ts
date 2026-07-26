@@ -314,9 +314,9 @@ describe( 'Validators', () =>
 
         it( 'should revive objects via custom from', () => 
         {
-            ctx.from = ( key, value, type ) => 
+            ctx.from = ( value, c ) => 
             {
-                if( type === 'Object' && value instanceof Map )
+                if( c.kind === 'Object' && value instanceof Map )
                 {
                     return Object.fromEntries( value );
                 }
@@ -738,9 +738,9 @@ describe( 'Validators', () =>
             expect( ctx.success ).toBe( false );
         });
 
-        it( 'should validate array with wrapArrays option', () => 
+        it( 'should wrap scalars into arrays under from:query', () => 
         {
-            ctx.wrapArrays = true;
+            ctx.from = 'query';
             const result = validators.array( 123, 'path', ctx, validators.number );
             expect( result ).toEqual([123]);
             expect( ctx.success ).toBe( true );
@@ -1314,21 +1314,52 @@ describe( 'Validators', () =>
             expect( MetadataStore.is( dummyVal, 'world' )).toBe( false );
         });
 
-        it( 'should ignore from for is and assertGuard', () => 
+        it( 'should reject root-level coercion on is and assertGuard; allow in-place object from', () => 
         {
             expect( MetadataStore.is( validators.number, '42', { from : 'query' })).toBe( false );
-            expect(() => MetadataStore.assertGuard( validators.number, '42', { from : 'query' })).toThrow();
+            expect(() => MetadataStore.assertGuard( validators.number, '42', { from : 'query' })).toThrow( /Type<number>/ );
             expect( MetadataStore.assert( validators.number, '42', { from : 'query' })).toBe( 42 );
+
+            const schema = 
+            {
+                type       : 'object',
+                properties : { age : { type : 'number' }}
+            };
+            const fn = MetadataStore.getOrCompileSchema( schema );
+            const data = { age : '20' };
+
+            expect( MetadataStore.is( fn, data, { from : 'query' })).toBe( true );
+            expect( data.age ).toBe( 20 );
+        });
+
+        it( 'should always mutate in place for is and assertGuard strip', () => 
+        {
+            const schema = 
+            {
+                type       : 'object',
+                properties : { name : { type : 'string' }}
+            };
+            const fn = MetadataStore.getOrCompileSchema( schema );
+            const a = { name : 'A', extra : 1 };
+            const b = { name : 'B', extra : 2 };
+
+            expect( MetadataStore.is( fn, a, 'strip' )).toBe( true );
+            expect( a ).toEqual({ name : 'A' });
+            expect( a ).not.toHaveProperty( 'extra' );
+
+            MetadataStore.assertGuard( fn, b, 'strip' );
+            expect( b ).toEqual({ name : 'B' });
+            expect( b ).not.toHaveProperty( 'extra' );
         });
 
         it( 'should revive via custom from on type mismatch only', () => 
         {
             const calls: any[] = [];
-            const from = ( key: string, value: any, type: string ) => 
+            const from = ( value: any, c: { key : string, kind : string, path : string, root : any }) => 
             {
-                calls.push({ key, value, type });
+                calls.push({ key : c.key, value, kind : c.kind, path : c.path, root : c.root });
 
-                if( type === 'Date' && value && typeof value === 'object' && typeof value.$date === 'string' )
+                if( c.kind === 'Date' && value && typeof value === 'object' && typeof value.$date === 'string' )
                 {
                     return new Date( value.$date );
                 }
@@ -1340,7 +1371,13 @@ describe( 'Validators', () =>
             const revived = MetadataStore.assert( validators.date, { $date : iso }, { from });
             expect( revived ).toBeInstanceOf( Date );
             expect( revived.toISOString()).toBe( iso );
-            expect( calls ).toEqual([{ key : '', value : { $date : iso }, type : 'Date' }]);
+            expect( calls ).toEqual([{
+                key   : '',
+                value : { $date : iso },
+                kind  : 'Date',
+                path  : '',
+                root  : { $date : iso }
+            }]);
 
             calls.length = 0;
             const already = new Date( iso );

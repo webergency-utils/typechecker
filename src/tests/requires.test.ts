@@ -95,7 +95,7 @@ describe( 'Requires Validation Unit Tests', () =>
         expect( ctxMissing.errors[0].error ).toBe( 'Requires<..status>' );
     });
 
-    it( 'should supply { parent, root, path } context parameter to custom validation functions', () => 
+    it( 'should supply { key, parent, root, path } context parameter to custom validation functions', () => 
     {
         const data = {
             username : 'alice',
@@ -108,12 +108,14 @@ describe( 'Requires Validation Unit Tests', () =>
         let passedParent: any;
         let passedRoot: any;
         let passedPath: string = '';
+        let passedKey: string = '';
 
         const customFn = ( val: any, context: any ) => 
         {
             passedParent = context.parent;
             passedRoot = context.root;
             passedPath = context.path;
+            passedKey = context.key;
 
             return val === 'password123';
         };
@@ -123,9 +125,10 @@ describe( 'Requires Validation Unit Tests', () =>
         expect( passedParent ).toEqual({ password : 'password123' });
         expect( passedRoot ).toEqual( data );
         expect( passedPath ).toBe( 'auth.password' );
+        expect( passedKey ).toBe( 'password' );
     });
 
-    it( 'should supply index parameter in context if the field is the array item itself', () => 
+    it( 'should supply index and nearest named key for array leaves', () => 
     {
         const data = {
             items : [
@@ -136,26 +139,31 @@ describe( 'Requires Validation Unit Tests', () =>
         const ctx = createCtx( data );
 
         let passedIndex: number | undefined;
+        let passedKey: string = '';
 
         const customFn = ( val: any, context: any ) => 
         {
             passedIndex = context.index;
+            passedKey = context.key;
 
             return typeof val === 'object';
         };
 
-        // Path ends with [1], so it's the array item itself
+        // Path ends with [1], so it's the array item itself — key walks up to 'items'
         validators.custom( data.items[1], 'items[1]', ctx, customFn );
         expect( ctx.success ).toBe( true );
         expect( passedIndex ).toBe( 1 );
+        expect( passedKey ).toBe( 'items' );
 
-        // Path does not end with [1] (nested property), so index should be undefined
+        // Nested property: key is the leaf name; index undefined
         let passedNestedIndex: number | undefined;
         let passedNestedParent: any;
+        let passedNestedKey: string = '';
         const customNestedFn = ( val: any, context: any ) => 
         {
             passedNestedIndex = context.index;
             passedNestedParent = context.parent;
+            passedNestedKey = context.key;
 
             return val > 90;
         };
@@ -163,6 +171,7 @@ describe( 'Requires Validation Unit Tests', () =>
         expect( ctx.success ).toBe( true );
         expect( passedNestedIndex ).toBeUndefined();
         expect( passedNestedParent ).toEqual({ id : '2', score : 100 });
+        expect( passedNestedKey ).toBe( 'score' );
     });
 
     it( 'should resolve relative requires paths inside array elements', () => 

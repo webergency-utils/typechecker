@@ -55,13 +55,13 @@ describe( 'Transformer Call Expression Replacements', () =>
         const code = `
             import { validate } from '../index.js';
             const x: any = 123;
-            const res = validate<number>(x, { mode: 'relaxed', from: 'query', wrapArrays: true });
+            const res = validate<number>(x, { mode: 'relaxed', from: 'query', mutate: true });
         `;
         const compiled = compileAndTransform( code );
         expect( compiled ).toContain( 'MetadataStore.validate(' );
         expect( compiled ).toContain( "mode: 'relaxed'" );
         expect( compiled ).toContain( "from: 'query'" );
-        expect( compiled ).toContain( 'wrapArrays: true' );
+        expect( compiled ).toContain( 'mutate: true' );
     });
 
     it( 'should transform types with constraint and format namespace constraints and custom validations', () => 
@@ -224,10 +224,10 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).toContain( '"maxItems": 3' );
     });
 
-    it( 'should transform validate calls with dynamic validation schema option', () => 
+    it( 'should transform validateSchema and related schema entrypoints', () => 
     {
         const code = `
-            import { validate } from './src/index.js';
+            import { validateSchema, isSchema, assertSchema, assertGuardSchema } from './src/index.js';
             const schema = {
                 type: "object",
                 properties: {
@@ -236,10 +236,18 @@ describe( 'Transformer Call Expression Replacements', () =>
                 },
                 required: ["name"]
             };
-            const res = validate<any>({ name: "Tom", age: 20 }, { schema });
+            const res = validateSchema(schema, { name: "Tom", age: 20 }, { mode: 'relaxed' });
+            const ok = isSchema(schema, { name: "Tom" });
+            const value = assertSchema(schema, { name: "Tom", age: 20 });
+            assertGuardSchema(schema, { name: "Tom" });
         `;
         const compiled = compileAndTransform( code );
         expect( compiled ).toContain( 'MetadataStore.getOrCompileSchema(schema)' );
+        expect( compiled ).toContain( 'MetadataStore.validate(' );
+        expect( compiled ).toContain( 'MetadataStore.is(' );
+        expect( compiled ).toContain( 'MetadataStore.assert(' );
+        expect( compiled ).toContain( 'MetadataStore.assertGuard(' );
+        expect( compiled.match( /getOrCompileSchema\(schema\)/g )?.length ).toBe( 4 );
     });
 
     it( 'should inline small repeating structures like Point while hoisting circular types', () => 
@@ -425,19 +433,20 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).toContain( 'MetadataStore.assert(' );
     });
 
-    it( 'should compile schema option via property assignment shorthand and member access', () => 
+    it( 'should pass options through on validateSchema without treating them as the schema', () => 
     {
         const code = `
-            import { validate } from '../index.js';
+            import { validateSchema } from '../index.js';
             const schema = { type: 'string' };
-            const a = validate<string>('x', { mode: 'strict', schema: { type: 'string' } });
-            const b = validate<string>('x', { schema });
-            const opts = { schema };
-            const c = validate<string>('x', opts);
+            const a = validateSchema({ type: 'string' }, 'x', { mode: 'strict' });
+            const b = validateSchema(schema, 'x');
+            const opts = { mode: 'strip' as const };
+            const c = validateSchema(schema, 'x', opts);
         `;
         const compiled = compileAndTransform( code );
         expect( compiled ).toContain( 'getOrCompileSchema' );
-        expect( compiled.match( /getOrCompileSchema/g )?.length ).toBeGreaterThanOrEqual( 3 );
+        expect( compiled.match( /getOrCompileSchema\(/g )?.length ).toBeGreaterThanOrEqual( 3 );
+        expect( compiled ).not.toContain( 'getValidator' );
     });
 
     it( 'should transform enums never symbol template literals and bigint literals', () => 

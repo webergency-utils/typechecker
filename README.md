@@ -107,7 +107,7 @@ graph TD
     G --> H[Emit optimized JavaScript files]
 ```
 
-1. **Build-Time Transformation**: The compiler transformer intercepts calls to validation helper functions (`validate`, `is`, `assert`, `assertGuard`, `jsonSchema`) containing generic arguments.
+1. **Build-Time Transformation**: The compiler transformer intercepts calls to validation helper functions (`validate`, `is`, `assert`, `assertGuard`, `jsonSchema`, `validateSchema`, `isSchema`, `assertSchema`, `assertGuardSchema`).
 2. **Type Extraction & Analysis**: It parses the target TS type structure, extracting intersection constraints, formats, transforms, and defaults recursively.
 3. **Hoisted Registry**: The transformer generates highly optimized, direct JavaScript validator functions for each resolved type shape, generates a unique hash, and registers them in a global `MetadataStore`.
 4. **Call Replacement**: The transformer replaces the original compile-time call expressions with direct, zero-reflection references to the runtime `MetadataStore`.
@@ -135,10 +135,11 @@ const age: number & constraint.Minimum<18> = 5;
 ## Glossary
 
 - [`validate`](src/index.ts): Validates a value against a type, returning a structured result containing the validation status and a detailed list of errors.
-- [`is`](src/index.ts): A type guard that returns `true` if a value already matches `T` (no coercion; `from` is ignored).
+- [`is`](src/index.ts): A type guard for `T`. Always mutates in place; `from` may coerce nested fields. Root replacement fails the guard.
 - [`assert`](src/index.ts): Validates a value and returns it, throwing a validation error on failure (supports `from` coercion).
-- [`assertGuard`](src/index.ts): Asserts a value already matches `T` and narrows the outer scope (no coercion; `from` is ignored).
+- [`assertGuard`](src/index.ts): Asserts a value is `T`. Always mutates in place; `from` may coerce nested fields. Root replacement throws.
 - [`jsonSchema`](src/index.ts): Generates and returns a JSON Schema representation matching a TypeScript type at compile time (draft-07 shaped, with `x-typescript-type` for Date/RegExp/Set/Map/bigint/etc.).
+- [`validateSchema`](src/index.ts) / [`isSchema`](src/index.ts) / [`assertSchema`](src/index.ts) / [`assertGuardSchema`](src/index.ts): Same entrypoints against a runtime JSON Schema value instead of a TypeScript generic.
 - [`WithModifiers`](src/runtime/tags.ts): A utility type that applies constraint, format, or transformation tags to properties of deeply nested or external types using dot-separated path mappings.
 - [`ResolveDefaults`](src/runtime/tags.ts): A helper type that removes the optional flag (`?`) from properties that have defined default values.
 - [`convertPropertyCasing`](src/runtime/casing.ts): A runtime utility to recursively change the casing of object keys.
@@ -166,13 +167,13 @@ Validates input data against type `T` and returns a structured validation result
   const result = validate<User>(data, 'strip');
   ```
 
-#### `is<T>(input: unknown, options?: ValidationMode | ValidationOptions): input is ResolveDefaults<T>`
+#### `is<T>(input: unknown, options?: ValidationMode | GuardOptions): input is ResolveDefaults<T>`
 
-A type guard function checking if the input matches type `T`. Does **not** coerce; `from` is ignored.
+A type guard for type `T`. Always mutates in place (no `mutate` option). `from` may coerce nested fields onto the same object; if validation would replace the root value (e.g. primitive `"42"` → `42`), returns `false`.
 
 - **Parameters**:
   - `input`: The value to check.
-  - `options` (optional): Either a `ValidationMode` string or a `ValidationOptions` object (`from` has no effect).
+  - `options` (optional): Either a `ValidationMode` string or a `GuardOptions` object.
 - **Returns**: `boolean` (`true` if valid, `false` otherwise). Narrows type of `input` to `ResolveDefaults<T>` on success.
 - **Example**:
   ```typescript
@@ -181,13 +182,13 @@ A type guard function checking if the input matches type `T`. Does **not** coerc
   }
   ```
 
-#### `assert<T>(input: unknown, options?: ValidationMode | ValidationOptions): ResolveDefaults<T>`
+#### `assert<T>(input: unknown, options?: ValidationMode | AssertOptions): ResolveDefaults<T>`
 
 Validates input data and returns it, throwing a validation error on failure.
 
 - **Parameters**:
   - `input`: The value to validate.
-  - `options` (optional): Either a `ValidationMode` string or a `ValidationOptions` object.
+  - `options` (optional): Either a `ValidationMode` string or an `AssertOptions` object.
 - **Returns**: `ResolveDefaults<T>` (the validated value with defaults resolved).
 - **Throws**: `Error` containing a list of path and constraint failures, or a custom error via `options.errorFactory`.
 - **Example**:
@@ -195,13 +196,13 @@ Validates input data and returns it, throwing a validation error on failure.
   const user = assert<User>(data);
   ```
 
-#### `assertGuard<T>(input: unknown, options?: ValidationMode | ValidationOptions): asserts input is ResolveDefaults<T>`
+#### `assertGuard<T>(input: unknown, options?: ValidationMode | AssertGuardOptions): asserts input is ResolveDefaults<T>`
 
-An assertion guard that throws a validation error if the input does not match type `T`. Does **not** coerce; `from` is ignored.
+An assertion guard for type `T`. Always mutates in place (no `mutate` option). `from` may coerce nested fields; root replacement fails with a normal type error (re-checked without `from`).
 
 - **Parameters**:
   - `input`: The value to check.
-  - `options` (optional): Either a `ValidationMode` string or a `ValidationOptions` object (`from` has no effect).
+  - `options` (optional): Either a `ValidationMode` string or an `AssertGuardOptions` object.
 - **Returns**: `void`. Narrows the type of `input` in the enclosing scope on success.
 - **Throws**: `Error` if validation fails (or a custom error via `options.errorFactory`).
 - **Example**:
@@ -218,6 +219,31 @@ Generates a raw JSON Schema draft-07 object matching type `T` at compile time.
   ```typescript
   const userSchema = jsonSchema<User>();
   ```
+
+#### `validateSchema<T = any>(schema: any, input: unknown, options?: ValidationMode | ValidationOptions): IValidation<T>`
+
+Validates `input` against a **runtime JSON Schema** value (not a TypeScript generic).
+
+- **Parameters**:
+  - `schema`: JSON Schema object.
+  - `input`: The value to validate.
+  - `options` (optional): Same as `validate`.
+- **Example**:
+  ```typescript
+  const result = validateSchema({ type: 'string', minLength: 2 }, name);
+  ```
+
+#### `isSchema(schema: any, input: unknown, options?: ValidationMode | GuardOptions): boolean`
+
+Schema type-predicate. Always mutates in place; root replacement fails the guard.
+
+#### `assertSchema<T = any>(schema: any, input: unknown, options?: ValidationMode | AssertOptions): T`
+
+Like `assert`, but against a JSON Schema value.
+
+#### `assertGuardSchema(schema: any, input: unknown, options?: ValidationMode | AssertGuardOptions): void`
+
+Like `assertGuard`, but against a JSON Schema value. Root replacement throws.
 
 ---
 
@@ -270,18 +296,64 @@ An error class wrapper that transforms internal validation errors into a Zod-lik
 
 ### Interfaces and Types
 
-#### `interface ValidationOptions`
+#### `type ValidationMode`
 
-Configuration options to customize validator behavior.
+Controls **unknown object keys only**. It does **not** coerce or revive values — that is exclusively `from`.
+
+| Value | Behavior |
+| :--- | :--- |
+| `'strict'` (default) | Reject properties not declared on the type/schema. |
+| `'relaxed'` | Allow unknown properties and keep them on the result. No type conversion. |
+| `'strip'` | Drop unknown properties from the result (in place when mutating). |
+
+```typescript
+// OK: extra keys kept; age stays a string unless you also set from
+validate<User>(data, 'relaxed');
+
+// Coercion is a separate axis:
+validate<User>(data, { mode: 'relaxed', from: 'query' });
+```
+
+#### `interface GuardOptions`
+
+Options for `is` / `isSchema`. Always mutate in place (no `mutate` / `errorFactory`).
 
 | Property | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `mode` | `'strict' \| 'relaxed' \| 'strip'` | `'strict'` | Validation mode strategy (strict key checking, relaxed, or key stripping). |
-| `from` | `'json' \| 'query' \| ((key, value, type) => any)` | `undefined` | Input conversion mode for `validate` / `assert`. `'json'` revives JSON-impossible types (Date, RegExp, bigint, Set, Map). `'query'` also coerces querystring shapes (string→number/boolean, timestamps→Date, etc.). A function is called only on type mismatch. Ignored by `is` / `assertGuard`. |
-| `wrapArrays` | `boolean` | `false` | Wraps non-array values into single-element arrays if an array is expected. |
-| `mutate` | `boolean` | `false` | When true, write validated/coerced values onto the input. Default false: always return new containers. |
-| `schema` | `any` | `undefined` | Custom JSON Schema instance. |
-| `errorFactory` | `(errors: IValidationError[]) => Error` | `undefined` | Custom error factory for `assert` throwing. |
+| `mode` | `ValidationMode` | `'strict'` | Unknown-key policy (`strict` / `relaxed` / `strip`). Not coercion — see `ValidationMode` above. |
+| `from` | `'json' \| 'query' \| ((val, ctx) => any)` | `undefined` | In-place coercion for nested fields. Custom callbacks receive `(val, PathContext & { kind: CoercionKind })`. Root replacement fails the guard. |
+
+#### `interface AssertGuardOptions`
+
+Extends `GuardOptions` for `assertGuard` / `assertGuardSchema`.
+
+| Property | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `errorFactory` | `(errors: IValidationError[]) => Error` | `undefined` | Custom error factory when the guard throws. |
+
+#### `interface ValidationOptions`
+
+Extends `GuardOptions` for `validate` / `validateSchema` (adds `mutate`; no `errorFactory`).
+
+| Property | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `mode` | `ValidationMode` | `'strict'` | Unknown-key policy (`strict` / `relaxed` / `strip`). Not coercion — see `ValidationMode` above. |
+| `from` | `'json' \| 'query' \| ((val, ctx) => any)` | `undefined` | Input conversion mode. `'json'` revives JSON-impossible types. `'query'` also coerces querystring shapes. A custom function is `(val, { key, path, parent, root, index?, kind }) => any` and runs only on type mismatch. `kind` is a `CoercionKind` dispatch tag (not `typeof` / a TS type). `key` is the nearest named path segment (for `[n]` leaves, the closest named key above). |
+| `mutate` | `boolean` | `false` | `true`: always write onto the input. `false`: always allocate new containers. |
+
+#### `interface AssertOptions`
+
+Extends `ValidationOptions` for `assert` / `assertSchema`.
+
+| Property | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `errorFactory` | `(errors: IValidationError[]) => Error` | `undefined` | Custom error factory when assert throws. |
+
+#### `type CoercionKind` / `interface PathContext` / `type FromCoercionContext`
+
+- `CoercionKind`: expected runtime kind for custom `from` (`'Date' \| 'Array' \| …`) — a dispatch tag, not `typeof`.
+- `PathContext`: `{ key, path, parent, root, index? }` shared by `constraint.Custom` and custom `from`.
+- `FromCoercionContext`: `PathContext & { kind: CoercionKind }`.
 
 #### `interface IValidation<T>`
 
@@ -331,7 +403,7 @@ Used to apply value constraints to types.
 | `constraint.MinItems<N, Msg?>` | Restricts array length to $\ge N$. |
 | `constraint.MaxItems<N, Msg?>` | Restricts array length to $\le N$. |
 | `constraint.UniqueItems<Msg?>` | Restricts arrays to deeply unique items. |
-| `constraint.Custom<Fn, Msg?>` | Runs a custom validation function: `(val, ctx) => boolean`. |
+| `constraint.Custom<Fn, Msg?>` | Runs a custom validation function: `(val, PathContext) => boolean` (`key`, `path`, `parent`, `root`, optional `index`). |
 | `constraint.Requires<Path | [Paths], Msg?>` | Enforces that other object property paths exist. |
 | `constraint.Message<Msg>` | Fallback custom error message. |
 

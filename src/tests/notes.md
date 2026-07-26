@@ -5,10 +5,11 @@
 - Always isolate tests using beforeEach/afterEach and avoid shared states across tests.
 - Keep tests clean and well-structured following the AAA (Arrange, Act, Assert) pattern.
 - `number` accepts Infinity/-Infinity but rejects NaN (`Number.isNaN`).
-- `is` / `assertGuard` never coerce (`from` is ignored); use `assert` / `validate` for coercion.
+- `is` / `assertGuard` always mutate. `from` is allowed for in-place nested coercion; root replacement (`res !== input`, e.g. primitive `"42"`→`42`) fails the guard (`false` / normal type error). Use `assert` / `validate` when you need a new root value.
 - Object/record validators require plain objects (reject Date/Map/Set/RegExp/typed arrays/class instances).
-- `mutate` defaults to false (always new containers). `mutate: true` writes onto the input, including strip (deletes extras in place).
-- Default validation is strict (no conversion). Use `from: 'json'` for wire revivals (Date/RegExp/bigint/Set/Map), `from: 'query'` for querystring coercions, or a custom `from` function on type mismatch only.
+- `mutate` on `validate` / `assert` defaults to false (always new containers). `mutate: true` always writes onto the input. `is` / `assertGuard` always mutate (no `mutate` option).
+- Default validation is strict (no conversion). `mode` is unknown-key policy only: `strict` reject extras, `relaxed` keep extras (no coerce), `strip` drop extras. Coercion is only via `from` (`'json'` / `'query'` / custom) — never via `mode` / `relaxed`.
+- Use `from: 'json'` for wire revivals (Date/RegExp/bigint/Set/Map), `from: 'query'` for querystring coercions (including scalar→`[scalar]` for arrays and scalar→`Set`), or a custom `from` function on type mismatch only.
 - Function types validate with `typeof === 'function'`. Native enums compile to literal unions.
 - Map json revival requires a plain object (rejects Date/RegExp/etc.).
 - `validators.object` returns the (possibly converted) object, or `false` when the value is not a plain object.
@@ -17,13 +18,14 @@
 - Object shapes require plain objects. Named props + string index signatures validate both required fields and additional keys.
 - `jsonSchema` uses `x-typescript-type` for Set/Map/bigint/undefined/Date/etc.; object intersections emit `allOf` (or a merged object).
 - Failed unions report **one** top-level error with per-arm failures in `error.issues`. `toZodIssues` / `groupErrorsByPath` flatten nested `issues`.
-- Prefer `MetadataStore.getOrCompileSchema` for JSON-Schema → runtime validator branches (`Promise`, typed arrays, `anyOf`/`allOf`, `$ref`, `const`, `additionalProperties`).
+- Prefer `MetadataStore.getOrCompileSchema` / `validateSchema` (and `isSchema` / `assertSchema` / `assertGuardSchema`) for JSON-Schema → runtime validator paths. Do not put `schema` on `ValidationOptions`.
 - `allOf` preserves caller mode (including `strip`); do not assert closed-member allOf + strip merges named props across arms — each arm validates independently and can strip the other arm’s keys.
 - Plain-object guards reject `Buffer`, `ArrayBuffer`, and typed-array views; null-prototype objects are accepted.
-- Custom `from` receives `(key, value, BaseType)` and runs once on type mismatch for containers (Array/Set/Map/object) as well as primitives.
+- Custom `from` is `(val, { key, path, parent, root, index?, kind: CoercionKind }) => any` on type mismatch. `kind` is a dispatch tag, not `typeof`. `key` is the nearest named path segment (array index leaves use the closest named key above). Same `PathContext` fields as `constraint.Custom`.
+- `constraint.Custom` receives `(val, PathContext)` including `key`.
 - Place branch-focused suites at `src/tests/{unit}.test.ts` (e.g. `compile-schema.test.ts`, `validators-branches.test.ts`), never next to source.
 - Format edge cases worth explicit tests: email/idn-email length limits (254 / local 64), URI/IRI `URL` constructor fallbacks (`http://`), empty uri/iri-reference, uri-template unmatched `}`.
-- `MetadataStore.is|assert|assertGuard|validate` accept a string `ValidationMode` (`'strict' | 'relaxed' | 'strip'`) as well as options objects.
+- `MetadataStore.is` → `GuardOptions`; `assertGuard` → `AssertGuardOptions`; `validate` → `ValidationOptions`; `assert` → `AssertOptions`. All accept a string `ValidationMode` as well.
 - Do not chase coverage for unreachable arms: `fromCustom` when `ctx.from` is not a function (all callers guard), `parseFormatDateTime` non-string (format always passes strings), and `resolvePath`’s `dotsMatch` else (paths that reach it always start with `.`).
 
 ## Anti-Patterns
