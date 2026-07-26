@@ -1,6 +1,7 @@
 import type { Format } from './constraint.js';
 
 export type Email = Format<'email'>;
+export type IdnEmail = Format<'idn-email'>;
 export type UUID = Format<'uuid'>;
 export type URL = Format<'url'>;
 export type IPv4 = Format<'ipv4'>;
@@ -11,6 +12,12 @@ export type Byte = Format<'byte'>;
 export type Password = Format<'password'>;
 export type Regex = Format<'regex'>;
 export type Hostname = Format<'hostname'>;
+export type IdnHostname = Format<'idn-hostname'>;
+export type URI = Format<'uri'>;
+export type UriReference = Format<'uri-reference'>;
+export type IRI = Format<'iri'>;
+export type IriReference = Format<'iri-reference'>;
+export type UriTemplate = Format<'uri-template'>;
 export type Time = Format<'time'>;
 export type Duration = Format<'duration'>;
 export type ObjectId = Format<'objectId'>;

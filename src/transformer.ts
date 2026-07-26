@@ -131,9 +131,15 @@ export default function transformer( program: ts.Program )
 
                                 return ts.factory.createCallExpression( mdStoreAccess, undefined, [getCall, arg0, arg1]);
                             }
-                            else if( fnName === 'assert' || fnName === 'assertGuard' ) 
+                            else if( fnName === 'assert' ) 
                             {
                                 const mdStoreAccess = ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'MetadataStore' ), 'assert' );
+
+                                return ts.factory.createCallExpression( mdStoreAccess, undefined, [getCall, arg0, arg1]);
+                            }
+                            else if( fnName === 'assertGuard' ) 
+                            {
+                                const mdStoreAccess = ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'MetadataStore' ), 'assertGuard' );
 
                                 return ts.factory.createCallExpression( mdStoreAccess, undefined, [getCall, arg0, arg1]);
                             }

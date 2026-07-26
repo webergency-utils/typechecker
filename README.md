@@ -58,7 +58,7 @@ npx ts-patch install
 
 ### 3. Configure tsconfig.json
 
-Register the typechecker transform plugin under the `plugins` array of `compilerOptions` in your `tsconfig.json`:
+Register the typechecker **transformer** (and optionally the language service plugin) under `compilerOptions.plugins` in `tsconfig.json`:
 
 ```json
 {
@@ -67,12 +67,14 @@ Register the typechecker transform plugin under the `plugins` array of `compiler
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "plugins": [
-      { "transform": "@webergency-utils/typechecker" }
+      { "transform": "@webergency-utils/typechecker/transformer" },
+      { "name": "@webergency-utils/typechecker/plugin" }
     ]
   }
 }
 ```
 
+The `transform` entry is required for AOT validation. The `name` entry enables IDE constraint diagnostics via the language service plugin.
 ---
 
 ## Architecture & Internals
@@ -113,16 +115,16 @@ const age: number & constraint.Minimum<18> = 5;
 
 ## Glossary
 
-- [validate](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/index.ts#L22): Validates a value against a type, returning a structured result containing the validation status and a detailed list of errors.
-- [is](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/index.ts#L19): A type guard function that returns `true` if a value is valid, narrowing its type for TypeScript.
-- [assert](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/index.ts#L20): Validates a value and returns it, throwing a validation error on failure.
-- [assertGuard](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/index.ts#L21): A type assertion function that throws if a value does not match the target type, narrowing the type in the outer scope.
-- [jsonSchema](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/index.ts#L23): Generates and returns a raw JSON Schema draft-07 representation matching a TypeScript type at compile time.
-- [WithModifiers](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/runtime/tags.ts#L79): A utility type that applies constraint, format, or transformation tags to properties of deeply nested or external types using dot-separated path mappings.
-- [ResolveDefaults](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/runtime/tags.ts#L87): A helper type that removes the optional flag (`?`) from properties that have defined default values.
-- [convertPropertyCasing](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/runtime/casing.ts#L190): A runtime utility to recursively change the casing of object keys.
-- [toZodIssues](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/runtime/validators.ts#L991): Utility to transform internal typechecker validation errors into Zod-compatible issue structures.
-- [ZodLikeError](file:///Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/runtime/validators.ts#L1017): Error class wrapping validation errors in a structure compatible with libraries expecting Zod errors.
+- [`validate`](src/index.ts): Validates a value against a type, returning a structured result containing the validation status and a detailed list of errors.
+- [`is`](src/index.ts): A type guard function that returns `true` if a value is valid, narrowing its type for TypeScript.
+- [`assert`](src/index.ts): Validates a value and returns it, throwing a validation error on failure.
+- [`assertGuard`](src/index.ts): A type assertion function that throws if a value does not match the target type, narrowing the type in the outer scope.
+- [`jsonSchema`](src/index.ts): Generates and returns a JSON Schema representation matching a TypeScript type at compile time (draft-07 shaped, with `x-typescript-type` for Date/RegExp/Set/Map/bigint/etc.).
+- [`WithModifiers`](src/runtime/tags.ts): A utility type that applies constraint, format, or transformation tags to properties of deeply nested or external types using dot-separated path mappings.
+- [`ResolveDefaults`](src/runtime/tags.ts): A helper type that removes the optional flag (`?`) from properties that have defined default values.
+- [`convertPropertyCasing`](src/runtime/casing.ts): A runtime utility to recursively change the casing of object keys.
+- [`toZodIssues`](src/runtime/validators.ts): Utility to transform internal typechecker validation errors into Zod-compatible issue structures.
+- [`ZodLikeError`](src/runtime/validators.ts): Error class wrapping validation errors in a structure compatible with libraries expecting Zod errors.
 
 ---
 
@@ -242,8 +244,9 @@ Configuration options to customize validator behavior.
 | Property | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `mode` | `'strict' \| 'relaxed' \| 'strip'` | `'strict'` | Validation mode strategy (strict key checking, relaxed, or key stripping). |
-| `tryConvert` | `boolean` | `false` | Coerces compatible input primitives (e.g. numeric strings to numbers, ISO strings to Date). |
+| `from` | `'json' \| 'query' \| ((key, value, type) => any)` | `undefined` | Input conversion mode. `'json'` revives JSON-impossible types (Date, RegExp, bigint, Set, Map). `'query'` also coerces querystring shapes (string→number/boolean, timestamps→Date, etc.). A function is called only on type mismatch. |
 | `wrapArrays` | `boolean` | `false` | Wraps non-array values into single-element arrays if an array is expected. |
+| `mutate` | `boolean` | `false` | When true, write validated/coerced values onto the input. Default false: always return new containers. |
 | `schema` | `any` | `undefined` | Custom JSON Schema instance. |
 | `errorFactory` | `(errors: IValidationError[]) => Error` | `undefined` | Custom error factory for `assert` throwing. |
 
@@ -262,6 +265,7 @@ Details of a validation check failure.
 - `path`: `string`
 - `value`: `any`
 - `error`: `string` (the constraint description or custom message)
+- `issues?`: `IValidationError[]` — nested failures (used for unions: one summary error with per-arm details)
 
 #### `type WithModifiers<T, M>`
 
@@ -302,20 +306,29 @@ Used to apply value constraints to types.
 
 Standard formats for string primitives.
 
-- `format.Email`: RFC-5322 email.
+- `format.Email`: Practical mailbox check (`local@domain`, length limits, DNS-like domain with a real TLD). Not full RFC 5322.
+- `format.IdnEmail`: Like email, but Unicode local/domain labels allowed.
 - `format.UUID`: UUID (v1-v5).
 - `format.URL`: HTTP/HTTPS/FTP URLs.
 - `format.IPv4` / `format.IPv6`: IP addresses.
-- `format.Date`: ISO date `YYYY-MM-DD`.
-- `format.DateTime`: ISO date-time.
+- `format.Date`: `YYYY-MM-DD` validated via `new Date(...)` (calendar overflow like `2024-02-31` is allowed). With `from: 'query'`, the runtime value becomes a `Date` (the TypeScript type remains `string & format.Date`).
+- `format.DateTime`: date-time validated via `new Date(...)`. With `from: 'query'`, returns a `Date`; otherwise keeps the string.
 - `format.ObjectId`: MongoDB 24-character hex ObjectId.
 - `format.Duration`: ISO-8601 duration.
-- `format.Time`: Time string `HH:MM:SS`.
+- `format.Time`: Time string `HH:MM:SS` with a required timezone (`Z` or `±HH:MM`), e.g. `19:55:00Z`.
 - `format.Byte`: Base64 string.
 - `format.Password`: Any string (always valid placeholder).
 - `format.Regex`: Valid regular expression string.
-- `format.Hostname`: Valid domain name.
-- `format.URI`: Valid URI.
+- `format.Hostname`: ASCII domain name (includes `localhost`).
+- `format.IdnHostname`: Internationalized hostname (Unicode labels).
+- `format.URI`: Absolute URI.
+- `format.UriReference`: Absolute URI or relative reference.
+- `format.IRI`: Absolute IRI (Unicode URI).
+- `format.IriReference`: Absolute IRI or relative reference.
+- `format.UriTemplate`: RFC 6570 URI template.
+- Unknown `Format<'...'>` strings fail validation at runtime.
+
+Object and record shapes require **plain objects** (`Object.prototype` or `null` prototype). Class instances, `Date`, `Map`, `Set`, typed arrays, etc. are rejected unless the type is a dedicated instance type (`Date`, `Map`, …).
 
 #### `transform` Namespace
 
@@ -325,9 +338,9 @@ Sanitizes and converts input values during validation.
 - `transform.LowerCase`: Converts string to lowercase.
 - `transform.UpperCase`: Converts string to uppercase.
 - `transform.Capitalize`: Capitalizes the first letter.
-- `transform.ToNumber`: Coerces inputs to numbers.
-- `transform.ToBoolean`: Coerces inputs to booleans.
-- `transform.ToDate`: Coerces inputs to Date objects.
+- `transform.ToNumber`: Same coercion as `from: 'query'` for numbers (non-empty numeric strings → `parseFloat`).
+- `transform.ToBoolean`: Same coercion as `from: 'query'` for booleans (`true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`); unknown values are left unchanged and fail the boolean check.
+- `transform.ToDate`: Same coercion as `from: 'query'` for dates (parseable strings and finite timestamps).
 - `transform.Custom<Fn>`: Custom mapping function: `(val) => any`.
 
 #### `tag` Namespace

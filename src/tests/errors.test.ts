@@ -38,18 +38,22 @@ describe( 'Error Reporting Unit Tests', () =>
         
         const addressValidator = ( v: any, path: string, ctx: any ) => 
         {
-            if( !validators.object( v, path, ctx )) { return v }
-            validators.props( v, v, path, ctx, [['street', false, validators.string]]);
+            const obj = validators.object( v, path, ctx );
 
-            return v;
+            if( obj === false ){ return v }
+            validators.props( obj, obj, path, ctx, [['street', false, validators.string]]);
+
+            return obj;
         };
 
         const infoValidator = ( v: any, path: string, ctx: any ) => 
         {
-            if( !validators.object( v, path, ctx )) { return v }
-            validators.props( v, v, path, ctx, [['address', false, addressValidator]]);
+            const obj = validators.object( v, path, ctx );
 
-            return v;
+            if( obj === false ){ return v }
+            validators.props( obj, obj, path, ctx, [['address', false, addressValidator]]);
+
+            return obj;
         };
 
         validators.props( v, v, 'root', ctx, [['info', false, infoValidator]]);
@@ -60,7 +64,7 @@ describe( 'Error Reporting Unit Tests', () =>
         expect( ctx.errors[0].value ).toBe( 123 );
     });
 
-    it( 'should report all errors in a failing union', () => 
+    it( 'should nest branch failures under a single union error', () => 
     {
         const ctx = createCtx();
         const v = true;
@@ -69,11 +73,14 @@ describe( 'Error Reporting Unit Tests', () =>
         validators.union( v, 'val', ctx, [validators.string, validators.number]);
 
         expect( ctx.success ).toBe( false );
-        // Should have 3 errors: union itself + string branch + number branch
-        expect( ctx.errors ).toHaveLength( 3 );
+        expect( ctx.errors ).toHaveLength( 1 );
         expect( ctx.errors[0].error ).toBe( 'Type<Union>' );
-        expect( ctx.errors[1].error ).toBe( 'Type<string>' );
-        expect( ctx.errors[2].error ).toBe( 'Type<number>' );
+        expect( ctx.errors[0].path ).toBe( 'val' );
+        expect( ctx.errors[0].value ).toBe( true );
+        expect( ctx.errors[0].issues ).toEqual([
+            { path : 'val', error : 'Type<string>', value : true },
+            { path : 'val', error : 'Type<number>', value : true }
+        ]);
     });
 
     it( 'should report multiple errors in arrays', () => 
@@ -112,10 +119,12 @@ describe( 'Error Reporting Unit Tests', () =>
         
         const infoValidator = ( v: any, path: string, ctx: any ) => 
         {
-            if( !validators.object( v, path, ctx )) { return v } // Should exit here
-            validators.props( v, v, path, ctx, [['first', false, validators.string]]);
+            const obj = validators.object( v, path, ctx );
 
-            return v;
+            if( obj === false ){ return v } // Should exit here
+            validators.props( obj, obj, path, ctx, [['first', false, validators.string]]);
+
+            return obj;
         };
 
         validators.props( v, v, 'root', ctx, [['info', false, infoValidator]]);
@@ -179,6 +188,34 @@ describe( 'Error Reporting Unit Tests', () =>
             expect( err.message ).toBe( 'Validation failed' );
             expect( err.issues ).toHaveLength( 1 );
             expect( err.issues[0].path ).toEqual(['user', 'name']);
+        });
+
+        it( 'should flatten nested union issues for Zod', () => 
+        {
+            // Arrange
+            const errors = 
+            [
+                {
+                    path   : 'val',
+                    error  : 'Type<Union>',
+                    value  : true,
+                    issues : [
+                        { path : 'val', error : 'Type<string>', value : true },
+                        { path : 'val', error : 'Type<number>', value : true }
+                    ]
+                }
+            ];
+
+            // Act
+            const issues = toZodIssues( errors );
+
+            // Assert
+            expect( issues ).toHaveLength( 3 );
+            expect( issues.map( i => i.message )).toEqual([
+                'Type<Union>',
+                'Type<string>',
+                'Type<number>'
+            ]);
         });
     });
 

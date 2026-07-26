@@ -1,25 +1,38 @@
 export type ValidationMode = 'strict' | 'relaxed' | 'strip';
 
 export interface IValidationError {
-    path  : string
-    value : any
-    error : string
+    path     : string
+    value    : any
+    error    : string
+    /** Nested failures (e.g. per-arm errors for a failed union). */
+    issues?  : IValidationError[]
 }
+
+/** Internal expected-type labels for custom `from` callbacks. Not exported from the package. */
+type BaseType =
+    | 'string' | 'number' | 'boolean' | 'bigint' | 'function' | 'symbol' | 'never'
+    | 'Date' | 'RegExp' | 'Set' | 'Map' | 'Array' | 'Object' | 'instance'
+    | 'null' | 'undefined' | 'tuple' | 'literal';
+
+type FromOption = 'json' | 'query' | (( key: string, value: any, type: BaseType ) => any );
 
 export interface ValidationContext {
     success     : boolean
     errors      : IValidationError[]
     mode        : ValidationMode
-    tryConvert? : boolean
+    from?       : FromOption
     wrapArrays? : boolean
+    mutate?     : boolean
     root?       : any
 }
 
 
 export interface ValidationOptions {
     mode?         : ValidationMode
-    tryConvert?   : boolean
+    from?         : FromOption
     wrapArrays?   : boolean
+    /** When true, write validated/coerced values onto the input. Default false: always return new containers. */
+    mutate?       : boolean
     schema?       : any
     errorFactory? : ( errors: IValidationError[]) => Error
 }
@@ -31,92 +44,505 @@ const report = ( ctx: ValidationContext, path: string, expected: string, value: 
     ctx.errors.push({ path, value, error : message || expected });
 };
 
+function isPlainObject( v: any ): boolean 
+{
+    if( v === null || typeof v !== 'object' || Array.isArray( v )) { return false }
+
+    if( v instanceof Date || v instanceof RegExp || v instanceof Map || v instanceof Set ) { return false }
+
+    if( typeof Buffer !== 'undefined' && typeof Buffer.isBuffer === 'function' && Buffer.isBuffer( v )) { return false }
+
+    if( ArrayBuffer.isView( v ) || v instanceof ArrayBuffer ) { return false }
+
+    const proto = Object.getPrototypeOf( v );
+
+    return proto === Object.prototype || proto === null;
+}
+
+function testRegex( regex: RegExp, value: string ): boolean 
+{
+    if( !regex.global && !regex.sticky ) { return regex.test( value ) }
+
+    const copy = new RegExp( regex.source, regex.flags );
+
+    return copy.test( value );
+}
+
+function isMultipleOfNumber( v: number, n: number ): boolean 
+{
+    if( n === 0 || !Number.isFinite( n )) { return false }
+
+    if( !Number.isFinite( v )) { return true }
+
+    const q = v / n;
+
+    return Math.abs( q - Math.round( q )) <= 1e-8 * Math.max( 1, Math.abs( q ));
+}
+
+function shouldMutate( ctx: ValidationContext ): boolean 
+{
+    return ctx.mutate === true;
+}
+
+function wantsQuery( ctx: ValidationContext ): boolean
+{
+    return ctx.from === 'query';
+}
+
+function wantsJsonRevive( ctx: ValidationContext ): boolean
+{
+    return ctx.from === 'json' || ctx.from === 'query';
+}
+
+function pathKey( path: string ): string
+{
+    if( !path ){ return '' }
+
+    const bracket = path.lastIndexOf( '[' );
+    const dot = path.lastIndexOf( '.' );
+
+    if( bracket > dot )
+    {
+        const end = path.lastIndexOf( ']' );
+
+        if( end > bracket ){ return path.slice( bracket + 1, end ) }
+    }
+
+    if( dot >= 0 ){ return path.slice( dot + 1 ) }
+
+    return path;
+}
+
+function fromCustom( ctx: ValidationContext, path: string, value: any, type: BaseType ): any
+{
+    if( typeof ctx.from !== 'function' ){ return value }
+
+    return ctx.from( pathKey( path ), value, type );
+}
+
+/** Query-style number coercion — shared by `from: 'query'` and `transform.ToNumber`. */
+export function coerceQueryNumber( v: any ): any
+{
+    if( typeof v === 'number' ){ return v }
+
+    if( typeof v === 'string' && v.trim() !== '' )
+    {
+        const parsed = parseFloat( v );
+
+        if( !Number.isNaN( parsed )){ return parsed }
+    }
+
+    return v;
+}
+
+/** Query-style boolean coercion — shared by `from: 'query'` and `transform.ToBoolean`. */
+export function coerceQueryBoolean( v: any ): any
+{
+    if( typeof v === 'boolean' ){ return v }
+
+    if( typeof v === 'string' || typeof v === 'number' )
+    {
+        const s = String( v ).toLowerCase();
+
+        if( s === 'true' || s === '1' || s === 'yes' || s === 'on' ){ return true }
+
+        if( s === 'false' || s === '0' || s === 'no' || s === 'off' ){ return false }
+    }
+
+    return v;
+}
+
+/** JSON-wire Date revival (ISO / date-parseable strings only). */
+export function coerceJsonDate( v: any ): any
+{
+    if( v instanceof Date && !Number.isNaN( v.getTime())){ return v }
+
+    if( typeof v === 'string' )
+    {
+        const parsed = new Date( v );
+
+        if( !Number.isNaN( parsed.getTime())){ return parsed }
+    }
+
+    return v;
+}
+
+/** Query-style Date coercion — shared by `from: 'query'` and `transform.ToDate`. */
+export function coerceQueryDate( v: any ): any
+{
+    const fromJson = coerceJsonDate( v );
+
+    if( fromJson !== v ){ return fromJson }
+
+    if( v instanceof Date && !Number.isNaN( v.getTime())){ return v }
+
+    if( typeof v === 'number' && Number.isFinite( v ))
+    {
+        const parsed = new Date( v );
+
+        if( !Number.isNaN( parsed.getTime())){ return parsed }
+    }
+
+    return v;
+}
+
+const EMAIL_LOCAL_RE = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+$/;
+const EMAIL_DOMAIN_RE = /^(?=.{1,253}$)(?:(?!-)[A-Za-z0-9-]{1,63}(?<!-)\.)+[A-Za-z]{2,63}$/i;
+const IDN_EMAIL_LOCAL_RE = /^[\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-]+$/u;
+const IDN_EMAIL_DOMAIN_RE = /^(?=.{1,253}$)(?:(?!-)[\p{L}\p{N}-]{1,63}(?<!-)\.)+[\p{L}]{2,63}$/u;
+const HOSTNAME_RE = /^(?=.{1,253}$)(?:localhost|(?:(?!-)[A-Za-z0-9-]{1,63}(?<!-)\.)+[A-Za-z]{2,63})$/i;
+const IDN_HOSTNAME_RE = /^(?=.{1,253}$)(?:localhost|(?:(?!-)[\p{L}\p{N}-]{1,63}(?<!-)\.)+[\p{L}]{2,63})$/iu;
+const URI_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:[^\s<>"{}|\\^`]*$/;
+const IRI_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:\S+$/u;
+const URI_TEMPLATE_RE = /^(?:[^{}\s]|\{[+#./;?&=,!@|]?(?:[A-Za-z0-9_]|%[0-9A-Fa-f]{2})(?:\.?(?:[A-Za-z0-9_]|%[0-9A-Fa-f]{2}))*(?::[1-9]\d{0,3}|\*)?(?:,(?:[A-Za-z0-9_]|%[0-9A-Fa-f]{2})(?:\.?(?:[A-Za-z0-9_]|%[0-9A-Fa-f]{2}))*(?::[1-9]\d{0,3}|\*)?)*\})+$/;
+
+function isEmail( value: string ): boolean 
+{
+    if( value.length > 254 ){ return false }
+
+    const at = value.lastIndexOf( '@' );
+
+    if( at < 1 || at !== value.indexOf( '@' ) || at === value.length - 1 ){ return false }
+
+    const local = value.slice( 0, at );
+    const domain = value.slice( at + 1 );
+
+    if( local.length > 64 ){ return false }
+
+    if( local.startsWith( '.' ) || local.endsWith( '.' ) || local.includes( '..' )){ return false }
+
+    if( !EMAIL_LOCAL_RE.test( local )){ return false }
+
+    if( !EMAIL_DOMAIN_RE.test( domain )){ return false }
+
+    return true;
+}
+
+function isIdnEmail( value: string ): boolean 
+{
+    if( value.length > 254 ){ return false }
+
+    const at = value.lastIndexOf( '@' );
+
+    if( at < 1 || at !== value.indexOf( '@' ) || at === value.length - 1 ){ return false }
+
+    const local = value.slice( 0, at );
+    const domain = value.slice( at + 1 );
+
+    if( local.length > 64 ){ return false }
+
+    if( local.startsWith( '.' ) || local.endsWith( '.' ) || local.includes( '..' )){ return false }
+
+    if( !IDN_EMAIL_LOCAL_RE.test( local )){ return false }
+
+    if( !IDN_EMAIL_DOMAIN_RE.test( domain )){ return false }
+
+    return true;
+}
+
+function isHostname( value: string ): boolean 
+{
+    return HOSTNAME_RE.test( value );
+}
+
+function isIdnHostname( value: string ): boolean 
+{
+    return IDN_HOSTNAME_RE.test( value );
+}
+
+function isUri( value: string ): boolean 
+{
+    if( !URI_RE.test( value )){ return false }
+
+    try 
+    {
+        // eslint-disable-next-line no-new
+        new URL( value );
+
+        return true;
+    }
+    catch 
+    {
+        // mailto:, urn:, and some other schemes are valid URIs but may throw in URL()
+        return /^[a-zA-Z][a-zA-Z0-9+.-]*:[^\s<>"{}|\\^`]+$/.test( value );
+    }
+}
+
+function isUriReference( value: string ): boolean 
+{
+    if( value === '' ){ return true }
+
+    if( isUri( value )){ return true }
+
+    if( /[\s<>"{}|\\^`]/.test( value )){ return false }
+
+    try 
+    {
+        // eslint-disable-next-line no-new
+        new URL( value, 'http://example.com' );
+
+        return true;
+    }
+    catch 
+    {
+        return false;
+    }
+}
+
+function isIri( value: string ): boolean 
+{
+    if( !IRI_RE.test( value )){ return false }
+
+    if( /[\u0000-\u001F\u007F]/.test( value )){ return false }
+
+    try 
+    {
+        // eslint-disable-next-line no-new
+        new URL( value );
+
+        return true;
+    }
+    catch 
+    {
+        return /^[a-zA-Z][a-zA-Z0-9+.-]*:\S+$/u.test( value );
+    }
+}
+
+function isIriReference( value: string ): boolean 
+{
+    if( value === '' ){ return true }
+
+    if( isIri( value )){ return true }
+
+    if( /\s|[\u0000-\u001F\u007F]/.test( value )){ return false }
+
+    try 
+    {
+        // eslint-disable-next-line no-new
+        new URL( value, 'http://example.com' );
+
+        return true;
+    }
+    catch 
+    {
+        return /^[^<>"{}|\\^`]+$/u.test( value );
+    }
+}
+
+function isUriTemplate( value: string ): boolean 
+{
+    if( !value || /\s/.test( value )){ return false }
+
+    let depth = 0;
+
+    for( const ch of value ) 
+    {
+        if( ch === '{' ){ depth++ }
+        else if( ch === '}' ) 
+        {
+            if( depth === 0 ){ return false }
+            depth--;
+        }
+    }
+
+    if( depth !== 0 ){ return false }
+
+    return URI_TEMPLATE_RE.test( value );
+}
+
+function parseFormatDate( value: string ): Date | undefined 
+{
+    if( typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test( value )){ return undefined }
+
+    const parsed = new Date( value );
+
+    if( Number.isNaN( parsed.getTime())){ return undefined }
+
+    return parsed;
+}
+
+function parseFormatDateTime( value: string ): Date | undefined 
+{
+    if( typeof value !== 'string' ){ return undefined }
+
+    const parsed = new Date( value );
+
+    if( Number.isNaN( parsed.getTime())){ return undefined }
+
+    return parsed;
+}
+
+function stableStringify( value: any, seen: WeakSet<object> = new WeakSet()): string | undefined 
+{
+    if( value === null || typeof value !== 'object' ) 
+    {
+        return JSON.stringify( value );
+    }
+
+    if( seen.has( value )) { return undefined }
+
+    seen.add( value );
+
+    if( Array.isArray( value )) 
+    {
+        const parts = value.map( item => 
+        {
+            const s = stableStringify( item, seen );
+
+            return s === undefined ? '"[Circular]"' : s;
+        });
+
+        return `[${parts.join( ',' )}]`;
+    }
+
+    const keys = Object.keys( value ).sort();
+    const parts = keys.map( key => `${JSON.stringify( key )}:${stableStringify( value[key], seen ) ?? '"[Circular]"'}` );
+
+    return `{${parts.join( ',' )}}`;
+}
+
 export const validators = {
+    coerceQueryNumber,
+    coerceQueryBoolean,
+    coerceQueryDate,
+    coerceJsonDate,
+
     string : ( v: any, path: string, ctx: ValidationContext ) => 
     {
-        if( typeof v !== 'string' ) 
+        if( typeof v === 'string' ){ return v }
+
+        if( typeof ctx.from === 'function' )
         {
-            report( ctx, path, 'Type<string>', v );
+            const converted = fromCustom( ctx, path, v, 'string' );
+
+            if( typeof converted === 'string' ){ return converted }
         }
+
+        report( ctx, path, 'Type<string>', v );
 
         return v;
     },
 
     number : ( v: any, path: string, ctx: ValidationContext ) => 
     {
-        if( typeof v !== 'number' ) 
-        {
-            if( ctx.tryConvert && typeof v === 'string' && v.trim() !== '' ) 
-            {
-                const parsed = parseFloat( v );
+        if( wantsQuery( ctx )){ v = coerceQueryNumber( v ) }
 
-                if( !isNaN( parsed )) { return parsed }
+        if( typeof v === 'number' ) 
+        {
+            if( Number.isNaN( v )) 
+            {
+                report( ctx, path, 'Type<number>', v );
             }
-            report( ctx, path, 'Type<number>', v );
+
+            return v;
         }
+
+        if( typeof ctx.from === 'function' )
+        {
+            const converted = fromCustom( ctx, path, v, 'number' );
+
+            if( typeof converted === 'number' && !Number.isNaN( converted )){ return converted }
+        }
+
+        report( ctx, path, 'Type<number>', v );
 
         return v;
     },
 
     bigint : ( v: any, path: string, ctx: ValidationContext ) => 
     {
-        if( typeof v !== 'bigint' ) 
+        if( typeof v === 'bigint' ){ return v }
+
+        if( wantsJsonRevive( ctx ) && typeof v === 'string' && v.trim() !== '' ) 
         {
-            if( ctx.tryConvert && typeof v === 'string' && v.trim() !== '' ) 
+            try 
             {
-                try 
-                {
-                    return BigInt( v );
-                }
-                catch ( e ) { /* ignore */ }
+                return BigInt( v );
             }
-            report( ctx, path, 'Type<bigint>', v );
+            catch ( e ) { /* ignore */ }
         }
+
+        if( wantsQuery( ctx ) && typeof v === 'number' && Number.isFinite( v ) && Number.isInteger( v )) 
+        {
+            try 
+            {
+                return BigInt( v );
+            }
+            catch ( e ) { /* ignore */ }
+        }
+
+        if( typeof ctx.from === 'function' )
+        {
+            const converted = fromCustom( ctx, path, v, 'bigint' );
+
+            if( typeof converted === 'bigint' ){ return converted }
+        }
+
+        report( ctx, path, 'Type<bigint>', v );
 
         return v;
     },
 
     boolean : ( v: any, path: string, ctx: ValidationContext ) => 
     {
-        if( typeof v !== 'boolean' ) 
+        if( wantsQuery( ctx )){ v = coerceQueryBoolean( v ) }
+
+        if( typeof v === 'boolean' ){ return v }
+
+        if( typeof ctx.from === 'function' )
         {
-            if( ctx.tryConvert && ( v === undefined || v === null )) { return false }
+            const converted = fromCustom( ctx, path, v, 'boolean' );
 
-            if( ctx.tryConvert && ( typeof v === 'string' || typeof v === 'number' )) 
-            {
-                const s = String( v ).toLowerCase();
-
-                if( s === 'true' || s === '1' || s === 'yes' || s === 'on' ) { return true }
-
-                if( s === 'false' || s === '0' || s === 'no' || s === 'off' ) { return false }
-            }
-            report( ctx, path, 'Type<boolean>', v );
+            if( typeof converted === 'boolean' ){ return converted }
         }
+
+        report( ctx, path, 'Type<boolean>', v );
+
+        return v;
+    },
+
+    function : ( v: any, path: string, ctx: ValidationContext ) => 
+    {
+        if( typeof v === 'function' ){ return v }
+
+        if( typeof ctx.from === 'function' )
+        {
+            const converted = fromCustom( ctx, path, v, 'function' );
+
+            if( typeof converted === 'function' ){ return converted }
+        }
+
+        report( ctx, path, 'Type<function>', v );
 
         return v;
     },
 
     date : ( v: any, path: string, ctx: ValidationContext ) => 
     {
-        if( !( v instanceof Date ) || isNaN( v.getTime())) 
-        {
-            if( ctx.tryConvert && typeof v === 'string' ) 
-            {
-                const parsed = new Date( v );
+        if( wantsQuery( ctx )){ v = coerceQueryDate( v ) }
+        else if( ctx.from === 'json' ){ v = coerceJsonDate( v ) }
 
-                if( !isNaN( parsed.getTime())) { return parsed }
-            }
-            report( ctx, path, 'Type<Date>', v );
+        if( v instanceof Date && !Number.isNaN( v.getTime())) { return v }
+
+        if( typeof ctx.from === 'function' )
+        {
+            const converted = fromCustom( ctx, path, v, 'Date' );
+
+            if( converted instanceof Date && !Number.isNaN( converted.getTime())){ return converted }
         }
+
+        report( ctx, path, 'Type<Date>', v );
 
         return v;
     },
 
     regexp : ( v: any, path: string, ctx: ValidationContext ) => 
     {
-        if( !( v instanceof RegExp )) 
+        if( v instanceof RegExp ) { return v }
+
+        if( wantsJsonRevive( ctx ))
         {
-            if( ctx.tryConvert && typeof v === 'string' ) 
+            if( typeof v === 'string' ) 
             {
                 const match = v.match( /^\/(.*)\/([gimuy]*)$/ );
 
@@ -126,78 +552,102 @@ export const validators = {
                     {
                         return new RegExp( match[1], match[2]);
                     }
-                    catch ( e ) { }
+                    catch ( e ) { /* fall through */ }
                 }
-                else 
+                else if( wantsQuery( ctx )) 
                 {
                     try 
                     {
                         return new RegExp( v );
                     }
-                    catch ( e ) { }
+                    catch ( e ) { /* fall through */ }
                 }
             }
-            report( ctx, path, 'Type<RegExp>', v );
+
+            if( v && typeof v === 'object' && typeof v.source === 'string' ) 
+            {
+                try 
+                {
+                    return new RegExp( v.source, typeof v.flags === 'string' ? v.flags : '' );
+                }
+                catch ( e ) { /* fall through */ }
+            }
         }
+
+        if( typeof ctx.from === 'function' )
+        {
+            const converted = fromCustom( ctx, path, v, 'RegExp' );
+
+            if( converted instanceof RegExp ){ return converted }
+        }
+
+        report( ctx, path, 'Type<RegExp>', v );
 
         return v;
     },
 
     null : ( v: any, path: string, ctx: ValidationContext ) => 
     {
-        if( v !== null ) 
+        if( v === null ){ return null }
+
+        if( typeof ctx.from === 'function' )
         {
-            report( ctx, path, 'Type<null>', v );
+            const converted = fromCustom( ctx, path, v, 'null' );
+
+            if( converted === null ){ return null }
         }
+
+        report( ctx, path, 'Type<null>', v );
 
         return null;
     },
 
     undefined : ( v: any, path: string, ctx: ValidationContext ) => 
     {
-        if( v !== undefined ) 
+        if( v === undefined ){ return undefined }
+
+        if( typeof ctx.from === 'function' )
         {
-            report( ctx, path, 'Type<undefined>', v );
+            const converted = fromCustom( ctx, path, v, 'undefined' );
+
+            if( converted === undefined ){ return undefined }
         }
+
+        report( ctx, path, 'Type<undefined>', v );
 
         return undefined;
     },
 
     literal : ( v: any, path: string, ctx: ValidationContext, expected: any ) => 
     {
-        if( v !== expected ) 
+        if( v === expected ){ return v }
+
+        if( wantsQuery( ctx )) 
         {
-            if( ctx.tryConvert && ( v === undefined || v === null )) 
+            if( typeof expected === 'number' ) 
             {
-                if( typeof expected === 'boolean' ) 
-                {
-                    if( expected === false ) { return false }
-                }
+                const p = coerceQueryNumber( v );
+
+                if( p === expected ) { return p }
             }
 
-            if( ctx.tryConvert && typeof v === 'string' ) 
+            if( typeof expected === 'boolean' ) 
             {
-                if( typeof expected === 'number' ) 
-                {
-                    const p = parseFloat( v );
+                const val = coerceQueryBoolean( v );
 
-                    if( p === expected ) { return p }
-                }
-
-                if( typeof expected === 'boolean' ) 
-                {
-                    const s = v.toLowerCase();
-                    let val: boolean | undefined;
-
-                    if( s === 'true' || s === '1' || s === 'yes' || s === 'on' ) { val = true }
-                    else if( s === 'false' || s === '0' || s === 'no' || s === 'off' ) { val = false }
-
-                    if( val === expected ) { return val }
-                }
+                if( val === expected ) { return val }
             }
-            const expStr = typeof expected === 'string' ? `'${expected}'` : expected;
-            report( ctx, path, `Literal<${expStr}>`, v );
         }
+
+        if( typeof ctx.from === 'function' )
+        {
+            const converted = fromCustom( ctx, path, v, 'literal' );
+
+            if( converted === expected ){ return converted }
+        }
+
+        const expStr = typeof expected === 'string' ? `'${expected}'` : expected;
+        report( ctx, path, `Literal<${expStr}>`, v );
 
         return v;
     },
@@ -210,6 +660,18 @@ export const validators = {
             {
                 v = [v];
             }
+            else if( typeof ctx.from === 'function' )
+            {
+                const converted = fromCustom( ctx, path, v, 'Array' );
+
+                if( Array.isArray( converted )){ v = converted }
+                else 
+                {
+                    report( ctx, path, 'Type<Array>', v );
+
+                    return v;
+                }
+            }
             else 
             {
                 report( ctx, path, 'Type<Array>', v );
@@ -217,13 +679,13 @@ export const validators = {
                 return v;
             }
         }
-        const data = ctx.mode === 'strip' ? [] : v;
+        const mutate = shouldMutate( ctx );
+        const data = mutate ? v : [];
 
         for( let i = 0; i < v.length; i++ ) 
         {
             const val = childValidator( v[i], path + '[' + i + ']', ctx );
-
-            if( ctx.mode === 'strip' ) { ( data as any[]).push( val ) }
+            data[i] = val;
         }
 
         return data;
@@ -235,6 +697,7 @@ export const validators = {
         {
             const val = v[key];
             const oldErrors = ctx.errors.length;
+            const wasSuccess = ctx.success;
             const result = validator( val, path + '.' + key, ctx );
 
             if( ctx.success ) 
@@ -243,19 +706,69 @@ export const validators = {
             }
             else if( isOptional && val === undefined ) 
             {
-                ctx.success = true;
                 ctx.errors.length = oldErrors;
+                ctx.success = wasSuccess;
             }
+        }
+    },
+
+    objectShell : ( v: any, ctx: ValidationContext ) => 
+    {
+        if( shouldMutate( ctx )) { return v }
+
+        if( !isPlainObject( v )) { return v }
+
+        if( ctx.mode === 'strip' ) { return {} }
+
+        return { ...v };
+    },
+
+    stripExtras : ( data: any, ctx: ValidationContext, allowedKeys?: string[]) => 
+    {
+        if( !shouldMutate( ctx ) || ctx.mode !== 'strip' || !allowedKeys || !data || typeof data !== 'object' ) { return data }
+
+        for( const k of Object.keys( data )) 
+        {
+            if( !allowedKeys.includes( k )) { delete data[k] }
+        }
+
+        return data;
+    },
+
+    additionalProps : ( v: any, data: any, path: string, ctx: ValidationContext, knownKeys: string[], childValidator: Function ) => 
+    {
+        if( !isPlainObject( v )){ return }
+
+        for( const key of Object.keys( v )) 
+        {
+            if( knownKeys.includes( key )){ continue }
+
+            data[key] = childValidator( v[key], path + '.' + key, ctx );
         }
     },
 
     object : ( v: any, path: string, ctx: ValidationContext, allowedKeys?: string[], expected: string = 'Type<Object>' ) => 
     {
-        if( !v || typeof v !== 'object' || Array.isArray( v )) 
+        if( !isPlainObject( v )) 
         {
-            report( ctx, path, expected, v );
+            if( typeof ctx.from === 'function' )
+            {
+                const converted = fromCustom( ctx, path, v, 'Object' );
 
-            return false;
+                if( isPlainObject( converted )){ v = converted }
+                else 
+                {
+                    report( ctx, path, expected, v );
+
+                    return false;
+                }
+            }
+            else 
+            {
+                report( ctx, path, expected, v );
+
+                return false;
+            }
         }
 
         if( ctx.mode === 'strict' && allowedKeys ) 
@@ -269,12 +782,12 @@ export const validators = {
             }
         }
 
-        return true;
+        return v;
     },
 
     templateLiteral : ( v: any, path: string, ctx: ValidationContext, regex: RegExp, expected: string ) => 
     {
-        if( typeof v !== 'string' || !regex.test( v )) 
+        if( typeof v !== 'string' || !testRegex( regex, v )) 
         {
             report( ctx, path, expected, v );
         }
@@ -330,9 +843,9 @@ export const validators = {
         {
             if( BigInt( v ) % BigInt( n ) !== 0n ) { report( ctx, path, `MultipleOf<${n}>`, v, message ) }
         }
-        else 
+        else if( !isMultipleOfNumber( v, n )) 
         {
-            if( v % n !== 0 ) { report( ctx, path, `MultipleOf<${n}>`, v, message ) }
+            report( ctx, path, `MultipleOf<${n}>`, v, message );
         }
 
         return v;
@@ -340,7 +853,7 @@ export const validators = {
 
     pattern : ( v: string, path: string, ctx: ValidationContext, regex: RegExp, expected: string, message?: string ) => 
     {
-        if( !regex.test( v )) { report( ctx, path, expected, v, message ) }
+        if( !testRegex( regex, v )) { report( ctx, path, expected, v, message ) }
 
         return v;
     },
@@ -349,34 +862,55 @@ export const validators = {
     {
         let regex: RegExp | undefined;
         let isValid = true;
+        let result: any = v;
 
         switch ( format ) 
         {
-            case 'email': regex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/; break;
+            case 'email': isValid = isEmail( v ); break;
+            case 'idn-email': isValid = isIdnEmail( v ); break;
             case 'uuid': regex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i; break;
             case 'url': regex = /^(?:https?|ftp):\/\/[^\s/$.?#].[^\s]*$/i; break;
             case 'ipv4': regex = /^(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/; break;
             case 'ipv6': regex = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$/; break;
-            case 'date': regex = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/; break;
-            case 'date-time': regex = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])[tT ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[zZ]|[+-]\d{2}:\d{2})$/; break;
+            case 'date': 
+            {
+                const parsed = parseFormatDate( v );
+
+                if( !parsed ){ isValid = false }
+                else if( wantsQuery( ctx )){ result = parsed }
+                break;
+            }
+            case 'date-time': 
+            {
+                const parsed = parseFormatDateTime( v );
+
+                if( !parsed ){ isValid = false }
+                else if( wantsQuery( ctx )){ result = parsed }
+                break;
+            }
 
             case 'byte': regex = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/; break;
             case 'password': break; // Anything is a password
             case 'regex': try { new RegExp( v ) }
             catch{ isValid = false }; break;
-            case 'hostname': regex = /^(?=.{1,253}$)(?:(?!-)[A-Za-z0-9-]{1,63}(?<!-)\.)+[A-Za-z]{2,63}$/; break;
-            case 'uri': regex = /^[a-zA-Z][a-zA-Z0-9+.-]*:[^\s]*$/; break;
+            case 'hostname': isValid = isHostname( v ); break;
+            case 'idn-hostname': isValid = isIdnHostname( v ); break;
+            case 'uri': isValid = isUri( v ); break;
+            case 'uri-reference': isValid = isUriReference( v ); break;
+            case 'iri': isValid = isIri( v ); break;
+            case 'iri-reference': isValid = isIriReference( v ); break;
+            case 'uri-template': isValid = isUriTemplate( v ); break;
             case 'time': regex = /^\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[zZ]|[+-]\d{2}:\d{2})$/; break;
             case 'duration': regex = /^P(?!$)(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+S)?)?$/; break;
             case 'objectId': regex = /^[0-9a-fA-F]{24}$/; break;
-            default: break;
+            default: isValid = false; break;
         }
 
-        if( regex && !regex.test( v )) { isValid = false }
+        if( regex && !testRegex( regex, v )) { isValid = false }
 
         if( !isValid ) { report( ctx, path, `Format<${format}>`, v, message ) }
 
-        return v;
+        return result;
     },
 
     minItems : ( v: any[], path: string, ctx: ValidationContext, min: number, message?: string ) => 
@@ -395,12 +929,14 @@ export const validators = {
 
     uniqueItems : ( v: any[], path: string, ctx: ValidationContext, message?: string ) => 
     {
-        const seen = new Set();
+        const seen = new Set<any>();
 
         for( let i = 0; i < v.length; i++ ) 
         {
             const item = v[i];
-            const key = typeof item === 'object' && item !== null ? JSON.stringify( item ) : item;
+            const key = typeof item === 'object' && item !== null
+                ? stableStringify( item ) ?? item
+                : item;
 
             if( seen.has( key )) 
             {
@@ -415,12 +951,13 @@ export const validators = {
 
     custom : ( v: any, path: string, ctx: ValidationContext, fn: Function, message?: string ) => 
     {
-        const parentPath = path.includes( '.' ) ? path.substring( 0, path.lastIndexOf( '.' )) : '';
+        const pathParts = tokenizePath( path );
+        const parentPath = joinPathSegments( pathParts.slice( 0, -1 ));
         const parent = getValueAtPath( ctx.root, parentPath );
-        const indexMatch = path.match( /\[(\d+)\]$/ );
-        const index = indexMatch ? parseInt( indexMatch[1], 10 ) : undefined;
+        const last = pathParts[pathParts.length - 1];
+        const index = last && last.startsWith( '[' ) ? parseInt( last.slice( 1, -1 ), 10 ) : undefined;
 
-        if( !fn( v, { parent, root : ctx.root, path, index })) 
+        if( !fn( v, { parent, root : ctx.root, path, index : Number.isNaN( index as number ) ? undefined : index })) 
         {
             report( ctx, path, fn.name ? `Custom<${fn.name}>` : 'Custom', v, message );
         }
@@ -431,34 +968,40 @@ export const validators = {
 
     union : ( v: any, path: string, ctx: ValidationContext, checks: Function[], expected: string = 'Type<Union>' ) => 
     {
+        const unionErrors: IValidationError[] = [];
+
         // Pass 1: No conversion
         for( const check of checks ) 
         {
-            const subCtx = { ...ctx, success : true, errors : [], tryConvert : false };
-            const val = check( v, path, subCtx );
-
-            if( subCtx.success ) { return val }
-        }
-
-        // Pass 2: With conversion
-        const unionErrors: IValidationError[] = [];
-
-        for( const check of checks ) 
-        {
-            const subCtx = { ...ctx, success : true, errors : [], tryConvert : true };
+            const subCtx = { ...ctx, success : true, errors : [], from : undefined };
             const val = check( v, path, subCtx );
 
             if( subCtx.success ) { return val }
             unionErrors.push( ...subCtx.errors );
         }
 
+        // Pass 2: With conversion (only when caller opted in)
+        if( ctx.from ) 
+        {
+            unionErrors.length = 0;
+
+            for( const check of checks ) 
+            {
+                const subCtx = { ...ctx, success : true, errors : [] };
+                const val = check( v, path, subCtx );
+
+                if( subCtx.success ) { return val }
+                unionErrors.push( ...subCtx.errors );
+            }
+        }
+
         ctx.success = false;
         ctx.errors.push({
             path,
-            value : v,
-            error : expected
+            value  : v,
+            error  : expected,
+            issues : unionErrors.length > 0 ? unionErrors : undefined
         });
-        ctx.errors.push( ...unionErrors );
 
         return v;
     },
@@ -467,23 +1010,86 @@ export const validators = {
     {
         if( !Array.isArray( v ) || v.length !== checks.length ) 
         {
-            report( ctx, path, `Tuple<${checks.length}>`, v );
+            if( typeof ctx.from === 'function' )
+            {
+                const converted = fromCustom( ctx, path, v, 'tuple' );
 
-            return v;
+                if( Array.isArray( converted ) && converted.length === checks.length )
+                {
+                    v = converted;
+                }
+                else 
+                {
+                    report( ctx, path, `Tuple<${checks.length}>`, v );
+
+                    return v;
+                }
+            }
+            else 
+            {
+                report( ctx, path, `Tuple<${checks.length}>`, v );
+
+                return v;
+            }
         }
-        const data = ctx.mode === 'strip' ? [] : v;
+        const mutate = shouldMutate( ctx );
+        const data = mutate ? v : [];
 
         for( let i = 0; i < checks.length; i++ ) 
         {
-            const val = checks[i]( v[i], path + '[' + i + ']', ctx );
-
-            if( ctx.mode === 'strip' ) { ( data as any[]).push( val ) }
+            data[i] = checks[i]( v[i], path + '[' + i + ']', ctx );
         }
 
         return data;
     },
 
     any : ( v: any ) => v,
+
+    never : ( v: any, path: string, ctx: ValidationContext ) => 
+    {
+        if( typeof ctx.from === 'function' )
+        {
+            fromCustom( ctx, path, v, 'never' );
+        }
+
+        report( ctx, path, 'Type<never>', v );
+
+        return v;
+    },
+
+    symbol : ( v: any, path: string, ctx: ValidationContext ) => 
+    {
+        if( typeof v === 'symbol' ){ return v }
+
+        if( typeof ctx.from === 'function' )
+        {
+            const converted = fromCustom( ctx, path, v, 'symbol' );
+
+            if( typeof converted === 'symbol' ){ return converted }
+        }
+
+        report( ctx, path, 'Type<symbol>', v );
+
+        return v;
+    },
+
+    instanceOf : ( v: any, path: string, ctx: ValidationContext, typeName: string ) => 
+    {
+        const ctor = ( globalThis as any )[typeName];
+
+        if( ctor && v instanceof ctor ){ return v }
+
+        if( typeof ctx.from === 'function' )
+        {
+            const converted = fromCustom( ctx, path, v, 'instance' );
+
+            if( ctor && converted instanceof ctor ){ return converted }
+        }
+
+        report( ctx, path, `Type<${typeName}>`, v );
+
+        return v;
+    },
 
     requires : ( v: any, path: string, ctx: ValidationContext, reqs: string[], message?: string ) => 
     {
@@ -504,19 +1110,33 @@ export const validators = {
 
     record : ( v: any, path: string, ctx: ValidationContext, childValidator: Function ) => 
     {
-        if( !v || typeof v !== 'object' || Array.isArray( v )) 
+        if( !isPlainObject( v )) 
         {
-            report( ctx, path, 'Type<Object>', v );
+            if( typeof ctx.from === 'function' )
+            {
+                const converted = fromCustom( ctx, path, v, 'Object' );
 
-            return v;
+                if( isPlainObject( converted )){ v = converted }
+                else 
+                {
+                    report( ctx, path, 'Type<Object>', v );
+
+                    return v;
+                }
+            }
+            else 
+            {
+                report( ctx, path, 'Type<Object>', v );
+
+                return v;
+            }
         }
-        const data = ctx.mode === 'strip' ? {} : v;
+        const mutate = shouldMutate( ctx );
+        const data = mutate ? v : {};
 
         for( const key of Object.keys( v )) 
         {
-            const val = childValidator( v[key], path + '.' + key, ctx );
-
-            if( ctx.mode === 'strip' ) { ( data as any )[key] = val }
+            data[key] = childValidator( v[key], path + '.' + key, ctx );
         }
 
         return data;
@@ -526,13 +1146,25 @@ export const validators = {
     {
         if( !( v instanceof Set )) 
         {
-            if( ctx.tryConvert && Array.isArray( v )) 
+            if( wantsJsonRevive( ctx ) && Array.isArray( v )) 
             {
                 v = new Set( v );
             }
-            else if( ctx.tryConvert && v !== undefined && v !== null ) 
+            else if( wantsQuery( ctx ) && v !== undefined && v !== null ) 
             {
                 v = new Set([v]);
+            }
+            else if( typeof ctx.from === 'function' )
+            {
+                const converted = fromCustom( ctx, path, v, 'Set' );
+
+                if( converted instanceof Set ){ v = converted }
+                else 
+                {
+                    report( ctx, path, 'Type<Set>', v, message );
+
+                    return v;
+                }
             }
             else 
             {
@@ -541,14 +1173,16 @@ export const validators = {
                 return v;
             }
         }
-        const data = ctx.mode === 'strip' ? new Set() : v;
+        const mutate = shouldMutate( ctx );
+        const source = [...v];
+
+        if( mutate ) { v.clear() }
+        const data = mutate ? v : new Set();
         let index = 0;
 
-        for( const item of v ) 
+        for( const item of source ) 
         {
-            const val = childValidator( item, `${path}[${index}]`, ctx );
-
-            if( ctx.mode === 'strip' ) { data.add( val ) }
+            data.add( childValidator( item, `${path}[${index}]`, ctx ));
             index++;
         }
 
@@ -559,9 +1193,21 @@ export const validators = {
     {
         if( !( v instanceof Map )) 
         {
-            if( ctx.tryConvert && typeof v === 'object' && v !== null && !Array.isArray( v )) 
+            if( wantsJsonRevive( ctx ) && isPlainObject( v )) 
             {
                 v = new Map( Object.entries( v ));
+            }
+            else if( typeof ctx.from === 'function' )
+            {
+                const converted = fromCustom( ctx, path, v, 'Map' );
+
+                if( converted instanceof Map ){ v = converted }
+                else 
+                {
+                    report( ctx, path, 'Type<Map>', v, message );
+
+                    return v;
+                }
             }
             else 
             {
@@ -570,22 +1216,95 @@ export const validators = {
                 return v;
             }
         }
-        const data = ctx.mode === 'strip' ? new Map() : v;
+        const mutate = shouldMutate( ctx );
+        const source = [...v.entries()];
 
-        for( const [key, val] of v.entries()) 
+        if( mutate ) { v.clear() }
+        const data = mutate ? v : new Map();
+
+        for( const [key, val] of source ) 
         {
             const validatedKey = keyValidator( key, `${path}.key(${JSON.stringify( key )})`, ctx );
             const validatedVal = valueValidator( val, `${path}[${JSON.stringify( key )}]`, ctx );
-
-            if( ctx.mode === 'strip' ) 
-            {
-                data.set( validatedKey, validatedVal );
-            }
+            data.set( validatedKey, validatedVal );
         }
 
         return data;
     }
 };
+
+function tokenizePath( path: string ): string[] 
+{
+    const cleanPath = path.startsWith( '.' ) ? path.substring( 1 ) : path;
+
+    if( !cleanPath ) { return [] }
+
+    const segments: string[] = [];
+    let buf = '';
+
+    for( let i = 0; i < cleanPath.length; i++ ) 
+    {
+        const ch = cleanPath[i];
+
+        if( ch === '.' ) 
+        {
+            if( buf ) 
+            {
+                segments.push( buf );
+                buf = '';
+            }
+        }
+        else if( ch === '[' ) 
+        {
+            if( buf ) 
+            {
+                segments.push( buf );
+                buf = '';
+            }
+
+            const end = cleanPath.indexOf( ']', i );
+
+            if( end === -1 ) 
+            {
+                buf += cleanPath.substring( i );
+                break;
+            }
+            segments.push( cleanPath.substring( i, end + 1 ));
+            i = end;
+        }
+        else 
+        {
+            buf += ch;
+        }
+    }
+
+    if( buf ) { segments.push( buf ) }
+
+    return segments;
+}
+
+function joinPathSegments( segments: string[]): string 
+{
+    let result = '';
+
+    for( const seg of segments ) 
+    {
+        if( seg.startsWith( '[' )) 
+        {
+            result += seg;
+        }
+        else if( result ) 
+        {
+            result += '.' + seg;
+        }
+        else 
+        {
+            result = seg;
+        }
+    }
+
+    return result;
+}
 
 function resolvePath( currentPath: string, targetPath: string ): string 
 {
@@ -597,25 +1316,24 @@ function resolvePath( currentPath: string, targetPath: string ): string
     const dots = dotsMatch ? dotsMatch[0].length : 0;
     const targetClean = targetPath.substring( dots );
 
-    const cleanCurrentPath = currentPath.startsWith( '.' ) ? currentPath.substring( 1 ) : currentPath;
-    const currentParts = cleanCurrentPath ? cleanCurrentPath.split( '.' ) : [];
-    const baseParts = currentParts.slice( 0, currentParts.length - dots );
+    const currentParts = tokenizePath( currentPath );
+    const baseParts = currentParts.slice( 0, Math.max( 0, currentParts.length - dots ));
 
     if( targetClean ) 
     {
-        baseParts.push( targetClean );
+        baseParts.push( ...tokenizePath( targetClean ));
     }
 
-    return baseParts.join( '.' );
+    return joinPathSegments( baseParts );
 }
 
 function getValueAtPath( obj: any, path: string ): any 
 {
     if( !obj || typeof obj !== 'object' ) { return undefined }
-    const cleanPath = path.startsWith( '.' ) ? path.substring( 1 ) : path;
 
-    if( !cleanPath ) { return obj }
-    const parts = cleanPath.split( '.' );
+    const parts = tokenizePath( path );
+
+    if( parts.length === 0 ) { return obj }
     let current = obj;
 
     for( const part of parts ) 
@@ -624,19 +1342,15 @@ function getValueAtPath( obj: any, path: string ): any
         {
             return undefined;
         }
-        const matches = part.split( '[' );
-        const baseKey = matches[0];
-        current = current[baseKey];
 
-        for( let i = 1; i < matches.length; i++ ) 
+        if( part.startsWith( '[' ) && part.endsWith( ']' )) 
         {
-            if( current === null || current === undefined || typeof current !== 'object' ) 
-            {
-                return undefined;
-            }
-            const idxStr = matches[i].replace( ']', '' );
-            const idx = parseInt( idxStr, 10 );
+            const idx = parseInt( part.slice( 1, -1 ), 10 );
             current = current[idx];
+        }
+        else 
+        {
+            current = current[part];
         }
     }
 
@@ -705,9 +1419,10 @@ export class MetadataStoreClass
     {
         const opt = options;
         const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
-        const tryConvert = typeof opt === 'object' ? opt?.tryConvert : undefined;
+        // Type predicates require the value already match T — never coerce.
         const wrapArrays = typeof opt === 'object' ? opt?.wrapArrays : undefined;
-        const ctx: ValidationContext = { success : true, errors : [], mode, tryConvert, wrapArrays, root : value };
+        const mutate = typeof opt === 'object' ? opt?.mutate === true : false;
+        const ctx: ValidationContext = { success : true, errors : [], mode, wrapArrays, mutate, root : value };
         validator( value, '', ctx );
 
         return ctx.success;
@@ -717,9 +1432,10 @@ export class MetadataStoreClass
     {
         const opt = options;
         const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
-        const tryConvert = typeof opt === 'object' ? opt?.tryConvert : undefined;
+        const from = typeof opt === 'object' ? opt?.from : undefined;
         const wrapArrays = typeof opt === 'object' ? opt?.wrapArrays : undefined;
-        const ctx: ValidationContext = { success : true, errors : [], mode, tryConvert, wrapArrays, root : value };
+        const mutate = typeof opt === 'object' ? opt?.mutate === true : false;
+        const ctx: ValidationContext = { success : true, errors : [], mode, from, wrapArrays, mutate, root : value };
         const res = validator( value, '', ctx );
 
         if( !ctx.success ) 
@@ -734,13 +1450,34 @@ export class MetadataStoreClass
         return res;
     }
 
+    assertGuard( validator: Function, value: any, options?: ValidationMode | ValidationOptions ): void 
+    {
+        const opt = options;
+        const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
+        // Assertion predicates require the value already match T — never coerce.
+        const wrapArrays = typeof opt === 'object' ? opt?.wrapArrays : undefined;
+        const mutate = typeof opt === 'object' ? opt?.mutate === true : false;
+        const ctx: ValidationContext = { success : true, errors : [], mode, wrapArrays, mutate, root : value };
+        validator( value, '', ctx );
+
+        if( !ctx.success ) 
+        {
+            if( typeof opt === 'object' && opt?.errorFactory ) 
+            {
+                throw opt.errorFactory( ctx.errors );
+            }
+            throw new Error( 'Validation Error: ' + ctx.errors.map( e => e.path ? `${e.path}: ${e.error}` : e.error ).join( ', ' ));
+        }
+    }
+
     validate( validator: Function, value: any, options?: ValidationMode | ValidationOptions ): { success : boolean, errors : IValidationError[], data : any } 
     {
         const opt = options;
         const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
-        const tryConvert = typeof opt === 'object' ? opt?.tryConvert : undefined;
+        const from = typeof opt === 'object' ? opt?.from : undefined;
         const wrapArrays = typeof opt === 'object' ? opt?.wrapArrays : undefined;
-        const ctx: ValidationContext = { success : true, errors : [], mode, tryConvert, wrapArrays, root : value };
+        const mutate = typeof opt === 'object' ? opt?.mutate === true : false;
+        const ctx: ValidationContext = { success : true, errors : [], mode, from, wrapArrays, mutate, root : value };
         const res = validator( value, '', ctx );
 
         return { success : ctx.success, errors : ctx.errors, data : res };
@@ -751,18 +1488,25 @@ export function groupErrorsByPath( errors: IValidationError[]): Record<string, {
 {
     const grouped: Record<string, { value : any, errors : string[] }> = {};
 
-    for( const err of errors ) 
+    const visit = ( list: IValidationError[]) => 
     {
-        if( !grouped[err.path]) 
+        for( const err of list ) 
         {
-            grouped[err.path] = { value : err.value, errors : [] };
-        }
+            if( !grouped[err.path]) 
+            {
+                grouped[err.path] = { value : err.value, errors : [] };
+            }
 
-        if( !grouped[err.path].errors.includes( err.error )) 
-        {
-            grouped[err.path].errors.push( err.error );
+            if( !grouped[err.path].errors.includes( err.error )) 
+            {
+                grouped[err.path].errors.push( err.error );
+            }
+
+            if( err.issues?.length ){ visit( err.issues ) }
         }
-    }
+    };
+
+    visit( errors );
 
     return grouped;
 }
@@ -815,6 +1559,103 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
             return proxy;
         }
 
+        if( subSchema['x-typescript-type'] === 'Date' ) 
+        {
+            return ( v, path, ctx ) => validators.date( v, path, ctx );
+        }
+
+        if( subSchema['x-typescript-type'] === 'RegExp' ) 
+        {
+            return ( v, path, ctx ) => validators.regexp( v, path, ctx );
+        }
+
+        if( subSchema['x-typescript-type'] === 'bigint' ) 
+        {
+            return ( v, path, ctx ) => validators.bigint( v, path, ctx );
+        }
+
+        if( subSchema['x-typescript-type'] === 'undefined' ) 
+        {
+            return ( v, path, ctx ) => validators.undefined( v, path, ctx );
+        }
+
+        if( subSchema['x-typescript-type'] === 'Set' ) 
+        {
+            const child = build( subSchema.items || {});
+
+            return ( v, path, ctx ) => validators.set( v, path, ctx, child );
+        }
+
+        if( subSchema['x-typescript-type'] === 'Map' ) 
+        {
+            const keyCheck = build( subSchema.key || { type : 'string' });
+            const valueCheck = build( subSchema.value || {});
+
+            return ( v, path, ctx ) => validators.map( v, path, ctx, keyCheck, valueCheck );
+        }
+
+        if( subSchema['x-typescript-type'] === 'Promise' ) 
+        {
+            return ( v, path, ctx ) => 
+            {
+                if( !( v instanceof Promise )) 
+                {
+                    report( ctx, path, 'Type<Promise>', v );
+                }
+
+                return v;
+            };
+        }
+
+        if( typeof subSchema['x-typescript-type'] === 'string' &&
+            ['Uint8Array', 'Uint16Array', 'Uint32Array', 'Int8Array', 'Int16Array', 'Int32Array', 'Float32Array', 'Float64Array', 'ArrayBuffer', 'SharedArrayBuffer', 'DataView', 'Buffer'].includes( subSchema['x-typescript-type'])) 
+        {
+            const typeName = subSchema['x-typescript-type'] as string;
+
+            return ( v, path, ctx ) => 
+            {
+                const ctor = ( globalThis as any )[typeName];
+
+                if( !ctor || !( v instanceof ctor )) 
+                {
+                    report( ctx, path, `Type<${typeName}>`, v );
+                }
+
+                return v;
+            };
+        }
+
+        if( subSchema.allOf ) 
+        {
+            const checks = subSchema.allOf.map(( s: any ) => build( s ));
+
+            return ( v, path, ctx ) => 
+            {
+                const prevMode = ctx.mode;
+
+                if( ctx.mode !== 'strip' ){ ctx.mode = 'relaxed' }
+                let data = validators.objectShell( v, ctx );
+
+                for( const check of checks ) 
+                {
+                    const val = check( v, path, ctx );
+
+                    if( isPlainObject( val ) && isPlainObject( data )) 
+                    {
+                        Object.assign( data, val );
+                    }
+                    else 
+                    {
+                        data = val;
+                    }
+                }
+
+                ctx.mode = prevMode;
+
+                return data;
+            };
+        }
+
         if( subSchema.type === 'string' ) 
         {
             const minLength = subSchema.minLength;
@@ -835,7 +1676,7 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
 
                 if( pattern !== undefined ) { validators.pattern( v, path, ctx, pattern, patternStr ) }
 
-                if( format !== undefined ) { validators.format( v, path, ctx, format ) }
+                if( format !== undefined ) { v = validators.format( v, path, ctx, format ) }
 
                 return v;
             };
@@ -846,6 +1687,8 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
             const isInt = subSchema.type === 'integer';
             const minimum = subSchema.minimum;
             const maximum = subSchema.maximum;
+            const exclusiveMinimum = subSchema.exclusiveMinimum;
+            const exclusiveMaximum = subSchema.exclusiveMaximum;
             const multipleOf = subSchema.multipleOf;
 
             return ( v, path, ctx ) => 
@@ -862,6 +1705,10 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
                 if( minimum !== undefined ) { validators.minimum( v, path, ctx, minimum ) }
 
                 if( maximum !== undefined ) { validators.maximum( v, path, ctx, maximum ) }
+
+                if( exclusiveMinimum !== undefined ) { validators.exclusiveMinimum( v, path, ctx, exclusiveMinimum ) }
+
+                if( exclusiveMaximum !== undefined ) { validators.exclusiveMaximum( v, path, ctx, exclusiveMaximum ) }
 
                 if( multipleOf !== undefined ) { validators.multipleOf( v, path, ctx, multipleOf ) }
 
@@ -931,37 +1778,29 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
                 return [key, isOptional, check] as [string, boolean, any];
             });
 
-            const allowedKeys = Object.keys( subSchema.properties || {});
+            const knownKeys = Object.keys( subSchema.properties || {});
+            const additional = 'additionalProperties' in subSchema
+                ? subSchema.additionalProperties
+                : false;
+            const strictKeys = additional === false ? knownKeys : undefined;
+            const additionalCheck = additional && typeof additional === 'object' ? build( additional ) : undefined;
 
             return ( v, path, ctx ) => 
             {
-                if( !validators.object( v, path, ctx, allowedKeys, 'Object' )) { return v }
-                let data = v;
+                const obj = validators.object( v, path, ctx, strictKeys, 'Object' );
 
-                if( ctx.mode === 'strip' ) 
+                if( obj === false ){ return v }
+                const data = validators.objectShell( obj, ctx );
+                validators.props( obj, data, path, ctx, propVals );
+
+                if( additionalCheck ) 
                 {
-                    let hasAdditional = false;
-                    const keys = Object.keys( v );
-
-                    if( keys.length > allowedKeys.length ) 
-                    {
-                        hasAdditional = true;
-                    }
-                    else 
-                    {
-                        for( let i = 0; i < keys.length; i++ ) 
-                        {
-                            if( !allowedKeys.includes( keys[i])) 
-                            {
-                                hasAdditional = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if( hasAdditional ) { data = {} }
+                    validators.additionalProps( obj, data, path, ctx, knownKeys, additionalCheck );
                 }
-                validators.props( v, data, path, ctx, propVals );
+                else if( additional === false ) 
+                {
+                    validators.stripExtras( data, ctx, knownKeys );
+                }
 
                 return data;
             };
@@ -990,28 +1829,36 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
 
 export function toZodIssues( errors: IValidationError[])
 {
-    return errors.map(( err ) => 
-    {
-        const zodPath = err.path
-            .split( /\.|\[|\]/ )
-            .filter( Boolean )
-            .map(( segment ) => 
-            {
-                if( isNaN( Number( segment ))){ return segment }
+    const issues: any[] = [];
 
-                return Number( segment );
+    const visit = ( list: IValidationError[]) => 
+    {
+        for( const err of list ) 
+        {
+            const zodPath = err.path
+                .split( /\.|\[|\]/ )
+                .filter( Boolean )
+                .map(( segment ) => 
+                {
+                    if( isNaN( Number( segment ))){ return segment }
+
+                    return Number( segment );
+                });
+
+            issues.push({
+                code     : 'custom',
+                path     : zodPath,
+                message  : err.error,
+                received : err.value
             });
 
-        const issue = 
-        {
-            code     : 'custom',
-            path     : zodPath,
-            message  : err.error,
-            received : err.value
-        };
+            if( err.issues?.length ){ visit( err.issues ) }
+        }
+    };
 
-        return issue;
-    });
+    visit( errors );
+
+    return issues;
 }
 
 export class ZodLikeError extends Error

@@ -40,6 +40,30 @@ describe( 'ResolveDefaults', () =>
 
         expect( bObj.foo ).toBe( 'test' );
     });
+
+    test( 'keeps Map, Set, Promise, and RegExp as identity', () => 
+    {
+        type WithContainers = {
+            m? : Map<string, number> & tag.Default<Map<string, number>>
+            s? : Set<string>
+            p  : Promise<string>
+            r  : RegExp
+        };
+
+        type Resolved = ResolveDefaults<WithContainers>;
+
+        const m = new Map<string, number>([['a', 1]]);
+        const resolved: Resolved = {
+            m,
+            s : new Set([ 'x' ]),
+            p : Promise.resolve( 'ok' ),
+            r : /abc/
+        };
+
+        expect( resolved.m ).toBe( m );
+        expect( resolved.s ).toBeInstanceOf( Set );
+        expect( resolved.r ).toBeInstanceOf( RegExp );
+    });
 });
 
 describe( 'constraint tag assignability', () => 

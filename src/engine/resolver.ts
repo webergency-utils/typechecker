@@ -16,7 +16,8 @@ import {
     createTemplateLiteralCheck,
     createConstrainedPrimitiveCheck,
     createSetCheck,
-    createMapCheck
+    createMapCheck,
+    createInstanceOfCheck
 } from './generators.js';
 import { createHash } from 'crypto';
 
@@ -85,6 +86,123 @@ function minifyTypeString( str: string ): string
         .replace( /;\s+/g, ',' )
         .replace( /:\s+/g, ':' )
         .replace( /\s+\|\s+/g, '|' );
+}
+
+function isNativeEnumType( type: ts.Type ): boolean
+{
+    const flags = type.getFlags();
+
+    if( flags & ts.TypeFlags.Enum ){ return true }
+
+    const symbol = type.getSymbol();
+
+    if( !symbol ){ return false }
+
+    return ( symbol.flags & ( ts.SymbolFlags.RegularEnum | ts.SymbolFlags.ConstEnum )) !== 0;
+}
+
+function buildEnumValidator(
+    type: ts.Type,
+    checker: ts.TypeChecker,
+    validatorsMap: Map<string, ts.Expression>,
+    requiredUtils: Set<string>
+): ts.Expression
+{
+    const symbol = type.getSymbol();
+    const checks: ts.Expression[] = [];
+
+    if( symbol?.exports )
+    {
+        symbol.exports.forEach( member =>
+        {
+            if( !( member.flags & ts.SymbolFlags.EnumMember )){ return }
+
+            const declaration = member.valueDeclaration || member.declarations?.[0];
+
+            if( !declaration ){ return }
+
+            const memberType = checker.getTypeOfSymbolAtLocation( member, declaration );
+            checks.push( buildValidator( memberType, checker, validatorsMap, requiredUtils ));
+        });
+    }
+
+    if( checks.length === 0 && type.isUnion())
+    {
+        const unionChecks = ( type as ts.UnionType ).types.map( t => buildValidator( t, checker, validatorsMap, requiredUtils ));
+
+        return createUnionCheck( unionChecks, requiredUtils, `Type<${minifyTypeString( checker.typeToString( type ))}>` );
+    }
+
+    if( checks.length === 0 )
+    {
+        return createPrimitiveCheck( 'any', requiredUtils );
+    }
+
+    if( checks.length === 1 ){ return checks[0] }
+
+    return createUnionCheck( checks, requiredUtils, `Type<${minifyTypeString( checker.typeToString( type ))}>` );
+}
+
+function isConstraintOnlyType( type: ts.Type, checker: ts.TypeChecker ): boolean
+{
+    const props = checker.getPropertiesOfType( type );
+
+    return props.length > 0 && props.every( p => p.getName().startsWith( '__' ));
+}
+
+function tryMergeObjectIntersection(
+    types: readonly ts.Type[],
+    checker: ts.TypeChecker,
+    validatorsMap: Map<string, ts.Expression>,
+    requiredUtils: Set<string>,
+    expected: string
+): ts.Expression | undefined
+{
+    const objectTypes = types.filter( t => 
+    {
+        if( isConstraintOnlyType( t, checker )){ return false }
+
+        const flags = t.getFlags();
+
+        return (( flags & ts.TypeFlags.Object ) !== 0 ) || t.isClassOrInterface();
+    });
+
+    if( objectTypes.length < 2 ){ return undefined }
+
+    const others = types.filter( t => !isConstraintOnlyType( t, checker ) && !objectTypes.includes( t ));
+
+    if( others.length > 0 ){ return undefined }
+
+    const propMap = new Map<string, { name : string, isOptional : boolean, validator : ts.Expression }>();
+    let indexValidator: ts.Expression | undefined;
+
+    for( const t of objectTypes ) 
+    {
+        const stringIndexInfo = checker.getIndexInfoOfType( t, ts.IndexKind.String );
+
+        if( stringIndexInfo ) 
+        {
+            indexValidator = buildValidator( stringIndexInfo.type, checker, validatorsMap, requiredUtils );
+        }
+
+        for( const prop of checker.getPropertiesOfType( t )) 
+        {
+            const name = prop.getName();
+
+            if( name.startsWith( '__' )){ continue }
+
+            const declaration = prop.valueDeclaration || prop.declarations?.[0];
+            const propType = declaration ? checker.getTypeOfSymbolAtLocation( prop, declaration ) : checker.getAnyType();
+
+            propMap.set( name, {
+                name,
+                isOptional : ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0,
+                validator  : buildValidator( propType, checker, validatorsMap, requiredUtils )
+            });
+        }
+    }
+
+    return createObjectCheck([ ...propMap.values() ], requiredUtils, expected, indexValidator );
 }
 
 export function buildValidator(
@@ -241,7 +359,7 @@ export function buildValidator(
 
                         if( fnName === '__function' || !fnName ) 
                         {
-                            throw new Error( '[Webergency] Custom validator must reference a named function via typeof (e.g. tag.Custom<typeof myFunc>).' );
+                            throw new Error( '[Webergency] Custom transform must reference a named function via typeof (e.g. transform.Custom<typeof myFunc>).' );
                         }
 
                         if( filePath ) 
@@ -294,7 +412,7 @@ export function buildValidator(
 
                         if( fnName === '__function' || !fnName ) 
                         {
-                            throw new Error( '[Webergency] Custom validator must reference a named function via typeof (e.g. tag.Custom<typeof myFunc>).' );
+                            throw new Error( '[Webergency] Custom validator must reference a named function via typeof (e.g. constraint.Custom<typeof myFunc>).' );
                         }
 
                         if( filePath ) 
@@ -407,8 +525,17 @@ export function buildValidator(
                 }
                 else if( nonConstraintTypes.length > 1 ) 
                 {
-                    const checks = nonConstraintTypes.map( t => buildValidator( t, checker, validatorsMap, requiredUtils ));
-                    baseValidator = createIntersectionCheck( checks, requiredUtils );
+                    const merged = tryMergeObjectIntersection(
+                        nonConstraintTypes,
+                        checker,
+                        validatorsMap,
+                        requiredUtils,
+                        minifyTypeString( checker.typeToString( type ))
+                    );
+                    baseValidator = merged || createIntersectionCheck(
+                        nonConstraintTypes.map( t => buildValidator( t, checker, validatorsMap, requiredUtils )),
+                        requiredUtils
+                    );
                 }
 
                 if( baseValidator ) 
@@ -417,15 +544,39 @@ export function buildValidator(
                 }
                 else 
                 {
-                    const checks = ( type as ts.IntersectionType ).types.map( t => buildValidator( t, checker, validatorsMap, requiredUtils ));
-                    result = createIntersectionCheck( checks, requiredUtils );
+                    const merged = tryMergeObjectIntersection(
+                        types,
+                        checker,
+                        validatorsMap,
+                        requiredUtils,
+                        minifyTypeString( checker.typeToString( type ))
+                    );
+                    result = merged || createIntersectionCheck(
+                        ( type as ts.IntersectionType ).types.map( t => buildValidator( t, checker, validatorsMap, requiredUtils )),
+                        requiredUtils
+                    );
                 }
             }
         }
         else 
         {
-            const checks = ( type as ts.IntersectionType ).types.map( t => buildValidator( t, checker, validatorsMap, requiredUtils ));
-            result = createIntersectionCheck( checks, requiredUtils );
+            const merged = tryMergeObjectIntersection(
+                types,
+                checker,
+                validatorsMap,
+                requiredUtils,
+                minifyTypeString( checker.typeToString( type ))
+            );
+
+            if( merged ) 
+            {
+                result = merged;
+            }
+            else 
+            {
+                const checks = ( type as ts.IntersectionType ).types.map( t => buildValidator( t, checker, validatorsMap, requiredUtils ));
+                result = createIntersectionCheck( checks, requiredUtils );
+            }
         }
     }
     else if( type.getSymbol()?.name === 'Date' ) 
@@ -451,6 +602,17 @@ export function buildValidator(
             requiredUtils
         );
     }
+    else if( type.getSymbol()?.name === 'Promise' ) 
+    {
+        result = createInstanceOfCheck( 'Promise', requiredUtils );
+    }
+    else if( type.getSymbol()?.name && [
+        'Uint8Array', 'Uint16Array', 'Uint32Array', 'Int8Array', 'Int16Array', 'Int32Array',
+        'Float32Array', 'Float64Array', 'ArrayBuffer', 'SharedArrayBuffer', 'DataView', 'Buffer'
+    ].includes( type.getSymbol()!.name )) 
+    {
+        result = createInstanceOfCheck( type.getSymbol()!.name, requiredUtils );
+    }
     else if( flags & ts.TypeFlags.Null ) 
     {
         result = createNullCheck( requiredUtils );
@@ -474,6 +636,14 @@ export function buildValidator(
     else if( flags & ts.TypeFlags.Boolean ) 
     {
         result = createPrimitiveCheck( 'boolean', requiredUtils );
+    }
+    else if( flags & ts.TypeFlags.Never ) 
+    {
+        result = createPrimitiveCheck( 'never', requiredUtils );
+    }
+    else if( flags & ts.TypeFlags.ESSymbol || flags & ts.TypeFlags.UniqueESSymbol || ( type as any ).intrinsicName === 'symbol' ) 
+    {
+        result = createPrimitiveCheck( 'symbol', requiredUtils );
     }
     else if( flags & ts.TypeFlags.TemplateLiteral ) 
     {
@@ -525,29 +695,40 @@ export function buildValidator(
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
         result = createArrayCheck( buildValidator( elementType, checker, validatorsMap, requiredUtils ), requiredUtils );
     }
+    else if( type.getCallSignatures().length > 0 && type.getConstructSignatures().length === 0 ) 
+    {
+        result = createPrimitiveCheck( 'function', requiredUtils );
+    }
+    else if( isNativeEnumType( type )) 
+    {
+        result = buildEnumValidator( type, checker, validatorsMap, requiredUtils );
+    }
     else 
     {
         const stringIndexInfo = checker.getIndexInfoOfType( type, ts.IndexKind.String );
+        const props = checker.getPropertiesOfType( type ).map( prop => 
+        {
+            const declaration = prop.valueDeclaration || prop.declarations?.[0];
+            const propType = declaration ? checker.getTypeOfSymbolAtLocation( prop, declaration ) : checker.getAnyType();
 
-        if( stringIndexInfo ) 
+            return {
+                name       : prop.getName(),
+                isOptional : ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0,
+                validator  : buildValidator( propType, checker, validatorsMap, requiredUtils )
+            };
+        });
+
+        if( stringIndexInfo && props.length === 0 ) 
         {
             result = createRecordCheck( buildValidator( stringIndexInfo.type, checker, validatorsMap, requiredUtils ), requiredUtils );
         }
-        else if( flags & ts.TypeFlags.Object || type.isClassOrInterface() || type.isTypeParameter()) 
+        else if( flags & ts.TypeFlags.Object || type.isClassOrInterface() || type.isTypeParameter() || stringIndexInfo ) 
         {
-            const props = checker.getPropertiesOfType( type ).map( prop => 
-            {
-                const declaration = prop.valueDeclaration || prop.declarations?.[0];
-                const propType = declaration ? checker.getTypeOfSymbolAtLocation( prop, declaration ) : checker.getAnyType();
-
-                return {
-                    name       : prop.getName(),
-                    isOptional : ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0,
-                    validator  : buildValidator( propType, checker, validatorsMap, requiredUtils )
-                };
-            });
             const typeName = checker.typeToString( type );
-            result = createObjectCheck( props, requiredUtils, typeName );
+            const indexValidator = stringIndexInfo
+                ? buildValidator( stringIndexInfo.type, checker, validatorsMap, requiredUtils )
+                : undefined;
+            result = createObjectCheck( props, requiredUtils, typeName, indexValidator );
         }
         else 
         {
@@ -600,6 +781,38 @@ function buildStructuralSignature( type: ts.Type, checker: ts.TypeChecker, visit
 
     if( flags & ts.TypeFlags.Undefined || flags & ts.TypeFlags.Void ) { return 'undefined' }
 
+    if( flags & ts.TypeFlags.Never ) { return 'never' }
+
+    if( flags & ts.TypeFlags.Unknown ) { return 'unknown' }
+
+    if( flags & ts.TypeFlags.Any ) { return 'any' }
+
+    if( flags & ts.TypeFlags.ESSymbol || flags & ts.TypeFlags.UniqueESSymbol || ( type as any ).intrinsicName === 'symbol' ) { return 'symbol' }
+
+    if( type.getCallSignatures().length > 0 && type.getConstructSignatures().length === 0 ){ return 'function' }
+
+    if( isNativeEnumType( type ))
+    {
+        const symbol = type.getSymbol();
+        const members: string[] = [];
+
+        if( symbol?.exports )
+        {
+            symbol.exports.forEach( member =>
+            {
+                if( !( member.flags & ts.SymbolFlags.EnumMember )){ return }
+
+                const declaration = member.valueDeclaration || member.declarations?.[0];
+
+                if( !declaration ){ return }
+
+                members.push( buildStructuralSignature( checker.getTypeOfSymbolAtLocation( member, declaration ), checker, visited ));
+            });
+        }
+
+        return `Enum<${symbol?.name || 'anonymous'}:${members.sort().join( ',' )}>`;
+    }
+
     if( flags & ts.TypeFlags.TemplateLiteral ) 
     {
         const templateType = type as ts.TemplateLiteralType;
@@ -614,15 +827,50 @@ function buildStructuralSignature( type: ts.Type, checker: ts.TypeChecker, visit
         return `Array<${buildStructuralSignature( elementType, checker, visited )}>`;
     }
 
+    const typeSymbolName = type.getSymbol()?.name || type.aliasSymbol?.getName();
+
+    if( typeSymbolName === 'Date' ) { return 'Date' }
+
+    if( typeSymbolName === 'RegExp' ) { return 'RegExp' }
+
+    if( typeSymbolName === 'Promise' ) 
+    {
+        const valueType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
+
+        return `Promise<${buildStructuralSignature( valueType, checker, visited )}>`;
+    }
+
+    if( typeSymbolName === 'Set' ) 
+    {
+        const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
+
+        return `Set<${buildStructuralSignature( elementType, checker, visited )}>`;
+    }
+
+    if( typeSymbolName === 'Map' ) 
+    {
+        const keyType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
+        const valueType = ( type as ts.TypeReference ).typeArguments?.[1] || checker.getAnyType();
+
+        return `Map<${buildStructuralSignature( keyType, checker, visited )},${buildStructuralSignature( valueType, checker, visited )}>`;
+    }
+
+    if( typeSymbolName && [
+        'Uint8Array', 'Uint16Array', 'Uint32Array', 'Int8Array', 'Int16Array', 'Int32Array',
+        'Float32Array', 'Float64Array', 'ArrayBuffer', 'SharedArrayBuffer', 'DataView', 'Buffer'
+    ].includes( typeSymbolName )) 
+    {
+        return typeSymbolName;
+    }
+
     if( flags & ts.TypeFlags.Object || type.isClassOrInterface()) 
     {
         const props = checker.getPropertiesOfType( type );
+        const stringIndexInfo = checker.getIndexInfoOfType( type, ts.IndexKind.String );
 
         if( props.length === 0 ) 
         {
             // Handle Record or empty object
-            const stringIndexInfo = checker.getIndexInfoOfType( type, ts.IndexKind.String );
-
             if( stringIndexInfo ) { return `Record<${buildStructuralSignature( stringIndexInfo.type, checker, visited )}>` }
         }
         const propSigs = props.map( prop => 
@@ -633,8 +881,11 @@ function buildStructuralSignature( type: ts.Type, checker: ts.TypeChecker, visit
 
             return `${prop.getName()}${isOptional ? '?' : ''}:${buildStructuralSignature( propType, checker, visited )}`;
         }).sort();
+        const indexSig = stringIndexInfo
+            ? `;[string]:${buildStructuralSignature( stringIndexInfo.type, checker, visited )}`
+            : '';
 
-        return `Object{${propSigs.join( ';' )}}`;
+        return `Object{${propSigs.join( ';' )}${indexSig}}`;
     }
 
     return 'any';
@@ -899,59 +1150,19 @@ function buildJsonSchemaInternal(
         const types = ( type as ts.IntersectionType ).types;
         let baseSchema: any = {};
         const constraints: Record<string, any> = {};
+        const memberSchemas: any[] = [];
 
         for( const sub of types ) 
         {
             const sFlags = sub.getFlags();
+            const subProps = checker.getPropertiesOfType( sub );
+            const isConstraintPhantom = subProps.length > 0 && subProps.every( p => p.getName().startsWith( '__' ));
 
-            if( sFlags & ts.TypeFlags.String || sFlags & ts.TypeFlags.TemplateLiteral ) 
+            if( isConstraintPhantom ) 
             {
-                baseSchema = { type : 'string' };
-            }
-            else if( sFlags & ts.TypeFlags.Number ) 
-            {
-                baseSchema = { type : 'number' };
-            }
-            else if( sFlags & ts.TypeFlags.BigInt ) 
-            {
-                baseSchema = { type : 'integer' };
-            }
-            else if( sFlags & ts.TypeFlags.Boolean || ( sub as any ).intrinsicName === 'boolean' ) 
-            {
-                baseSchema = { type : 'boolean' };
-            }
-            else if( sub.getSymbol()?.name === 'Date' ) 
-            {
-                baseSchema = { type : 'string', format : 'date-time' };
-            }
-            else if( sub.getSymbol()?.name === 'RegExp' ) 
-            {
-                baseSchema = { type : 'string', format : 'regex' };
-            }
-            else if( sub.getSymbol()?.name === 'Set' ) 
-            {
-                const elementType = ( sub as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
-                baseSchema = { type : 'array', items : buildJsonSchemaInternal( elementType, checker, defs, visited, counts, circularHashes ), uniqueItems : true };
-            }
-            else if( sub.getSymbol()?.name === 'Map' ) 
-            {
-                const valueType = ( sub as ts.TypeReference ).typeArguments?.[1] || checker.getAnyType();
-                baseSchema = { type : 'object', additionalProperties : buildJsonSchemaInternal( valueType, checker, defs, visited, counts, circularHashes ) };
-            }
-            else if( checker.isArrayType( sub )) 
-            {
-                const elementType = ( sub as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
-                baseSchema = { type : 'array', items : buildJsonSchemaInternal( elementType, checker, defs, visited, counts, circularHashes ) };
-            }
-
-            const props = checker.getPropertiesOfType( sub );
-
-            for( const prop of props ) 
-            {
-                const pName = prop.getName();
-
-                if( pName.startsWith( '__' )) 
+                for( const prop of subProps ) 
                 {
+                    const pName = prop.getName();
                     const pType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0]);
                     const actualType = stripUndefinedFromType( pType );
                     const val = getTagPropertyValue( pType );
@@ -994,7 +1205,70 @@ function buildJsonSchemaInternal(
                         constraints.requires = reqVal;
                     }
                 }
+                continue;
             }
+
+            if( sFlags & ts.TypeFlags.String || sFlags & ts.TypeFlags.TemplateLiteral ) 
+            {
+                baseSchema = { type : 'string' };
+            }
+            else if( sFlags & ts.TypeFlags.Number ) 
+            {
+                baseSchema = { type : 'number' };
+            }
+            else if( sFlags & ts.TypeFlags.BigInt ) 
+            {
+                baseSchema = { 'x-typescript-type' : 'bigint' };
+            }
+            else if( sFlags & ts.TypeFlags.Boolean || ( sub as any ).intrinsicName === 'boolean' ) 
+            {
+                baseSchema = { type : 'boolean' };
+            }
+            else if( sub.getSymbol()?.name === 'Date' ) 
+            {
+                baseSchema = { 'x-typescript-type' : 'Date' };
+            }
+            else if( sub.getSymbol()?.name === 'RegExp' ) 
+            {
+                baseSchema = { 'x-typescript-type' : 'RegExp' };
+            }
+            else if( sub.getSymbol()?.name === 'Set' ) 
+            {
+                const elementType = ( sub as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
+                baseSchema = {
+                    'x-typescript-type' : 'Set',
+                    items               : buildJsonSchemaInternal( elementType, checker, defs, visited, counts, circularHashes )
+                };
+            }
+            else if( sub.getSymbol()?.name === 'Map' ) 
+            {
+                const keyType = ( sub as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
+                const valueType = ( sub as ts.TypeReference ).typeArguments?.[1] || checker.getAnyType();
+                baseSchema = {
+                    'x-typescript-type' : 'Map',
+                    key                 : buildJsonSchemaInternal( keyType, checker, defs, visited, counts, circularHashes ),
+                    value               : buildJsonSchemaInternal( valueType, checker, defs, visited, counts, circularHashes )
+                };
+            }
+            else if( checker.isArrayType( sub )) 
+            {
+                const elementType = ( sub as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
+                baseSchema = { type : 'array', items : buildJsonSchemaInternal( elementType, checker, defs, visited, counts, circularHashes ) };
+            }
+            else if(( sFlags & ts.TypeFlags.Object ) || sub.isClassOrInterface()) 
+            {
+                memberSchemas.push( buildJsonSchemaInternal( sub, checker, defs, visited, counts, circularHashes ));
+            }
+        }
+
+        if( memberSchemas.length > 1 ) 
+        {
+            return { allOf : memberSchemas, ...constraints };
+        }
+
+        if( memberSchemas.length === 1 ) 
+        {
+            return { ...memberSchemas[0], ...constraints };
         }
 
         return { ...baseSchema, ...constraints };
@@ -1002,12 +1276,29 @@ function buildJsonSchemaInternal(
 
     if( type.getSymbol()?.name === 'Date' ) 
     {
-        return { type : 'string', format : 'date-time' };
+        return { 'x-typescript-type' : 'Date' };
     }
 
     if( type.getSymbol()?.name === 'RegExp' ) 
     {
-        return { type : 'string', format : 'regex' };
+        return { 'x-typescript-type' : 'RegExp' };
+    }
+
+    if( type.getSymbol()?.name === 'Promise' ) 
+    {
+        return { 'x-typescript-type' : 'Promise' };
+    }
+
+    {
+        const typedName = type.getSymbol()?.name;
+
+        if( typedName && [
+            'Uint8Array', 'Uint16Array', 'Uint32Array', 'Int8Array', 'Int16Array', 'Int32Array',
+            'Float32Array', 'Float64Array', 'ArrayBuffer', 'SharedArrayBuffer', 'DataView', 'Buffer'
+        ].includes( typedName )) 
+        {
+            return { 'x-typescript-type' : typedName };
+        }
     }
 
     if( type.getSymbol()?.name === 'Set' ) 
@@ -1015,19 +1306,20 @@ function buildJsonSchemaInternal(
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
 
         return {
-            type        : 'array',
-            items       : buildJsonSchemaInternal( elementType, checker, defs, visited, counts, circularHashes ),
-            uniqueItems : true
+            'x-typescript-type' : 'Set',
+            items               : buildJsonSchemaInternal( elementType, checker, defs, visited, counts, circularHashes )
         };
     }
 
     if( type.getSymbol()?.name === 'Map' ) 
     {
+        const keyType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
         const valueType = ( type as ts.TypeReference ).typeArguments?.[1] || checker.getAnyType();
 
         return {
-            type                 : 'object',
-            additionalProperties : buildJsonSchemaInternal( valueType, checker, defs, visited, counts, circularHashes )
+            'x-typescript-type' : 'Map',
+            key                 : buildJsonSchemaInternal( keyType, checker, defs, visited, counts, circularHashes ),
+            value               : buildJsonSchemaInternal( valueType, checker, defs, visited, counts, circularHashes )
         };
     }
 
@@ -1038,7 +1330,7 @@ function buildJsonSchemaInternal(
 
     if( flags & ts.TypeFlags.Undefined || flags & ts.TypeFlags.Void ) 
     {
-        return { type : 'null', description : 'undefined' };
+        return { 'x-typescript-type' : 'undefined' };
     }
 
     if( flags & ts.TypeFlags.String ) 
@@ -1053,7 +1345,7 @@ function buildJsonSchemaInternal(
 
     if( flags & ts.TypeFlags.BigInt ) 
     {
-        return { type : 'integer' };
+        return { 'x-typescript-type' : 'bigint' };
     }
 
     if( flags & ts.TypeFlags.Boolean || ( type as any ).intrinsicName === 'boolean' ) 
@@ -1106,6 +1398,7 @@ function buildJsonSchemaInternal(
     // Object types
     if( flags & ts.TypeFlags.Object || type.isClassOrInterface()) 
     {
+        const stringIndexInfo = checker.getIndexInfoOfType( type, ts.IndexKind.String );
         const symbol = type.getSymbol() || type.aliasSymbol;
         const name = symbol ? symbol.getName() : 'Object';
         const typeHash = generateHash( type, checker );
@@ -1142,10 +1435,18 @@ function buildJsonSchemaInternal(
         }
 
         const schemaObj: any = {
-            type                 : 'object',
-            properties,
-            additionalProperties : false
+            type       : 'object',
+            properties
         };
+
+        if( stringIndexInfo ) 
+        {
+            schemaObj.additionalProperties = buildJsonSchemaInternal( stringIndexInfo.type, checker, defs, visited, counts, circularHashes );
+        }
+        else 
+        {
+            schemaObj.additionalProperties = false;
+        }
 
         if( required.length > 0 ) 
         {

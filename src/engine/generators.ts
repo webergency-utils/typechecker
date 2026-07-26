@@ -109,7 +109,7 @@ export function createConstrainedPrimitiveCheck( baseType: string, constraints: 
 
         if( c.type === 'pattern' ) { return `validators.pattern(v, path, ctx, new RegExp(${JSON.stringify( c.value )}), ${JSON.stringify( 'Pattern<' + c.value + '>' )}${msgArg})` }
 
-        if( c.type === 'format' ) { return `validators.format(v, path, ctx, ${JSON.stringify( c.value )}${msgArg})` }
+        if( c.type === 'format' ) { return `v = validators.format(v, path, ctx, ${JSON.stringify( c.value )}${msgArg})` }
 
         if( c.type === 'minItems' ) { return `validators.minItems(v, path, ctx, ${valStr}${msgArg})` }
 
@@ -159,17 +159,17 @@ export function createConstrainedPrimitiveCheck( baseType: string, constraints: 
 
             if( tc.type === 'transform' && tc.value === 'tonumber' ) 
             {
-                return 'v = Number(v)';
+                return 'v = validators.coerceQueryNumber(v)';
             }
 
             if( tc.type === 'transform' && tc.value === 'toboolean' ) 
             {
-                return 'v = (v === \'true\' || v === \'1\' || v === true || v === 1)';
+                return 'v = validators.coerceQueryBoolean(v)';
             }
 
             if( tc.type === 'transform' && tc.value === 'todate' ) 
             {
-                return 'v = new Date(v)';
+                return 'v = validators.coerceQueryDate(v)';
             }
 
             if( tc.type === 'transform_custom' ) 
@@ -283,11 +283,11 @@ export function createUnionCheck( checks: ts.Expression[], requiredUtils: Set<st
     );
 }
 
-export function createObjectCheck( props: any[], requiredUtils: Set<string>, expected: string = 'object' ): ts.Expression 
+export function createObjectCheck( props: any[], requiredUtils: Set<string>, expected: string = 'object', indexValidator?: ts.Expression ): ts.Expression 
 {
     requiredUtils.add( 'validators' );
     
-    const propDefinitions = props.map(( p, i ) => 
+    const propDefinitions = props.map(( p ) => 
         ts.factory.createArrayLiteralExpression([
             ts.factory.createStringLiteral( p.name ),
             p.isOptional ? ts.factory.createTrue() : ts.factory.createFalse(),
@@ -297,11 +297,34 @@ export function createObjectCheck( props: any[], requiredUtils: Set<string>, exp
 
     const allowedKeys = props.map( p => ts.factory.createStringLiteral( p.name ));
 
+    if( indexValidator )
+    {
+        const tpl = `
+        (v, path, ctx) => {
+            const obj = validators.object(v, path, ctx, undefined, __EXPECTED__);
+            if (obj === false) return v;
+            const data = validators.objectShell(obj, ctx);
+            validators.props(obj, data, path, ctx, __PROPS__);
+            validators.additionalProps(obj, data, path, ctx, __KEYS__, __INDEX__);
+            return data;
+        }
+        `;
+
+        return injectNodes( templateToAst( tpl ), {
+            '__KEYS__'     : ts.factory.createArrayLiteralExpression( allowedKeys ),
+            '__EXPECTED__' : ts.factory.createStringLiteral( expected ),
+            '__PROPS__'    : ts.factory.createArrayLiteralExpression( propDefinitions, true ),
+            '__INDEX__'    : indexValidator
+        });
+    }
+
     const tpl = `
     (v, path, ctx) => {
-        if (!validators.object(v, path, ctx, __KEYS__, __EXPECTED__)) return v;
-        const data = ctx.mode === 'strip' ? {} : v;
-        validators.props(v, data, path, ctx, __PROPS__);
+        const obj = validators.object(v, path, ctx, __KEYS__, __EXPECTED__);
+        if (obj === false) return v;
+        const data = validators.objectShell(obj, ctx);
+        validators.props(obj, data, path, ctx, __PROPS__);
+        validators.stripExtras(data, ctx, __KEYS__);
         return data;
     }
     `;
@@ -365,10 +388,11 @@ export function createIntersectionCheck( checks: ts.Expression[], requiredUtils:
     const tpl = `
     (v, path, ctx) => {
         const checks = __CHECKS__;
-        let data = ctx.mode === "strip" ? (typeof v === "object" && v !== null && !Array.isArray(v) ? {} : v) : v;
+        let data = validators.objectShell(v, ctx);
         for (let i = 0; i < checks.length; i++) {
             const val = checks[i](v, path, ctx);
-            if (ctx.mode === "strip" && typeof val === "object" && val !== null) Object.assign(data, val);
+            if (typeof val === "object" && val !== null && !Array.isArray(val) && typeof data === "object" && data !== null && !Array.isArray(data)) Object.assign(data, val);
+            else data = val;
         }
         return data;
     }
@@ -393,4 +417,12 @@ export function createMapCheck( keyValidator: ts.Expression, valueValidator: ts.
     const tpl = '(v, path, ctx) => validators.map(v, path, ctx, __KEY__, __VALUE__)';
 
     return injectNodes( templateToAst( tpl ), { '__KEY__' : keyValidator, '__VALUE__' : valueValidator });
+}
+
+export function createInstanceOfCheck( typeName: string, requiredUtils: Set<string> ): ts.Expression 
+{
+    requiredUtils.add( 'validators' );
+    const tpl = `(v, path, ctx) => validators.instanceOf(v, path, ctx, ${JSON.stringify( typeName )})`;
+
+    return templateToAst( tpl );
 }

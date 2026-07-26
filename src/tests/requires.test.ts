@@ -164,4 +164,29 @@ describe( 'Requires Validation Unit Tests', () =>
         expect( passedNestedIndex ).toBeUndefined();
         expect( passedNestedParent ).toEqual({ id : '2', score : 100 });
     });
+
+    it( 'should resolve relative requires paths inside array elements', () => 
+    {
+        const data = {
+            items : [
+                { host : 'a.example.com', port : 80 },
+                { host : 'b.example.com', port : 443 }
+            ]
+        };
+        const ctx = createCtx( data );
+
+        validators.requires( data.items[1].port, 'items[1].port', ctx, ['.host']);
+        expect( ctx.success ).toBe( true );
+
+        const dataMissing = {
+            items : [
+                { host : 'a.example.com', port : 80 },
+                { port : 443 }
+            ]
+        };
+        const ctxMissing = createCtx( dataMissing );
+        validators.requires( dataMissing.items[1].port, 'items[1].port', ctxMissing, ['.host']);
+        expect( ctxMissing.success ).toBe( false );
+        expect( ctxMissing.errors[0].error ).toBe( 'Requires<.host>' );
+    });
 });

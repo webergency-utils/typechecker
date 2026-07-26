@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { validators, MetadataStore } from '../runtime/validators.js';
+import { validators, MetadataStore, coerceQueryNumber, coerceQueryBoolean, coerceQueryDate } from '../runtime/validators.js';
 
 describe( 'Validators', () => 
 {
@@ -8,6 +8,62 @@ describe( 'Validators', () =>
     beforeEach(() => 
     {
         ctx = { success : true, errors : [], mode : 'strict' };
+    });
+
+    describe( 'Query coerce helpers (shared with transform.To*)', () => 
+    {
+        it( 'coerceQueryNumber matches from:query number acceptance', () => 
+        {
+            expect( coerceQueryNumber( '42' )).toBe( 42 );
+            expect( coerceQueryNumber( ' 3.14 ' )).toBe( 3.14 );
+            expect( coerceQueryNumber( '' )).toBe( '' );
+            expect( coerceQueryNumber( 'nope' )).toBe( 'nope' );
+            expect( coerceQueryNumber( true )).toBe( true );
+
+            ctx.from = 'query';
+            expect( validators.number( '42', 'n', ctx )).toBe( 42 );
+            expect( MetadataStore.assert(
+                ( v, path, c ) => validators.number( coerceQueryNumber( v ), path, c ),
+                '42'
+            )).toBe( 42 );
+        });
+
+        it( 'coerceQueryBoolean matches from:query boolean acceptance', () => 
+        {
+            expect( coerceQueryBoolean( 'true' )).toBe( true );
+            expect( coerceQueryBoolean( 'false' )).toBe( false );
+            expect( coerceQueryBoolean( 'yes' )).toBe( true );
+            expect( coerceQueryBoolean( 'off' )).toBe( false );
+            expect( coerceQueryBoolean( 1 )).toBe( true );
+            expect( coerceQueryBoolean( 0 )).toBe( false );
+            expect( coerceQueryBoolean( 'maybe' )).toBe( 'maybe' );
+            expect( coerceQueryBoolean( null )).toBe( null );
+
+            ctx.from = 'query';
+            expect( validators.boolean( 'false', 'b', ctx )).toBe( false );
+            expect( ctx.success ).toBe( true );
+
+            ctx.success = true;
+            ctx.errors = [];
+            validators.boolean( 'maybe', 'b', ctx );
+            expect( ctx.success ).toBe( false );
+        });
+
+        it( 'coerceQueryDate matches from:query date acceptance', () => 
+        {
+            const iso = '2024-01-15T12:00:00.000Z';
+            const fromIso = coerceQueryDate( iso );
+            expect( fromIso ).toBeInstanceOf( Date );
+            expect( fromIso.toISOString()).toBe( iso );
+
+            const ts = Date.parse( iso );
+            const fromTs = coerceQueryDate( ts );
+            expect( fromTs ).toBeInstanceOf( Date );
+            expect( fromTs.getTime()).toBe( ts );
+
+            expect( coerceQueryDate( 'not-a-date' )).toBe( 'not-a-date' );
+            expect( coerceQueryDate({})).toEqual({});
+        });
     });
 
     describe( 'Primitives', () => 
@@ -27,14 +83,26 @@ describe( 'Validators', () =>
             expect( validators.number( 123, 'path', ctx )).toBe( 123 );
             expect( ctx.success ).toBe( true );
 
-            // Without tryConvert, numeric string should fail
+            expect( validators.number( Infinity, 'path', ctx )).toBe( Infinity );
+            expect( ctx.success ).toBe( true );
+
+            expect( validators.number( -Infinity, 'path', ctx )).toBe( -Infinity );
+            expect( ctx.success ).toBe( true );
+
+            validators.number( NaN, 'path', ctx );
+            expect( ctx.success ).toBe( false );
+            expect( ctx.errors[0]).toEqual({ path : 'path', error : 'Type<number>', value : NaN });
+
+            // Without from: 'query', numeric string should fail
+            ctx.success = true;
+            ctx.errors = [];
             validators.number( '123', 'path', ctx );
             expect( ctx.success ).toBe( false );
 
-            // With tryConvert, numeric string should now pass and return a number
+            // With from: 'query', numeric string should now pass and return a number
             ctx.success = true;
             ctx.errors = [];
-            ctx.tryConvert = true;
+            ctx.from = 'query';
             expect( validators.number( '123', 'path', ctx )).toBe( 123 );
             expect( ctx.success ).toBe( true );
 
@@ -50,14 +118,14 @@ describe( 'Validators', () =>
             expect( validators.boolean( true, 'path', ctx )).toBe( true );
             expect( ctx.success ).toBe( true );
 
-            // Without tryConvert, boolean string should fail
+            // Without from: 'query', boolean string should fail
             validators.boolean( 'true', 'path', ctx );
             expect( ctx.success ).toBe( false );
 
-            // With tryConvert, boolean string should pass and cast
+            // With from: 'query', boolean string should pass and cast
             ctx.success = true;
             ctx.errors = [];
-            ctx.tryConvert = true;
+            ctx.from = 'query';
             expect( validators.boolean( 'true', 'path', ctx )).toBe( true );
             expect( validators.boolean( 'false', 'path', ctx )).toBe( false );
             expect( ctx.success ).toBe( true );
@@ -67,6 +135,16 @@ describe( 'Validators', () =>
             validators.boolean( 'not-a-bool', 'path', ctx );
             expect( ctx.success ).toBe( false );
             expect( ctx.errors[0]).toEqual({ path : 'path', error : 'Type<boolean>', value : 'not-a-bool' });
+
+            // null/undefined must not coerce to false
+            ctx.success = true;
+            ctx.errors = [];
+            validators.boolean( null, 'path', ctx );
+            expect( ctx.success ).toBe( false );
+            ctx.success = true;
+            ctx.errors = [];
+            validators.boolean( undefined, 'path', ctx );
+            expect( ctx.success ).toBe( false );
         });
 
         it( 'should validate dates', () => 
@@ -74,18 +152,86 @@ describe( 'Validators', () =>
             const now = new Date();
             expect( validators.date( now, 'path', ctx )).toBe( now );
             
-            // Should parse ISO strings with tryConvert
-            ctx.tryConvert = true;
+            // Without from, ISO string must fail
             const iso = now.toISOString();
+            validators.date( iso, 'path', ctx );
+            expect( ctx.success ).toBe( false );
+
+            // from: 'json' revives ISO strings
+            ctx.success = true;
+            ctx.errors = [];
+            ctx.from = 'json';
             const parsed = validators.date( iso, 'path', ctx );
             expect( parsed ).toBeInstanceOf( Date );
             expect( parsed.getTime()).toBe( now.getTime());
+            expect( ctx.success ).toBe( true );
 
-            ctx.tryConvert = false;
+            // Numeric timestamps require from: 'query'
+            delete ctx.from;
             ctx.success = true;
+            ctx.errors = [];
+            validators.date( now.getTime(), 'path', ctx );
+            expect( ctx.success ).toBe( false );
+
+            ctx.from = 'json';
+            ctx.success = true;
+            ctx.errors = [];
+            validators.date( now.getTime(), 'path', ctx );
+            expect( ctx.success ).toBe( false );
+
+            ctx.from = 'query';
+            ctx.success = true;
+            ctx.errors = [];
+            const fromTs = validators.date( now.getTime(), 'path', ctx );
+            expect( fromTs ).toBeInstanceOf( Date );
+            expect( fromTs.getTime()).toBe( now.getTime());
+
+            delete ctx.from;
+            ctx.success = true;
+            ctx.errors = [];
             validators.date( 'invalid', 'path', ctx );
             expect( ctx.success ).toBe( false );
             expect( ctx.errors[0]).toEqual({ path : 'path', error : 'Type<Date>', value : 'invalid' });
+        });
+
+        it( 'should validate functions', () => 
+        {
+            const fn = () => 1;
+            expect( validators.function( fn, 'path', ctx )).toBe( fn );
+            expect( ctx.success ).toBe( true );
+
+            validators.function( 'not-a-fn', 'path', ctx );
+            expect( ctx.success ).toBe( false );
+            expect( ctx.errors[0].error ).toBe( 'Type<function>' );
+
+            ctx.success = true;
+            ctx.errors = [];
+            ctx.from = () => fn;
+            expect( validators.function( 'not-a-fn', 'path', ctx )).toBe( fn );
+            expect( ctx.success ).toBe( true );
+        });
+
+        it( 'should validate symbols with custom from', () => 
+        {
+            const sym = Symbol( 'x' );
+            expect( validators.symbol( sym, 'path', ctx )).toBe( sym );
+
+            validators.symbol( 'x', 'path', ctx );
+            expect( ctx.success ).toBe( false );
+
+            ctx.success = true;
+            ctx.errors = [];
+            ctx.from = () => sym;
+            expect( validators.symbol( 'x', 'path', ctx )).toBe( sym );
+            expect( ctx.success ).toBe( true );
+        });
+
+        it( 'should not revive Date into Map under from json', () => 
+        {
+            ctx.from = 'json';
+            validators.map( new Date(), 'm', ctx, validators.string, validators.number );
+            expect( ctx.success ).toBe( false );
+            expect( ctx.errors[0].error ).toBe( 'Type<Map>' );
         });
 
         it( 'should validate null and undefined', () => 
@@ -154,14 +300,33 @@ describe( 'Validators', () =>
 
         it( 'should validate base objects', () => 
         {
-            expect( validators.object({ a : 1 }, 'obj', ctx )).toBe( true );
+            const input = { a : 1 };
+            expect( validators.object( input, 'obj', ctx )).toBe( input );
             
-            validators.object( null, 'obj', ctx );
+            expect( validators.object( null, 'obj', ctx )).toBe( false );
             expect( ctx.success ).toBe( false );
 
             ctx.success = true;
-            validators.object( 'not-an-obj', 'obj', ctx );
+            ctx.errors = [];
+            expect( validators.object( 'not-an-obj', 'obj', ctx )).toBe( false );
             expect( ctx.success ).toBe( false );
+        });
+
+        it( 'should revive objects via custom from', () => 
+        {
+            ctx.from = ( key, value, type ) => 
+            {
+                if( type === 'Object' && value instanceof Map )
+                {
+                    return Object.fromEntries( value );
+                }
+
+                return value;
+            };
+
+            const revived = validators.object( new Map([['id', 1]]), 'obj', ctx, ['id']);
+            expect( revived ).toEqual({ id : 1 });
+            expect( ctx.success ).toBe( true );
         });
 
         it( 'should validate props (strict mode)', () => 
@@ -169,7 +334,7 @@ describe( 'Validators', () =>
             const input = { id : 1, name : 'Test', extra : 'bad' };
             
             // Check base object first (strict mode should catch 'extra')
-            validators.object( input, 'user', ctx, ['id', 'name']);
+            expect( validators.object( input, 'user', ctx, ['id', 'name'])).toBe( input );
             expect( ctx.success ).toBe( false );
             expect( ctx.errors[0]).toEqual({ path : 'user', error : 'PropertyNotAllowed<extra>', value : 'bad' });
 
@@ -195,13 +360,47 @@ describe( 'Validators', () =>
             expect( ctx.success ).toBe( true );
         });
 
+        it( 'should not revive success after a required prop failure when a later optional is missing', () => 
+        {
+            const input = { a : 'bad' };
+            const data = {};
+
+            validators.props( input, data, 'obj', ctx, [
+                ['a', false, validators.number],
+                ['b', true, validators.string]
+            ]);
+
+            expect( ctx.success ).toBe( false );
+            expect( ctx.errors.some( e => e.path === 'obj.a' )).toBe( true );
+        });
+
+        it( 'should reject non-plain objects for object and record', () => 
+        {
+            expect( validators.object( new Date(), 'obj', ctx )).toBe( false );
+            expect( ctx.success ).toBe( false );
+
+            ctx.success = true;
+            ctx.errors = [];
+            expect( validators.object( new Map(), 'obj', ctx )).toBe( false );
+
+            ctx.success = true;
+            ctx.errors = [];
+            validators.record( new Set(), 'rec', ctx, validators.number );
+            expect( ctx.success ).toBe( false );
+
+            ctx.success = true;
+            ctx.errors = [];
+            class Foo { x = 1 }
+            expect( validators.object( new Foo(), 'obj', ctx )).toBe( false );
+        });
+
         it( 'should validate props (relaxed mode)', () => 
         {
             ctx.mode = 'relaxed';
             const input = { id : 1, name : 'Test', extra : 'ok' };
             
             const isValid = validators.object( input, 'user', ctx, ['id', 'name']);
-            expect( isValid ).toBe( true );
+            expect( isValid ).toBe( input );
             expect( ctx.success ).toBe( true );
         });
 
@@ -229,15 +428,38 @@ describe( 'Validators', () =>
             
             validators.union( true, 'u', ctx, checks );
             expect( ctx.success ).toBe( false );
+            expect( ctx.errors ).toHaveLength( 1 );
             expect( ctx.errors[0].error ).toBe( 'Type<Union>' );
+            expect( ctx.errors[0].issues ).toHaveLength( 2 );
+        });
+
+        it( 'should not coerce in unions unless from is enabled', () => 
+        {
+            const checks = [validators.string, validators.number];
+
+            validators.union( '123', 'u', ctx, checks );
+            expect( ctx.success ).toBe( true ); // matches string arm
+
+            ctx.success = true;
+            ctx.errors = [];
+            validators.union( true, 'u', ctx, checks );
+            expect( ctx.success ).toBe( false );
+
+            ctx.success = true;
+            ctx.errors = [];
+            ctx.from = 'query';
+            expect( validators.union( '123', 'u', ctx, [validators.number])).toBe( 123 );
+            expect( ctx.success ).toBe( true );
         });
 
         it( 'should validate tuples', () => 
         {
             const checks = [validators.string, validators.number];
             const input = ['id', 1];
+            const result = validators.tuple( input, 't', ctx, checks );
             
-            expect( validators.tuple( input, 't', ctx, checks )).toEqual( input );
+            expect( result ).toEqual( input );
+            expect( result ).not.toBe( input );
             
             // Test wrong length
             validators.tuple(['id'], 't', ctx, checks );
@@ -256,6 +478,16 @@ describe( 'Validators', () =>
             validators.tuple(['id', 'not-a-number'], 't', ctx, checks );
             expect( ctx.success ).toBe( false );
             expect( ctx.errors[0]).toEqual({ path : 't[1]', error : 'Type<number>', value : 'not-a-number' });
+        });
+
+        it( 'should mutate tuples when mutate is true', () => 
+        {
+            ctx.mutate = true;
+            const checks = [validators.string, validators.number];
+            const input = ['id', 1];
+            const result = validators.tuple( input, 't', ctx, checks );
+            expect( result ).toBe( input );
+            expect( result ).toEqual(['id', 1]);
         });
 
         it( 'should validate tuples (strip mode)', () => 
@@ -340,6 +572,11 @@ describe( 'Validators', () =>
             validators.multipleOf( 10, 'path', ctx, 3 );
             expect( ctx.success ).toBe( false );
 
+            ctx.success = true;
+            ctx.errors = [];
+            expect( validators.multipleOf( 0.3, 'path', ctx, 0.1 )).toBe( 0.3 );
+            expect( ctx.success ).toBe( true );
+
             // Bigints
             ctx.success = true;
             expect( validators.multipleOf( 10n, 'path', ctx, 5n )).toBe( 10n );
@@ -348,19 +585,31 @@ describe( 'Validators', () =>
             expect( ctx.success ).toBe( false );
         });
 
-        it( 'should validate pattern', () => 
+        it( 'should validate pattern without sticky lastIndex side effects', () => 
         {
             expect( validators.pattern( 'hello', 'path', ctx, /^h/, 'starts with h' )).toBe( 'hello' );
             expect( ctx.success ).toBe( true );
 
             validators.pattern( 'hello', 'path', ctx, /^a/, 'starts with a' );
             expect( ctx.success ).toBe( false );
+
+            ctx.success = true;
+            ctx.errors = [];
+            const re = /a/g;
+            expect( validators.pattern( 'a', 'path', ctx, re, 'Pattern<a>' )).toBe( 'a' );
+            expect( ctx.success ).toBe( true );
+            expect( validators.pattern( 'a', 'path', ctx, re, 'Pattern<a>' )).toBe( 'a' );
+            expect( ctx.success ).toBe( true );
         });
 
         it( 'should validate various formats', () => 
         {
             const formats = [
                 { format : 'email', valid : 'test@example.com', invalid : 'invalid-email' },
+                { format : 'email', valid : 'user.name+tag@example.co.uk', invalid : 'a@b' },
+                { format : 'email', valid : 'a@b.co', invalid : 'a@b.c' },
+                { format : 'email', valid : 'test@example.com', invalid : '.test@example.com' },
+                { format : 'email', valid : 'test@example.com', invalid : 'test@-example.com' },
                 { format : 'uuid', valid : '123e4567-e89b-12d3-a456-426614174000', invalid : 'invalid-uuid' },
                 { format : 'url', valid : 'https://google.com', invalid : 'google.com' },
                 { format : 'ipv4', valid : '192.168.1.1', invalid : '999.999.999.999' },
@@ -371,7 +620,15 @@ describe( 'Validators', () =>
                 { format : 'password', valid : 'anything-goes', invalid : '' }, // Password always passes
                 { format : 'regex', valid : '^[a-z]+$', invalid : '[' },
                 { format : 'hostname', valid : 'google.com', invalid : '-google.com' },
+                { format : 'hostname', valid : 'localhost', invalid : '-localhost' },
+                { format : 'hostname', valid : 'LOCALHOST', invalid : 'local_host' },
+                { format : 'idn-hostname', valid : 'münchen.de', invalid : '-bad.com' },
+                { format : 'idn-email', valid : '用户@例子.广告', invalid : 'a@b' },
                 { format : 'uri', valid : 'mailto:test@example.com', invalid : 'test@example.com' },
+                { format : 'uri-reference', valid : '/path/to/resource', invalid : 'http://exa mple.com' },
+                { format : 'iri', valid : 'https://例え.jp/path', invalid : 'not a iri' },
+                { format : 'iri-reference', valid : './相对', invalid : 'has space' },
+                { format : 'uri-template', valid : 'https://example.com/users/{userId}', invalid : 'https://example.com/{unclosed' },
                 { format : 'time', valid : '19:55:00Z', invalid : '19-55-00' },
                 { format : 'duration', valid : 'P3D', invalid : 'invalid-duration' },
                 { format : 'objectId', valid : '507f1f77bcf86cd799439011', invalid : 'invalid-object-id' }
@@ -381,15 +638,35 @@ describe( 'Validators', () =>
             {
                 ctx.success = true;
                 ctx.errors = [];
-                expect( validators.format( f.valid, 'path', ctx, f.format )).toBe( f.valid );
+                const result = validators.format( f.valid, 'path', ctx, f.format );
                 expect( ctx.success ).toBe( true );
+                expect( result ).toBe( f.valid );
 
                 if( f.invalid ) 
                 {
+                    ctx.success = true;
+                    ctx.errors = [];
                     validators.format( f.invalid, 'path', ctx, f.format );
                     expect( ctx.success ).toBe( false );
                 }
             }
+
+            ctx.success = true;
+            ctx.errors = [];
+            expect( validators.format( '2024-02-31', 'path', ctx, 'date' )).toBe( '2024-02-31' );
+            expect( ctx.success ).toBe( true );
+
+            ctx.from = 'query';
+            const overflow = validators.format( '2024-02-31', 'path', ctx, 'date' );
+            expect( ctx.success ).toBe( true );
+            expect( overflow ).toBeInstanceOf( Date );
+            expect( Number.isNaN(( overflow as Date ).getTime())).toBe( false );
+            delete ctx.from;
+
+            ctx.success = true;
+            ctx.errors = [];
+            validators.format( 'anything', 'path', ctx, 'not-a-real-format' );
+            expect( ctx.success ).toBe( false );
         });
 
         it( 'should validate minItems and maxItems', () => 
@@ -421,16 +698,23 @@ describe( 'Validators', () =>
 
             validators.uniqueItems([{ a : 1 }, { a : 1 }], 'path', ctx );
             expect( ctx.success ).toBe( false );
+
+            ctx.success = true;
+            ctx.errors = [];
+            validators.uniqueItems([{ a : 1, b : 2 }, { b : 2, a : 1 }], 'path', ctx );
+            expect( ctx.success ).toBe( false );
         });
 
         it( 'should support literal casting options', () => 
         {
-            // Null to boolean false
-            ctx.tryConvert = true;
-            expect( validators.literal( null, 'path', ctx, false )).toBe( false );
-            expect( ctx.success ).toBe( true );
+            // null must not coerce to boolean false
+            ctx.from = 'query';
+            validators.literal( null, 'path', ctx, false );
+            expect( ctx.success ).toBe( false );
 
             // String to number literal
+            ctx.success = true;
+            ctx.errors = [];
             expect( validators.literal( '123', 'path', ctx, 123 )).toBe( 123 );
             expect( ctx.success ).toBe( true );
 
@@ -483,64 +767,95 @@ describe( 'Validators', () =>
             expect(() => MetadataStore.getSchema( 's2' )).toThrow( 'Schema not found' );
         });
 
-        it( 'should validate bigint and bigint tryConvert conversions', () => 
+        it( 'should validate bigint and from conversions', () => 
         {
             expect( validators.bigint( 123n, 'path', ctx )).toBe( 123n );
             expect( ctx.success ).toBe( true );
 
-            // Without tryConvert, numeric string should fail
+            // Without from, numeric string should fail
             validators.bigint( '123', 'path', ctx );
             expect( ctx.success ).toBe( false );
 
-            // With tryConvert, numeric string should pass and cast
+            // from: 'json' revives digit strings
             ctx.success = true;
             ctx.errors = [];
-            ctx.tryConvert = true;
+            ctx.from = 'json';
             expect( validators.bigint( '123', 'path', ctx )).toBe( 123n );
             expect( ctx.success ).toBe( true );
 
-            // tryConvert fails with invalid string
+            // from: 'json' does not revive numbers
             ctx.success = true;
+            ctx.errors = [];
+            validators.bigint( 123, 'path', ctx );
+            expect( ctx.success ).toBe( false );
+
+            // from: 'query' also revives numbers
+            ctx.from = 'query';
+            ctx.success = true;
+            ctx.errors = [];
+            expect( validators.bigint( 123, 'path', ctx )).toBe( 123n );
+            expect( ctx.success ).toBe( true );
+
+            // invalid string fails
+            ctx.success = true;
+            ctx.errors = [];
             validators.bigint( 'invalid-bigint', 'path', ctx );
             expect( ctx.success ).toBe( false );
         });
 
-        it( 'should validate regexp and regexp tryConvert conversions', () => 
+        it( 'should validate regexp and JSON wire-form conversions', () => 
         {
             const rx = /abc/i;
             expect( validators.regexp( rx, 'path', ctx )).toBe( rx );
             expect( ctx.success ).toBe( true );
 
-            // Without tryConvert, string should fail
+            // Without from, wire forms fail
             validators.regexp( '/abc/i', 'path', ctx );
             expect( ctx.success ).toBe( false );
 
-            // With tryConvert, matching regex string `/abc/i` should parse
+            // from: 'json' revives /pattern/flags and { source, flags }
             ctx.success = true;
             ctx.errors = [];
-            ctx.tryConvert = true;
+            ctx.from = 'json';
             const parsed1 = validators.regexp( '/abc/i', 'path', ctx );
             expect( parsed1 ).toBeInstanceOf( RegExp );
             expect( parsed1.source ).toBe( 'abc' );
             expect( parsed1.flags ).toBe( 'i' );
             expect( ctx.success ).toBe( true );
 
-            // With tryConvert, plain string should compile to simple regex
+            ctx.success = true;
+            ctx.errors = [];
+            const parsedObj = validators.regexp({ source : 'abc', flags : 'i' }, 'path', ctx );
+            expect( parsedObj ).toBeInstanceOf( RegExp );
+            expect( parsedObj.source ).toBe( 'abc' );
+            expect( parsedObj.flags ).toBe( 'i' );
+
+            // Plain pattern string requires from: 'query'
+            ctx.success = true;
+            ctx.errors = [];
+            validators.regexp( 'abc', 'path', ctx );
+            expect( ctx.success ).toBe( false );
+
+            ctx.from = 'query';
+            ctx.success = true;
+            ctx.errors = [];
             const parsed2 = validators.regexp( 'abc', 'path', ctx );
             expect( parsed2 ).toBeInstanceOf( RegExp );
             expect( parsed2.source ).toBe( 'abc' );
             expect( ctx.success ).toBe( true );
 
-            // With tryConvert, invalid regex should fail
             ctx.success = true;
+            ctx.errors = [];
             validators.regexp( '[', 'path', ctx );
             expect( ctx.success ).toBe( false );
+            delete ctx.from;
         });
 
-        it( 'should fallback on default format switch case', () => 
+        it( 'should reject unknown format names', () => 
         {
-            expect( validators.format( 'anything', 'path', ctx, 'unknown-format' )).toBe( 'anything' );
-            expect( ctx.success ).toBe( true );
+            validators.format( 'anything', 'path', ctx, 'unknown-format' );
+            expect( ctx.success ).toBe( false );
+            expect( ctx.errors[0].error ).toBe( 'Format<unknown-format>' );
         });
     });
 
@@ -659,7 +974,7 @@ describe( 'Validators', () =>
             expect( result.extra ).toBeUndefined();
         });
 
-        it( 'should not create empty object if there are no additional properties in strip mode', () => 
+        it( 'should always create a new object by default even in strip mode without extras', () => 
         {
             const schema = 
             {
@@ -682,7 +997,38 @@ describe( 'Validators', () =>
             const result = validateFn( payload, 'path', ctx );
 
             expect( ctx.success ).toBe( true );
+            expect( result ).toEqual({ name : 'John' });
+            expect( result ).not.toBe( payload );
+        });
+
+        it( 'should mutate the original object when mutate is true, including strip', () => 
+        {
+            const schema = 
+            {
+                type       : 'object',
+                properties : 
+                {
+                    name : { type : 'string' }
+                }
+            };
+
+            const validateFn = MetadataStore.getOrCompileSchema( schema );
+
+            ctx.mode = 'strip';
+            ctx.mutate = true;
+
+            const payload: any = 
+            {
+                name  : 'John',
+                extra : 'remove me'
+            };
+
+            const result = validateFn( payload, 'path', ctx );
+
+            expect( ctx.success ).toBe( true );
             expect( result ).toBe( payload );
+            expect( result ).toEqual({ name : 'John' });
+            expect( payload.extra ).toBeUndefined();
         });
 
         it( 'should support dynamic schema validation for tuples', () => 
@@ -816,22 +1162,37 @@ describe( 'Validators', () =>
         it( 'should validate Set objects', () => 
         {
             const s = new Set([1, 2, 3]);
-            expect( validators.set( s, 's', ctx, validators.number )).toBe( s );
+            const cloned = validators.set( s, 's', ctx, validators.number );
+            expect( cloned ).not.toBe( s );
+            expect( Array.from( cloned )).toEqual([1, 2, 3]);
             expect( ctx.success ).toBe( true );
 
-            // conversion from array
-            ctx.tryConvert = true;
+            ctx.mutate = true;
+            expect( validators.set( s, 's', ctx, validators.number )).toBe( s );
+
+            // conversion from array (json or query)
+            ctx.mutate = false;
+            ctx.from = 'json';
             const converted = validators.set([1, 2, 3], 's', ctx, validators.number );
             expect( converted ).toBeInstanceOf( Set );
             expect( Array.from( converted )).toEqual([1, 2, 3]);
 
-            // conversion from single value
+            // conversion from single value requires query
+            ctx.from = 'json';
+            ctx.success = true;
+            ctx.errors = [];
+            validators.set( 42, 's', ctx, validators.number );
+            expect( ctx.success ).toBe( false );
+
+            ctx.from = 'query';
+            ctx.success = true;
+            ctx.errors = [];
             const convertedSingle = validators.set( 42, 's', ctx, validators.number );
             expect( convertedSingle ).toBeInstanceOf( Set );
             expect( Array.from( convertedSingle )).toEqual([42]);
 
             // fail invalid
-            ctx.tryConvert = false;
+            delete ctx.from;
             validators.set( 'not-a-set', 's', ctx, validators.number );
             expect( ctx.success ).toBe( false );
             expect( ctx.errors[0]).toEqual({ path : 's', error : 'Type<Set>', value : 'not-a-set' });
@@ -849,17 +1210,23 @@ describe( 'Validators', () =>
         it( 'should validate Map objects', () => 
         {
             const m = new Map([['a', 1], ['b', 2]]);
-            expect( validators.map( m, 'm', ctx, validators.string, validators.number )).toBe( m );
+            const cloned = validators.map( m, 'm', ctx, validators.string, validators.number );
+            expect( cloned ).not.toBe( m );
+            expect( Array.from( cloned.entries())).toEqual([['a', 1], ['b', 2]]);
             expect( ctx.success ).toBe( true );
 
+            ctx.mutate = true;
+            expect( validators.map( m, 'm', ctx, validators.string, validators.number )).toBe( m );
+
             // conversion from object
-            ctx.tryConvert = true;
+            ctx.mutate = false;
+            ctx.from = 'json';
             const converted = validators.map({ a : 1, b : 2 }, 'm', ctx, validators.string, validators.number );
             expect( converted ).toBeInstanceOf( Map );
             expect( Array.from( converted.entries())).toEqual([['a', 1], ['b', 2]]);
 
             // fail invalid
-            ctx.tryConvert = false;
+            delete ctx.from;
             validators.map( 'not-a-map', 'm', ctx, validators.string, validators.number );
             expect( ctx.success ).toBe( false );
             expect( ctx.errors[0]).toEqual({ path : 'm', error : 'Type<Map>', value : 'not-a-map' });
@@ -923,7 +1290,7 @@ describe( 'Validators', () =>
             expect( resSuccess.errors ).toEqual([]);
 
             // Failure case with options object
-            const resFail = MetadataStore.validate( dummyVal, 'world', { mode : 'strict', tryConvert : true } );
+            const resFail = MetadataStore.validate( dummyVal, 'world', { mode : 'strict', from : 'query' } );
 
             expect( resFail.success ).toBe( false );
             expect( resFail.data ).toBe( 'world' );
@@ -947,6 +1314,40 @@ describe( 'Validators', () =>
             expect( MetadataStore.is( dummyVal, 'world' )).toBe( false );
         });
 
+        it( 'should ignore from for is and assertGuard', () => 
+        {
+            expect( MetadataStore.is( validators.number, '42', { from : 'query' })).toBe( false );
+            expect(() => MetadataStore.assertGuard( validators.number, '42', { from : 'query' })).toThrow();
+            expect( MetadataStore.assert( validators.number, '42', { from : 'query' })).toBe( 42 );
+        });
+
+        it( 'should revive via custom from on type mismatch only', () => 
+        {
+            const calls: any[] = [];
+            const from = ( key: string, value: any, type: string ) => 
+            {
+                calls.push({ key, value, type });
+
+                if( type === 'Date' && value && typeof value === 'object' && typeof value.$date === 'string' )
+                {
+                    return new Date( value.$date );
+                }
+
+                return value;
+            };
+
+            const iso = '2024-01-15T12:00:00.000Z';
+            const revived = MetadataStore.assert( validators.date, { $date : iso }, { from });
+            expect( revived ).toBeInstanceOf( Date );
+            expect( revived.toISOString()).toBe( iso );
+            expect( calls ).toEqual([{ key : '', value : { $date : iso }, type : 'Date' }]);
+
+            calls.length = 0;
+            const already = new Date( iso );
+            expect( MetadataStore.assert( validators.date, already, { from })).toBe( already );
+            expect( calls ).toEqual([]);
+        });
+
         it( 'should throw default validation error when assert fails without errorFactory', () => 
         {
             const dummyVal = ( v: any, path: string, subCtx: any ) => 
@@ -958,6 +1359,121 @@ describe( 'Validators', () =>
             };
 
             expect(() => MetadataStore.assert( dummyVal, 'value' )).toThrow( 'Validation Error: some.path: some_error' );
+        });
+
+        it( 'should enforce exclusiveMinimum and exclusiveMaximum in compileSchema', () => 
+        {
+            const validateFn = MetadataStore.getOrCompileSchema({
+                type             : 'number',
+                exclusiveMinimum : 0,
+                exclusiveMaximum : 10
+            });
+
+            const okCtx = { success : true, errors : [], mode : 'strict' as const };
+            expect( validateFn( 5, '', okCtx )).toBe( 5 );
+            expect( okCtx.success ).toBe( true );
+
+            const lowCtx = { success : true, errors : [], mode : 'strict' as const };
+            validateFn( 0, '', lowCtx );
+            expect( lowCtx.success ).toBe( false );
+
+            const highCtx = { success : true, errors : [], mode : 'strict' as const };
+            validateFn( 10, '', highCtx );
+            expect( highCtx.success ).toBe( false );
+        });
+
+        it( 'should compile Date and RegExp x-typescript-type schemas', () => 
+        {
+            const dateFn = MetadataStore.getOrCompileSchema({ 'x-typescript-type' : 'Date' });
+            const dateCtx = { success : true, errors : [], mode : 'strict' as const };
+            const now = new Date();
+            expect( dateFn( now, '', dateCtx )).toBe( now );
+            expect( dateCtx.success ).toBe( true );
+
+            const isoCtx = { success : true, errors : [], mode : 'strict' as const, from : 'json' as const };
+            const fromIso = dateFn( now.toISOString(), '', isoCtx );
+            expect( fromIso ).toBeInstanceOf( Date );
+            expect( isoCtx.success ).toBe( true );
+
+            const strictIsoCtx = { success : true, errors : [], mode : 'strict' as const };
+            dateFn( now.toISOString(), '', strictIsoCtx );
+            expect( strictIsoCtx.success ).toBe( false );
+
+            const reFn = MetadataStore.getOrCompileSchema({ 'x-typescript-type' : 'RegExp' });
+            const reCtx = { success : true, errors : [], mode : 'strict' as const };
+            const re = /abc/;
+            expect( reFn( re, '', reCtx )).toBe( re );
+            expect( reCtx.success ).toBe( true );
+
+            const reStrCtx = { success : true, errors : [], mode : 'strict' as const, from : 'json' as const };
+            const fromStr = reFn( '/abc/i', '', reStrCtx );
+            expect( fromStr ).toBeInstanceOf( RegExp );
+            expect( fromStr.flags ).toBe( 'i' );
+            expect( reStrCtx.success ).toBe( true );
+        });
+
+        it( 'should compile bigint, undefined, Set, Map via x-typescript-type', () => 
+        {
+            const bigFn = MetadataStore.getOrCompileSchema({ 'x-typescript-type' : 'bigint' });
+            const bigCtx = { success : true, errors : [], mode : 'strict' as const, from : 'json' as const };
+            expect( bigFn( '42', '', bigCtx )).toBe( 42n );
+            expect( bigCtx.success ).toBe( true );
+
+            const undefFn = MetadataStore.getOrCompileSchema({ 'x-typescript-type' : 'undefined' });
+            const undefCtx = { success : true, errors : [], mode : 'strict' as const };
+            expect( undefFn( undefined, '', undefCtx )).toBeUndefined();
+            expect( undefCtx.success ).toBe( true );
+            undefFn( null, '', undefCtx );
+            expect( undefCtx.success ).toBe( false );
+
+            const setFn = MetadataStore.getOrCompileSchema({
+                'x-typescript-type' : 'Set',
+                items               : { type : 'number' }
+            });
+            const setCtx = { success : true, errors : [], mode : 'strict' as const, from : 'json' as const };
+            const setRes = setFn([1, 2], '', setCtx );
+            expect( setRes ).toBeInstanceOf( Set );
+            expect( Array.from( setRes )).toEqual([1, 2]);
+
+            const mapFn = MetadataStore.getOrCompileSchema({
+                'x-typescript-type' : 'Map',
+                key                 : { type : 'string' },
+                value               : { type : 'number' }
+            });
+            const mapCtx = { success : true, errors : [], mode : 'strict' as const, from : 'json' as const };
+            const mapRes = mapFn({ a : 1 }, '', mapCtx );
+            expect( mapRes ).toBeInstanceOf( Map );
+            expect( mapRes.get( 'a' )).toBe( 1 );
+        });
+
+        it( 'should honor additionalProperties schemas for Record-like objects', () => 
+        {
+            const validateFn = MetadataStore.getOrCompileSchema({
+                type                 : 'object',
+                additionalProperties : { type : 'number' }
+            });
+
+            const okCtx = { success : true, errors : [], mode : 'strict' as const };
+            expect( validateFn({ a : 1, b : 2 }, '', okCtx )).toEqual({ a : 1, b : 2 });
+            expect( okCtx.success ).toBe( true );
+
+            const badCtx = { success : true, errors : [], mode : 'strict' as const };
+            validateFn({ a : 'x' }, '', badCtx );
+            expect( badCtx.success ).toBe( false );
+        });
+
+        it( 'should merge allOf object schemas', () => 
+        {
+            const validateFn = MetadataStore.getOrCompileSchema({
+                allOf : [
+                    { type : 'object', properties : { a : { type : 'string' } }, required : ['a'], additionalProperties : false },
+                    { type : 'object', properties : { b : { type : 'number' } }, required : ['b'], additionalProperties : false }
+                ]
+            });
+
+            const okCtx = { success : true, errors : [], mode : 'strict' as const };
+            expect( validateFn({ a : 'x', b : 1 }, '', okCtx )).toEqual({ a : 'x', b : 1 });
+            expect( okCtx.success ).toBe( true );
         });
     });
 });

@@ -55,12 +55,12 @@ describe( 'Transformer Call Expression Replacements', () =>
         const code = `
             import { validate } from '../index.js';
             const x: any = 123;
-            const res = validate<number>(x, { mode: 'relaxed', tryConvert: true, wrapArrays: true });
+            const res = validate<number>(x, { mode: 'relaxed', from: 'query', wrapArrays: true });
         `;
         const compiled = compileAndTransform( code );
         expect( compiled ).toContain( 'MetadataStore.validate(' );
         expect( compiled ).toContain( "mode: 'relaxed'" );
-        expect( compiled ).toContain( 'tryConvert: true' );
+        expect( compiled ).toContain( "from: 'query'" );
         expect( compiled ).toContain( 'wrapArrays: true' );
     });
 
@@ -118,6 +118,21 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).toContain( 'v = true;' );
     });
 
+    it( 'should transform ToNumber and ToBoolean via shared query coerce helpers', () => 
+    {
+        const code = `
+            import { validate, transform } from './src/index.js';
+            interface Row {
+                n: number & transform.ToNumber;
+                b: boolean & transform.ToBoolean;
+            }
+            const res = validate<Row>({ n: "42", b: "true" });
+        `;
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'v = validators.coerceQueryNumber(v);' );
+        expect( compiled ).toContain( 'v = validators.coerceQueryBoolean(v);' );
+    });
+
     it( 'should transform types with transform namespace and custom mappers', () => 
     {
         const code = `
@@ -133,7 +148,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         const compiled = compileAndTransform( code );
         expect( compiled ).toContain( 'v = v.trim();' );
         expect( compiled ).toContain( 'v = v.toLowerCase();' );
-        expect( compiled ).toContain( 'v = new Date(v);' );
+        expect( compiled ).toContain( 'v = validators.coerceQueryDate(v);' );
         expect( compiled ).toContain( 'v = customSuffix(v);' );
     });
 
@@ -196,7 +211,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).toContain( '"const": "file"' );
         expect( compiled ).toContain( '"tags"' );
         expect( compiled ).toContain( '"meta"' );
-        expect( compiled ).toContain( '"format": "date-time"' );
+        expect( compiled ).toContain( '"x-typescript-type": "Date"' );
         expect( compiled ).toContain( '"minimum": 0' );
         expect( compiled ).toContain( '"email"' );
         expect( compiled ).toContain( '"format": "email"' );
@@ -269,6 +284,58 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).toContain( 'validators.map' );
     });
 
+    it( 'should use distinct validators for Set and Map type arguments', () => 
+    {
+        const code = `
+            import { validate } from './src/index.js';
+            interface Dual {
+                nums: Set<number>;
+                strs: Set<string>;
+                mapNum: Map<string, number>;
+                mapStr: Map<string, string>;
+            }
+            const res = validate<Dual>({
+                nums: new Set([1]),
+                strs: new Set(['a']),
+                mapNum: new Map([['a', 1]]),
+                mapStr: new Map([['a', 'b']])
+            });
+        `;
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'validators.set' );
+        // Distinct hashes prove Set<number> and Set<string> are not collapsed
+        const setHashes = [...compiled.matchAll( /validators\.set\(v, path, ctx, (__val_[a-f0-9]+)\)/g )].map( m => m[1]);
+        expect( new Set( setHashes ).size ).toBe( 2 );
+        const mapHashes = [...compiled.matchAll( /validators\.map\(v, path, ctx, (__val_[a-f0-9]+), (__val_[a-f0-9]+)\)/g )]
+            .map( m => `${m[1]}:${m[2]}` );
+        expect( new Set( mapHashes ).size ).toBe( 2 );
+    });
+
+    it( 'should transform assertGuard to MetadataStore.assertGuard', () => 
+    {
+        const code = `
+            import { assertGuard } from '../index.js';
+            const x: unknown = 123;
+            assertGuard<number>(x);
+        `;
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'MetadataStore.assertGuard(' );
+    });
+
+    it( 'should emit Date and Record json schemas matching runtime validators', () => 
+    {
+        const code = `
+            import { jsonSchema } from './src/index.js';
+            type Rec = Record<string, number>;
+            const schemaDate = jsonSchema<Date>();
+            const schemaRec = jsonSchema<Rec>();
+        `;
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( '"x-typescript-type": "Date"' );
+        expect( compiled ).toContain( '"additionalProperties"' );
+        expect( compiled ).not.toMatch( /additionalProperties"\s*:\s*false[\s\S]*Record|Record[\s\S]*additionalProperties"\s*:\s*false/ );
+    });
+
     it( 'should transform custom validation messages and pass message arguments to validator helpers', () => 
     {
         const code = `
@@ -280,7 +347,7 @@ describe( 'Transformer Call Expression Replacements', () =>
             const res = validate<User>({ email: "invalid", age: 16 });
         `;
         const compiled = compileAndTransform( code );
-        expect( compiled ).toContain( 'validators.format(v, path, ctx, "email", "Please supply a valid email address")' );
+        expect( compiled ).toContain( 'v = validators.format(v, path, ctx, "email", "Please supply a valid email address")' );
         expect( compiled ).toContain( 'validators.minimum(v, path, ctx, 18, "You must be 18 or older")' );
     });
 
@@ -299,6 +366,51 @@ describe( 'Transformer Call Expression Replacements', () =>
         const compiled = compileAndTransform( code );
         expect( compiled ).toContain( 'validators.minimum(v, path, ctx, 18, "Too young")' );
         expect( compiled ).toContain( 'validators.maximum(v, path, ctx, 99, "Too old")' );
+    });
+
+    it( 'should transform function types', () => 
+    {
+        const code = `
+            import { validate } from '../index.js';
+            type Handler = ( x: number ) => string;
+            const res = validate<Handler>(( n ) => String( n ));
+        `;
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'validators.function' );
+    });
+
+    it( 'should emit allOf for object intersections and x-typescript-type for Set/bigint', () => 
+    {
+        const code = `
+            import { jsonSchema } from './src/index.js';
+            type A = { a: string };
+            type B = { b: number };
+            type Both = A & B;
+            enum unused { X = 1 }
+            const s1 = jsonSchema<Both>();
+            const s2 = jsonSchema<Set<number>>();
+            const s3 = jsonSchema<bigint>();
+        `;
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( '"allOf"' );
+        expect( compiled ).toContain( '"x-typescript-type": "Set"' );
+        expect( compiled ).toContain( '"x-typescript-type": "bigint"' );
+    });
+
+    it( 'should validate named props together with string index signatures', () => 
+    {
+        const code = `
+            import { validate } from './src/index.js';
+            interface Row {
+                id: number;
+                [key: string]: number;
+            }
+            const res = validate<Row>({ id: 1, extra: 2 });
+        `;
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'validators.props' );
+        expect( compiled ).toContain( 'validators.additionalProps' );
+        expect( compiled ).not.toContain( 'validators.record' );
     });
 });
 

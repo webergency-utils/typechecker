@@ -242,7 +242,9 @@ export function evaluateStaticConstraints(
             }
             else
             {
-                ok = v % n === 0;
+                const q = v / n;
+
+                ok = Math.abs( q - Math.round( q )) <= 1e-8 * Math.max( 1, Math.abs( q ));
             }
 
             if( !ok )
