@@ -4,6 +4,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/tests/**/*.test.ts'],
+    // TS program creation per case is slow on CI (staticAsserts / transformer).
+    testTimeout: 30000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
