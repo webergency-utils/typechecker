@@ -1,8 +1,17 @@
 # @webergency-utils/typechecker
 
-[![npm version](https://img.shields.io/npm/v/%40webergency-utils%2Ftypechecker)](https://www.npmjs.com/package/@webergency-utils/typechecker) [![Maintenance](https://img.shields.io/badge/maintenance-active-brightgreen.svg)](#maintenance) [![npm downloads](https://img.shields.io/npm/dm/%40webergency-utils%2Ftypechecker)](https://www.npmjs.com/package/@webergency-utils/typechecker) [![License](https://img.shields.io/npm/l/%40webergency-utils%2Ftypechecker)](https://www.npmjs.com/package/@webergency-utils/typechecker)
+An ahead-of-time (AOT) TypeScript validation engine that compiles types into optimized runtime validators via a compiler transformer—no runtime reflection and no third-party schema library.
 
-An ahead-of-time (AOT) type validation engine and TypeScript compiler plugin that compiles TypeScript types directly into optimized runtime validation functions. It intercepts type definitions at build time to enforce value constraints, formatting, and defaults with zero runtime reflection and no third-party schema dependencies.
+[![npm version](https://img.shields.io/npm/v/%40webergency-utils%2Ftypechecker)](https://www.npmjs.com/package/@webergency-utils/typechecker)
+[![License](https://img.shields.io/npm/l/%40webergency-utils%2Ftypechecker)](https://www.npmjs.com/package/@webergency-utils/typechecker)
+[![Maintenance](https://img.shields.io/badge/maintenance-active-brightgreen.svg)](#maintenance)
+[![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](https://www.npmjs.com/package/@webergency-utils/typechecker?activeTab=dependencies)
+[![npm downloads](https://img.shields.io/npm/dm/%40webergency-utils%2Ftypechecker)](https://www.npmjs.com/package/@webergency-utils/typechecker)
+<br>
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/webergency-utils/typechecker/badge)](https://securityscorecards.dev/viewer/?uri=github.com/webergency-utils/typechecker)
+[![codecov](https://codecov.io/gh/webergency-utils/typechecker/branch/main/graph/badge.svg)](https://codecov.io/gh/webergency-utils/typechecker)
+[![tests](https://github.com/webergency-utils/typechecker/actions/workflows/ci.yml/badge.svg)](https://github.com/webergency-utils/typechecker/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/webergency-utils/typechecker/actions/workflows/codeql.yml/badge.svg)](https://github.com/webergency-utils/typechecker/actions/workflows/codeql.yml)
 
 ## TL;DR
 
@@ -34,7 +43,11 @@ if (result.success) {
 
 ## Installation & Setup
 
-Since this package is a TypeScript compiler plugin (transformer), you must compile your project using a compiler patcher like `ts-patch` to hook into TS compilation.
+This package is a TypeScript compiler plugin (transformer). You must compile with a compiler patcher such as `ts-patch` so the transformer can hook into `tsc`.
+
+**Peer dependency:** `typescript` `>=5.0.0` (required; provides the compiler API the transformer and language service plugin use).
+
+There are **no runtime `dependencies`**—only the peer `typescript` and your build tooling.
 
 ### 1. Install Dependencies
 
@@ -99,6 +112,12 @@ graph TD
 3. **Hoisted Registry**: The transformer generates highly optimized, direct JavaScript validator functions for each resolved type shape, generates a unique hash, and registers them in a global `MetadataStore`.
 4. **Call Replacement**: The transformer replaces the original compile-time call expressions with direct, zero-reflection references to the runtime `MetadataStore`.
 
+### External dependencies
+
+- **Required peer:** `typescript` (`>=5.0.0`) — compiler API for the transformer and optional language service plugin.
+- **Required build tooling:** `ts-patch` (or equivalent) — patches `tsc` so `compilerOptions.plugins` `transform` entries run.
+- **Runtime dependencies:** none.
+
 ### Static Constraint Diagnostics
 
 The package includes an IDE / Language Service plugin that statically checks literal values against type constraints during editing or compilation:
@@ -116,15 +135,17 @@ const age: number & constraint.Minimum<18> = 5;
 ## Glossary
 
 - [`validate`](src/index.ts): Validates a value against a type, returning a structured result containing the validation status and a detailed list of errors.
-- [`is`](src/index.ts): A type guard function that returns `true` if a value is valid, narrowing its type for TypeScript.
-- [`assert`](src/index.ts): Validates a value and returns it, throwing a validation error on failure.
-- [`assertGuard`](src/index.ts): A type assertion function that throws if a value does not match the target type, narrowing the type in the outer scope.
+- [`is`](src/index.ts): A type guard that returns `true` if a value already matches `T` (no coercion; `from` is ignored).
+- [`assert`](src/index.ts): Validates a value and returns it, throwing a validation error on failure (supports `from` coercion).
+- [`assertGuard`](src/index.ts): Asserts a value already matches `T` and narrows the outer scope (no coercion; `from` is ignored).
 - [`jsonSchema`](src/index.ts): Generates and returns a JSON Schema representation matching a TypeScript type at compile time (draft-07 shaped, with `x-typescript-type` for Date/RegExp/Set/Map/bigint/etc.).
 - [`WithModifiers`](src/runtime/tags.ts): A utility type that applies constraint, format, or transformation tags to properties of deeply nested or external types using dot-separated path mappings.
 - [`ResolveDefaults`](src/runtime/tags.ts): A helper type that removes the optional flag (`?`) from properties that have defined default values.
 - [`convertPropertyCasing`](src/runtime/casing.ts): A runtime utility to recursively change the casing of object keys.
-- [`toZodIssues`](src/runtime/validators.ts): Utility to transform internal typechecker validation errors into Zod-compatible issue structures.
+- [`toZodIssues`](src/runtime/validators.ts) / [`groupErrorsByPath`](src/runtime/validators.ts): Transform or group validation errors (including nested union `issues`).
 - [`ZodLikeError`](src/runtime/validators.ts): Error class wrapping validation errors in a structure compatible with libraries expecting Zod errors.
+- [`@webergency-utils/typechecker/transformer`](src/transformer.ts): Required `ts-patch` transform entry for AOT rewrite.
+- [`@webergency-utils/typechecker/plugin`](src/plugin.ts): Optional language-service plugin for IDE static constraint diagnostics.
 
 ---
 
@@ -147,11 +168,11 @@ Validates input data against type `T` and returns a structured validation result
 
 #### `is<T>(input: unknown, options?: ValidationMode | ValidationOptions): input is ResolveDefaults<T>`
 
-A type guard function checking if the input matches type `T`.
+A type guard function checking if the input matches type `T`. Does **not** coerce; `from` is ignored.
 
 - **Parameters**:
   - `input`: The value to check.
-  - `options` (optional): Either a `ValidationMode` string or a `ValidationOptions` object.
+  - `options` (optional): Either a `ValidationMode` string or a `ValidationOptions` object (`from` has no effect).
 - **Returns**: `boolean` (`true` if valid, `false` otherwise). Narrows type of `input` to `ResolveDefaults<T>` on success.
 - **Example**:
   ```typescript
@@ -176,13 +197,13 @@ Validates input data and returns it, throwing a validation error on failure.
 
 #### `assertGuard<T>(input: unknown, options?: ValidationMode | ValidationOptions): asserts input is ResolveDefaults<T>`
 
-An assertion guard that throws a validation error if the input does not match type `T`.
+An assertion guard that throws a validation error if the input does not match type `T`. Does **not** coerce; `from` is ignored.
 
 - **Parameters**:
   - `input`: The value to check.
-  - `options` (optional): Either a `ValidationMode` string or a `ValidationOptions` object.
+  - `options` (optional): Either a `ValidationMode` string or a `ValidationOptions` object (`from` has no effect).
 - **Returns**: `void`. Narrows the type of `input` in the enclosing scope on success.
-- **Throws**: `Error` if validation fails.
+- **Throws**: `Error` if validation fails (or a custom error via `options.errorFactory`).
 - **Example**:
   ```typescript
   assertGuard<User>(data);
@@ -218,11 +239,23 @@ Recursively converts all property keys of an object to the specified casing form
 
 #### `toZodIssues(errors: IValidationError[]): any[]`
 
-Converts internal validation errors into Zod-compatible issues.
+Converts internal validation errors into Zod-compatible issues. Flattens nested union `issues` into a flat list.
 
 - **Parameters**:
   - `errors`: Array of `IValidationError`.
 - **Returns**: An array of Zod-like issues.
+
+#### `groupErrorsByPath(errors: IValidationError[]): Record<string, { value: any, errors: string[] }>`
+
+Groups validation errors by path, including nested `issues` from failed unions.
+
+- **Parameters**:
+  - `errors`: Array of `IValidationError`.
+- **Returns**: A map of path → `{ value, errors }`.
+
+#### `coerceQueryNumber(v: any): any` / `coerceQueryBoolean(v: any): any` / `coerceQueryDate(v: any): any` / `coerceJsonDate(v: any): any`
+
+Shared coercion helpers used by `from: 'query'` / `from: 'json'` and by `transform.ToNumber` / `ToBoolean` / `ToDate`.
 
 #### `class ZodLikeError extends Error`
 
@@ -244,7 +277,7 @@ Configuration options to customize validator behavior.
 | Property | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `mode` | `'strict' \| 'relaxed' \| 'strip'` | `'strict'` | Validation mode strategy (strict key checking, relaxed, or key stripping). |
-| `from` | `'json' \| 'query' \| ((key, value, type) => any)` | `undefined` | Input conversion mode. `'json'` revives JSON-impossible types (Date, RegExp, bigint, Set, Map). `'query'` also coerces querystring shapes (string→number/boolean, timestamps→Date, etc.). A function is called only on type mismatch. |
+| `from` | `'json' \| 'query' \| ((key, value, type) => any)` | `undefined` | Input conversion mode for `validate` / `assert`. `'json'` revives JSON-impossible types (Date, RegExp, bigint, Set, Map). `'query'` also coerces querystring shapes (string→number/boolean, timestamps→Date, etc.). A function is called only on type mismatch. Ignored by `is` / `assertGuard`. |
 | `wrapArrays` | `boolean` | `false` | Wraps non-array values into single-element arrays if an array is expected. |
 | `mutate` | `boolean` | `false` | When true, write validated/coerced values onto the input. Default false: always return new containers. |
 | `schema` | `any` | `undefined` | Custom JSON Schema instance. |
@@ -351,13 +384,17 @@ Sanitizes and converts input values during validation.
 
 ## Troubleshooting
 
-### `validate`, `is`, or `assert` calls return empty results or throw at runtime
-- **Cause**: The compiler transformer did not execute during build.
-- **Diagnostics Check**: Inspect your built `.js` code. If the output still contains `validate<User>(data)` or other generic validation calls as functions, compilation was bypassed.
+### `validate`, `is`, or `assert` throw “transformer was not applied”
+- **Cause**: The compiler transformer did not rewrite the call at build time. Untransformed stubs always throw.
+- **Diagnostics Check**: Inspect your built `.js` output. If it still contains `validate(...)` / `is(...)` / `assert(...)` as package imports rather than `MetadataStore.validate(...)` (etc.), the transformer did not run.
 - **Fix**:
   1. Verify `npx ts-patch install` was executed successfully.
-  2. Verify the transformer plugin is registered in `tsconfig.json`.
+  2. Verify `{ "transform": "@webergency-utils/typechecker/transformer" }` is registered in `tsconfig.json` `compilerOptions.plugins`.
   3. Ensure your bundler or compiler CLI compiles using patched `tsc`.
+
+### IDE does not report constraint errors on literals
+- **Cause**: The optional language service plugin is not loaded.
+- **Fix**: Add `{ "name": "@webergency-utils/typechecker/plugin" }` alongside the transformer entry in `tsconfig.json` plugins, and restart the TypeScript language service in your editor.
 
 ---
 

@@ -123,4 +123,24 @@ describe( 'hoister', () =>
         // Assert
         expect( printed.indexOf( 'registerValidator' )).toBeLessThan( printed.indexOf( 'const { a }' ));
     });
+
+    it( 'should append registrations at end when file is only imports and types', () => 
+    {
+        // Arrange
+        const source = sourceFrom( `
+            import { x } from './x.js';
+            interface Row { id: number }
+            type Alias = string;
+        ` );
+        const cache = new Map<string, ts.Expression>([
+            ['tail', ts.factory.createIdentifier( 'validators.string' )]
+        ]);
+
+        // Act
+        const printed = printSource( hoistRegistrations( source, cache, new Set([ 'validators' ])));
+
+        // Assert
+        expect( printed ).toContain( 'registerValidator("tail", __val_tail)' );
+        expect( printed.indexOf( 'registerValidator' )).toBeGreaterThan( printed.indexOf( 'type Alias' ));
+    });
 });

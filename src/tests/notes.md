@@ -37,3 +37,9 @@
 - Use `vi.fn()` for callback/custom function verification when mocking is required.
 - Prefer observing `from` / transform callbacks at the Test Seam over stubbing validator internals.
 - For anonymous `validators.custom` failure labels, clear `fn.name` (empty string) so the error is `Custom` rather than `Custom<name>`.
+
+## Coverage Scope
+- Vitest coverage includes `src/runtime/**`, `src/engine/**`, `src/transformer.ts`, `src/plugin.ts`, and `src/index.ts` (tags type-only modules excluded).
+- Engine units: print AST via a local `stripPositions` helper before `ts.createPrinter` — nodes keep source positions from `templateToAst` and otherwise print empty literals.
+- Prefer unit-testing `generators` / `hoister` / `objectToAst` at their exports; use the transformer compile harness for resolver/jsonSchema integration paths.
+- Plugin tests mock `ts.server.PluginCreateInfo` / `LanguageService`; assert early-return seams (`node_modules`, `.d.ts`, missing program).

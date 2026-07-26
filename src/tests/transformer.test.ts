@@ -412,5 +412,83 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).toContain( 'validators.additionalProps' );
         expect( compiled ).not.toContain( 'validators.record' );
     });
+
+    it( 'should transform is and assert entrypoints', () => 
+    {
+        const code = `
+            import { is, assert } from '../index.js';
+            const ok = is<number>(1);
+            const value = assert<string>('x');
+        `;
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'MetadataStore.is(' );
+        expect( compiled ).toContain( 'MetadataStore.assert(' );
+    });
+
+    it( 'should compile schema option via property assignment shorthand and member access', () => 
+    {
+        const code = `
+            import { validate } from '../index.js';
+            const schema = { type: 'string' };
+            const a = validate<string>('x', { mode: 'strict', schema: { type: 'string' } });
+            const b = validate<string>('x', { schema });
+            const opts = { schema };
+            const c = validate<string>('x', opts);
+        `;
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'getOrCompileSchema' );
+        expect( compiled.match( /getOrCompileSchema/g )?.length ).toBeGreaterThanOrEqual( 3 );
+    });
+
+    it( 'should transform enums never symbol template literals and bigint literals', () => 
+    {
+        const code = `
+            import { validate } from '../index.js';
+            enum Color { Red = 'red', Blue = 'blue' }
+            type Id = \`id_\${string}\`;
+            type Flag = \`\${boolean}\`;
+            type NumTpl = \`n_\${number}\`;
+            type BigTpl = \`b_\${bigint}\`;
+            type MixedTpl = \`m_\${string | number}\`;
+            const e = validate<Color>(Color.Red);
+            const n = validate<never>(null as never);
+            const s = validate<symbol>(Symbol('x'));
+            const t = validate<Id>('id_a');
+            const f = validate<Flag>('true');
+            const nt = validate<NumTpl>('n_1');
+            const bt = validate<BigTpl>('b_1');
+            const mt = validate<MixedTpl>('m_x');
+            const bl = validate<1n>(1n);
+            const p = validate<Promise<number>>(Promise.resolve(1));
+        `;
+        const compiled = compileAndTransform( code );
+        expect( compiled ).toContain( 'validators.literal' );
+        expect( compiled ).toContain( 'validators.never' );
+        expect( compiled ).toContain( 'validators.symbol' );
+        expect( compiled ).toContain( 'validators.templateLiteral' );
+        expect( compiled ).toContain( '1n' );
+        expect( compiled ).toContain( 'Promise' );
+    });
+
+    it( 'should transform requires uniqueItems and array length constraints', () => 
+    {
+        const code = `
+            import { validate, constraint } from './src/index.js';
+            interface User {
+                password: string;
+                email: string & constraint.Requires<'.password'>;
+                tags: string[] & constraint.MinItems<1> & constraint.MaxItems<3> & constraint.UniqueItems;
+            }
+            const res = validate<User>({ password: 'x', email: 'a@b.co', tags: ['a'] });
+        `;
+        const compiled = compileAndTransform( code );
+
+        // Requires currently lands on the registered JSON schema; array bounds emit both schema + runtime helpers when extracted
+        expect( compiled ).toContain( '"requires": ".password"' );
+        expect( compiled ).toContain( '"minItems": 1' );
+        expect( compiled ).toContain( '"maxItems": 3' );
+        expect( compiled ).toContain( '"uniqueItems": true' );
+        expect( compiled ).toMatch( /validators\.(minItems|maxItems|uniqueItems)/ );
+    });
 });
 

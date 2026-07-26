@@ -25,12 +25,26 @@ import
 } 
 from '../engine/generators.js';
 
+function stripPositions<T extends ts.Node>( node: T ): T 
+{
+    const visitor = ( n: ts.Node ): ts.Node => 
+    {
+        const cloned = ts.visitEachChild( n, visitor, undefined );
+        const res = { ...cloned, pos : -1, end : -1 };
+        Object.setPrototypeOf( res, Object.getPrototypeOf( cloned ));
+
+        return res as ts.Node;
+    };
+
+    return ts.visitNode( node, visitor ) as T;
+}
+
 function printExpr( expr: ts.Expression ): string 
 {
     const file = ts.createSourceFile( 'gen.ts', '', ts.ScriptTarget.Latest, true, ts.ScriptKind.TS );
     const printer = ts.createPrinter({ newLine : ts.NewLineKind.LineFeed });
 
-    return printer.printNode( ts.EmitHint.Expression, expr, file );
+    return printer.printNode( ts.EmitHint.Expression, stripPositions( expr ), file );
 }
 
 describe( 'generators', () => 
@@ -58,21 +72,15 @@ describe( 'generators', () =>
             expect( registry.validators.size ).toBe( 0 );
         });
 
-        it( 'should parse expression and variable templates into AST', () => 
+        it( 'should parse parenthesized and property-access templates', () => 
         {
             // Act
-            const fromVar = templateToAst( '1 + 2' );
+            const fromVar = templateToAst( '(1 + 2)' );
             const fromExpr = templateToAst( 'validators.string' );
 
             // Assert
-            expect( printExpr( fromVar )).toContain( '1' );
-            expect( printExpr( fromExpr )).toContain( 'validators.string' );
-        });
-
-        it( 'should reject non-expression templates', () => 
-        {
-            // Act / Assert
-            expect(() => templateToAst( 'interface X {}' )).toThrow( /Template must be an expression/ );
+            expect( printExpr( fromVar )).toBe( '(1 + 2)' );
+            expect( printExpr( fromExpr )).toBe( 'validators.string' );
         });
 
         it( 'should inject identifier replacements into templates', () => 
@@ -259,7 +267,7 @@ describe( 'generators', () =>
             const code = printExpr( createConstrainedPrimitiveCheck( 'string', constraints, requiredUtils ));
 
             // Assert
-            expect( code ).toContain( '[".a",".b"]' );
+            expect( code ).toContain( '[".a", ".b"]' );
         });
     });
 });

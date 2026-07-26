@@ -1,6 +1,6 @@
 {
   "name": "@webergency-utils/typechecker",
-  "version": "0.1.10",
+  "version": "0.2.0",
   "type": "module",
   "description": "TypeScript compiler plugin for runtime validation",
   "author": "radixxko",
@@ -33,15 +33,21 @@
       "default": "./dist/plugin.js"
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "dist/**/*"
   ],
   "scripts": {
     "lint": "eslint .",
     "test": "vitest run",
+    "fuzz": "npm run build:fuzz && jazzer fuzz_typechecker.cjs",
     "coverage": "vitest run --coverage",
-    "clean": "rm -rf ./dist/* node_modules package-lock.json && npm i",
+    "clean": "rm -rf ./dist ./dist-fuzz",
+    "reset": "npm run clean && rm -rf node_modules package-lock.json && npm i",
     "build": "npm run clean && tsc && node update_imports.js",
+    "build:fuzz": "esbuild src/fuzz-runtime.ts --bundle --platform=node --format=cjs --outfile=dist-fuzz/runtime.cjs",
     "commit": "node -e \"const version = require('./package.json').version.trim(); require('child_process').execSync('git add . && git commit -m \\\"Version ' + version + '\\\"');\"",
     "version": "npm run build && npm publish --access public && npm run commit && git push"
   },
@@ -58,10 +64,12 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@jazzer.js/core": "^4.0.0",
     "@stylistic/eslint-plugin": "^5.10.0",
     "@types/node": "^24.10.1",
     "@typescript/typescript6": "^6.0.2",
     "@vitest/coverage-v8": "^4.1.6",
+    "esbuild": "^0.27.7",
     "eslint": "^10.4.1",
     "typescript": "^6.0.3 || ^7.0.0",
     "typescript-eslint": "^8.60.0",
