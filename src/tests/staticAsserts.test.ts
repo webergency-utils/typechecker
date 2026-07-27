@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import transformer from '../transformer.js';
 import {
+    extractStaticConstraints,
     evaluateStaticConstraints,
     tryGetConstantValue
 } from '../engine/staticAsserts.js';
@@ -353,6 +354,18 @@ describe( 'Static constraint diagnostics', () =>
             expect( evaluateStaticConstraints({ kind : 'array', value : [1, 2, 3]}, [{ type : 'maxItems', value : 2 }])).toHaveLength( 1 );
             expect( evaluateStaticConstraints({ kind : 'array', value : [1, 1]}, [{ type : 'uniqueItems', value : true }])).toHaveLength( 1 );
             expect( evaluateStaticConstraints({ kind : 'array', value : [1, 2]}, [{ type : 'uniqueItems', value : true }])).toHaveLength( 0 );
+            expect( evaluateStaticConstraints(
+                { kind : 'array', value : [{ a : 1 }, { a : 1 }] },
+                [{ type : 'uniqueItems', value : true }]
+            )).toHaveLength( 1 );
+            expect( evaluateStaticConstraints(
+                { kind : 'number', value : 15n },
+                [{ type : 'multipleOf', value : 4n }]
+            )).toHaveLength( 1 );
+            expect( evaluateStaticConstraints(
+                { kind : 'number', value : 16n },
+                [{ type : 'multipleOf', value : 4n }]
+            )).toHaveLength( 0 );
         });
 
         it( 'uses custom messages when present', () => 
@@ -381,9 +394,116 @@ describe( 'Static constraint diagnostics', () =>
             expect( parse( '`hi`' )).toEqual({ kind : 'string', value : 'hi' });
             expect( parse( '[1, 2]' )).toEqual({ kind : 'array', value : [1, 2]});
             expect( parse( "['a', 'b']" )).toEqual({ kind : 'array', value : ['a', 'b']});
+            expect( parse( '[[1], [2]]' )).toEqual({ kind : 'array', value : [[1], [2]]});
             expect( parse( '(5)' )).toEqual({ kind : 'number', value : 5 });
             expect( parse( 'n' )).toBeUndefined();
             expect( parse( '[...xs]' )).toBeUndefined();
+            expect( parse( '1n' )).toEqual({ kind : 'number', value : 1n });
+        });
+
+        it( 'parses bigint literals and evaluates bigint multiples', () =>
+        {
+            // Arrange
+            const sourceFile = ts.createSourceFile( 'bigint.ts', 'const x = -6n;', ts.ScriptTarget.ES2022, true );
+            const declaration = ( sourceFile.statements[0] as ts.VariableStatement ).declarationList.declarations[0];
+
+            // Act
+            const constant = tryGetConstantValue( declaration.initializer! );
+            const errors = evaluateStaticConstraints(
+                { kind : 'number', value : 7n },
+                [{ type : 'multipleOf', value : 3n }]
+            );
+
+            // Assert
+            expect( constant ).toEqual({ kind : 'number', value : -6n });
+            expect( errors ).toHaveLength( 1 );
+        });
+
+        it( 'extracts a message from union-shaped phantom properties', () =>
+        {
+            // Arrange
+            const fileName = path.resolve( `./temp_static_message_${process.pid}.ts` );
+            const source = `
+                type Tagged = string & {
+                    __minLength: 3;
+                    __minLength_message: 'too short' | 'alternate';
+                };
+            `;
+            fs.writeFileSync( fileName, source );
+
+            try
+            {
+                const program = ts.createProgram([fileName], { strict : true });
+                const checker = program.getTypeChecker();
+                const sourceFile = program.getSourceFile( fileName )!;
+                const declaration = sourceFile.statements[0] as ts.TypeAliasDeclaration;
+
+                // Act
+                const constraints = extractStaticConstraints( checker.getTypeFromTypeNode( declaration.type ), checker );
+
+                // Assert
+                expect( constraints ).toContainEqual({ type : 'minLength', value : 3, message : 'too short' });
+            }
+            finally
+            {
+                fs.unlinkSync( fileName );
+            }
+        });
+
+        it( 'recurses into nonconstant nested object literal properties', () =>
+        {
+            // Arrange
+            const source = `
+                import { constraint } from './src/index.js';
+                interface Input {
+                    nested: { value: string & constraint.MinLength<3> };
+                }
+                declare const unknownValue: string;
+                const input: Input = { nested: { value: unknownValue } };
+            `;
+
+            // Act
+            const diagnostics = diagnosticsFor( source );
+
+            // Assert
+            expect( diagnostics ).toEqual([]);
+        });
+
+        it( 'extracts constraints with message properties and uniqueItems object keys', () =>
+        {
+            // Arrange
+            const fileName = path.resolve( `./temp_static_msg_branch_${process.pid}.ts` );
+            const source = `
+                type Tagged = string & {
+                    __minLength: 3;
+                    __minLength_message: 'too short';
+                };
+                type Flagged = unknown[] & {
+                    __uniqueItems: true;
+                };
+            `;
+            fs.writeFileSync( fileName, source );
+
+            try
+            {
+                const program = ts.createProgram([fileName], { strict : true });
+                const checker = program.getTypeChecker();
+                const sourceFile = program.getSourceFile( fileName )!;
+                const tagged = sourceFile.statements[0] as ts.TypeAliasDeclaration;
+                const flagged = sourceFile.statements[1] as ts.TypeAliasDeclaration;
+
+                // Act
+                const taggedConstraints = extractStaticConstraints( checker.getTypeFromTypeNode( tagged.type ), checker );
+                const flaggedConstraints = extractStaticConstraints( checker.getTypeFromTypeNode( flagged.type ), checker );
+
+                // Assert
+                expect( taggedConstraints.some( c => c.message === 'too short' )).toBe( true );
+                expect( flaggedConstraints.some( c => c.type === 'uniqueItems' )).toBe( true );
+            }
+            finally
+            {
+                fs.unlinkSync( fileName );
+            }
         });
     });
 });

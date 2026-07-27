@@ -13,18 +13,34 @@ export function createRegistry(): IValidationRegistry
 
 export function templateToAst( template: string ): ts.Expression 
 {
-    const source = ts.createSourceFile( 'template.ts', `const x = ${template};`, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS );
-    const statement = source.statements[0];
+    const asExpression = ts.createSourceFile(
+        'template.ts',
+        `${template};`,
+        ts.ScriptTarget.Latest,
+        true,
+        ts.ScriptKind.TS
+    );
+    const expressionStatement = asExpression.statements[0];
 
-    if( ts.isVariableStatement( statement )) 
+    if( ts.isExpressionStatement( expressionStatement ))
     {
-        return statement.declarationList.declarations[0].initializer!;
+        return expressionStatement.expression;
     }
 
-    if( ts.isExpressionStatement( statement )) 
+    const asVariable = ts.createSourceFile(
+        'template.ts',
+        `const x = ${template};`,
+        ts.ScriptTarget.Latest,
+        true,
+        ts.ScriptKind.TS
+    );
+    const variableStatement = asVariable.statements[0];
+
+    if( ts.isVariableStatement( variableStatement ))
     {
-        return statement.expression;
+        return variableStatement.declarationList.declarations[0].initializer!;
     }
+
     throw new Error( 'Template must be an expression or variable declaration' );
 }
 

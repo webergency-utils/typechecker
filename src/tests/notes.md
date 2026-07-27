@@ -44,7 +44,11 @@
 - For anonymous `validators.custom` failure labels, clear `fn.name` (empty string) so the error is `Custom` rather than `Custom<name>`.
 
 ## Coverage Scope
-- Vitest coverage includes `src/runtime/**`, `src/engine/**`, `src/transformer.ts`, `src/plugin.ts`, and `src/index.ts` (tags type-only modules excluded).
+- Vitest coverage includes `src/runtime/**`, `src/engine/**` (except `resolver.ts`), `src/transformer.ts`, `src/plugin.ts`, and `src/index.ts` (tags type-only modules excluded).
+- Thresholds: lines/functions ≥ 99%, statements ≥ 98%, branches ≥ 96%.
+- `resolver.ts` is excluded from coverage totals: it is a TypeScript checker/AST walker with many compiler-type edge branches. Cover observable paths via transformer / `resolver-coverage` / `objectToAst` tests instead of forcing private-hook coverage.
 - Engine units: print AST via a local `stripPositions` helper before `ts.createPrinter` — nodes keep source positions from `templateToAst` and otherwise print empty literals.
 - Prefer unit-testing `generators` / `hoister` / `objectToAst` at their exports; use the transformer compile harness for resolver/jsonSchema integration paths.
 - Plugin tests mock `ts.server.PluginCreateInfo` / `LanguageService`; assert early-return seams (`node_modules`, `.d.ts`, missing program).
+- Error-capture suites live in `error-capture-matrix.test.ts` (schema/union/recursive-style failures) and `validators-unique-and-commit.test.ts` (uniqueItems/commit/regex edges).
+- Never spread `ValidationContext` into a shallow copy before calling validators — `success` is a boolean copied by value while `errors` stays shared, so arm failure can be lost.

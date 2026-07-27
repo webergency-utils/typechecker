@@ -89,6 +89,8 @@ describe( 'plugin', () =>
         } as ts.server.PluginCreateInfo );
 
         // Act / Assert
+        expect( proxy.getSemanticDiagnostics( '/pkg/index.d.ts' )).toBe( base );
+
         // Arrange — real source under a node_modules path
         const nmFile = '/proj/node_modules/pkg/index.ts';
         const nmSource = ts.createSourceFile( nmFile, 'export const x = 1;', ts.ScriptTarget.Latest, true );

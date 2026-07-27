@@ -83,6 +83,16 @@ describe( 'generators', () =>
             expect( printExpr( fromExpr )).toBe( 'validators.string' );
         });
 
+        it( 'should fall back to variable-wrapper parsing for object-literal templates', () => 
+        {
+            // Arrange / Act — `{ a: 1 };` is a block statement, so ExpressionStatement
+            // parsing fails and the `const x = …` path is used.
+            const ast = templateToAst( '{ a: 1 }' );
+
+            // Assert
+            expect( printExpr( ast )).toContain( 'a' );
+        });
+
         it( 'should inject identifier replacements into templates', () => 
         {
             // Arrange
