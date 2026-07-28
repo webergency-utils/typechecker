@@ -342,9 +342,7 @@ function pathContext( path: string, ctx: ValidationContext ): PathContext
 
 function fromCustom( ctx: ValidationContext, path: string, value: any, kind: CoercionKind ): any
 {
-    if( typeof ctx.from !== 'function' ){ return value }
-
-    return ctx.from( value, { ...pathContext( path, ctx ), kind });
+    return ( ctx.from as ( val: any, c: FromCoercionContext ) => any )( value, { ...pathContext( path, ctx ), kind });
 }
 
 /** Query-style number coercion — shared by `from: 'query'` and `transform.ToNumber`. */
@@ -487,7 +485,6 @@ function isUri( value: string ): boolean
 
     try 
     {
-        // eslint-disable-next-line no-new
         new URL( value );
 
         return true;
@@ -509,7 +506,6 @@ function isUriReference( value: string ): boolean
 
     try 
     {
-        // eslint-disable-next-line no-new
         new URL( value, 'http://example.com' );
 
         return true;
@@ -528,7 +524,6 @@ function isIri( value: string ): boolean
 
     try 
     {
-        // eslint-disable-next-line no-new
         new URL( value );
 
         return true;
@@ -549,7 +544,6 @@ function isIriReference( value: string ): boolean
 
     try 
     {
-        // eslint-disable-next-line no-new
         new URL( value, 'http://example.com' );
 
         return true;
@@ -583,8 +577,6 @@ function isUriTemplate( value: string ): boolean
 
 function parseFormatDate( value: string ): Date | undefined 
 {
-    if( typeof value !== 'string' ){ return undefined }
-
     const match = value.match( /^(\d{4})-(\d{2})-(\d{2})$/ );
 
     if( !match ){ return undefined }
@@ -609,8 +601,7 @@ function parseFormatDate( value: string ): Date | undefined
 
 function parseFormatDateTime( value: string ): Date | undefined 
 {
-    if( typeof value !== 'string' ||
-        !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/i.test( value ))
+    if( !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/i.test( value ))
     {
         return undefined;
     }
@@ -2089,8 +2080,8 @@ function resolvePath( currentPath: string, targetPath: string ): string
     {
         return targetPath;
     }
-    const dotsMatch = targetPath.match( /^\.+/ );
-    const dots = dotsMatch ? dotsMatch[0].length : 0;
+    const dotsMatch = targetPath.match( /^\.+/ )!;
+    const dots = dotsMatch[0].length;
     const targetClean = targetPath.substring( dots );
 
     const currentParts = tokenizePath( currentPath );
@@ -2141,157 +2132,124 @@ function hasPath( obj: any, path: string ): boolean
     return val !== undefined && val !== null;
 }
 
-export class MetadataStoreClass 
+const compiledSchemas = new WeakMap<object, Function>();
+
+export function getOrCompileSchema( schema: any ): Function
 {
-    private validators = new Map<string, Function>();
-    private schemas = new Map<string, any>();
-    private compiledSchemas = new WeakMap<object, Function>();
+    if( typeof schema === 'boolean' ){ return compileSchema( schema ) }
 
-    registerValidator( hash: string, validator: Function ) 
+    if( typeof schema !== 'object' || schema === null )
     {
-        this.validators.set( hash, validator );
+        throw new Error( 'Invalid JSON Schema: must be a non-null object or boolean' );
+    }
+    let compiled = compiledSchemas.get( schema );
+
+    if( !compiled )
+    {
+        compiled = compileSchema( schema );
+        compiledSchemas.set( schema, compiled );
     }
 
-    getValidator( hash: string ): Function 
+    return compiled;
+}
+
+export function is( validator: Function, value: any, options?: ValidationMode | GuardOptions ): boolean
+{
+    const opt = options;
+    const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
+    const from = typeof opt === 'object' ? opt?.from : undefined;
+    const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate : true, root : value };
+    const res = validator( value, '', ctx );
+
+    if( !ctx.success ){ return false }
+
+    if( res === value ){ return true }
+
+    // Fallback when a branch returned a side tree (e.g. union) that still needs copying.
+    return commitContainer( value, res );
+}
+
+export function assert( validator: Function, value: any, options?: ValidationMode | AssertOptions ): any
+{
+    const opt = options;
+    const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
+    const from = typeof opt === 'object' ? opt?.from : undefined;
+    const mutate = typeof opt === 'object' ? opt?.mutate === true : false;
+    const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate, root : value };
+    const res = validator( value, '', ctx );
+
+    if( !ctx.success )
     {
-        const val = this.validators.get( hash );
-
-        if( !val ) { throw new Error( `Validator not found for hash: ${hash}` ) }
-
-        return val;
-    }
-
-    registerSchema( hash: string, schema: any ) 
-    {
-        this.schemas.set( hash, schema );
-    }
-
-    getSchema( hash: string ): any 
-    {
-        const schema = this.schemas.get( hash );
-
-        if( !schema ) { throw new Error( `Schema not found for hash: ${hash}` ) }
-
-        return schema;
-    }
-
-    getOrCompileSchema( schema: any ): Function 
-    {
-        if( typeof schema === 'boolean' ){ return compileSchema( schema ) }
-
-        if( typeof schema !== 'object' || schema === null )
-        {
-            throw new Error( 'Invalid JSON Schema: must be a non-null object or boolean' );
-        }
-        let compiled = this.compiledSchemas.get( schema );
-
-        if( !compiled ) 
-        {
-            compiled = compileSchema( schema );
-            this.compiledSchemas.set( schema, compiled );
-        }
-
-        return compiled;
-    }
-
-    is( validator: Function, value: any, options?: ValidationMode | GuardOptions ): boolean 
-    {
-        const opt = options;
-        const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
-        const from = typeof opt === 'object' ? opt?.from : undefined;
-        const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate : true, root : value };
-        const res = validator( value, '', ctx );
-
-        if( !ctx.success ){ return false }
-
-        if( res === value ){ return true }
-
-        // Fallback when a branch returned a side tree (e.g. union) that still needs copying.
-        return commitContainer( value, res );
-    }
-
-    assert( validator: Function, value: any, options?: ValidationMode | AssertOptions ): any 
-    {
-        const opt = options;
-        const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
-        const from = typeof opt === 'object' ? opt?.from : undefined;
-        const mutate = typeof opt === 'object' ? opt?.mutate === true : false;
-        const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate, root : value };
-        const res = validator( value, '', ctx );
-
-        if( !ctx.success ) 
-        {
-            if( typeof opt === 'object' && opt?.errorFactory ) 
-            {
-                throw opt.errorFactory( ctx.errors );
-            }
-            throw new Error( 'Validation Error: ' + ctx.errors.map( e => e.path ? `${e.path}: ${e.error}` : e.error ).join( ', ' ));
-        }
-
-        if( mutate )
-        {
-            if( res === value || commitContainer( value, res )){ return value }
-
-            return res;
-        }
-
-        return res;
-    }
-
-    assertGuard( validator: Function, value: any, options?: ValidationMode | AssertGuardOptions ): void 
-    {
-        const opt = options;
-        const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
-        const from = typeof opt === 'object' ? opt?.from : undefined;
-        const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate : true, root : value };
-        const res = validator( value, '', ctx );
-
-        if( ctx.success && ( res === value || commitContainer( value, res ))){ return }
-
-        // Root was replaced (e.g. primitive coerce) — binding unchanged; report a normal type failure.
-        if( ctx.success && res !== value ) 
-        {
-            ctx.success = true;
-            ctx.errors.length = 0;
-            ctx.from = undefined;
-            validator( value, '', ctx );
-
-            if( ctx.success )
-            {
-                report( ctx, '', 'RootNotRewritable', value );
-            }
-        }
-
-        if( typeof opt === 'object' && opt?.errorFactory ) 
+        if( typeof opt === 'object' && opt?.errorFactory )
         {
             throw opt.errorFactory( ctx.errors );
         }
         throw new Error( 'Validation Error: ' + ctx.errors.map( e => e.path ? `${e.path}: ${e.error}` : e.error ).join( ', ' ));
     }
 
-    validate( validator: Function, value: any, options?: ValidationMode | ValidationOptions ): { success : boolean, errors : IValidationError[], data? : any }
+    if( mutate )
     {
-        const opt = options;
-        const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
-        const from = typeof opt === 'object' ? opt?.from : undefined;
-        const mutate = typeof opt === 'object' ? opt?.mutate === true : false;
-        const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate, root : value };
-        const res = validator( value, '', ctx );
+        if( res === value || commitContainer( value, res )){ return value }
 
-        if( !ctx.success ){ return { success : false, errors : ctx.errors } }
+        return res;
+    }
 
-        if( mutate )
+    return res;
+}
+
+export function assertGuard( validator: Function, value: any, options?: ValidationMode | AssertGuardOptions ): void
+{
+    const opt = options;
+    const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
+    const from = typeof opt === 'object' ? opt?.from : undefined;
+    const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate : true, root : value };
+    const res = validator( value, '', ctx );
+
+    if( ctx.success && ( res === value || commitContainer( value, res ))){ return }
+
+    // Root was replaced (e.g. primitive coerce) — binding unchanged; report a normal type failure.
+    if( ctx.success && res !== value )
+    {
+        ctx.success = true;
+        ctx.errors.length = 0;
+        ctx.from = undefined;
+        validator( value, '', ctx );
+
+        if( ctx.success )
         {
-            if( res === value || commitContainer( value, res ))
-            {
-                return { success : true, errors : [], data : value };
-            }
+            report( ctx, '', 'RootNotRewritable', value );
+        }
+    }
 
-            return { success : true, errors : [], data : res };
+    if( typeof opt === 'object' && opt?.errorFactory )
+    {
+        throw opt.errorFactory( ctx.errors );
+    }
+    throw new Error( 'Validation Error: ' + ctx.errors.map( e => e.path ? `${e.path}: ${e.error}` : e.error ).join( ', ' ));
+}
+
+export function validate( validator: Function, value: any, options?: ValidationMode | ValidationOptions ): { success : boolean, errors : IValidationError[], data? : any }
+{
+    const opt = options;
+    const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
+    const from = typeof opt === 'object' ? opt?.from : undefined;
+    const mutate = typeof opt === 'object' ? opt?.mutate === true : false;
+    const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate, root : value };
+    const res = validator( value, '', ctx );
+
+    if( !ctx.success ){ return { success : false, errors : ctx.errors } }
+
+    if( mutate )
+    {
+        if( res === value || commitContainer( value, res ))
+        {
+            return { success : true, errors : [], data : value };
         }
 
         return { success : true, errors : [], data : res };
     }
+
+    return { success : true, errors : [], data : res };
 }
 
 export function groupErrorsByPath( errors: IValidationError[]): Record<string, { value : any, errors : string[] }> 
@@ -2320,8 +2278,6 @@ export function groupErrorsByPath( errors: IValidationError[]): Record<string, {
 
     return grouped;
 }
-
-export const MetadataStore = new MetadataStoreClass();
 
 const UNSUPPORTED_SCHEMA_KEYWORDS =
 [
@@ -2813,5 +2769,3 @@ export class ZodLikeError extends Error
     }
 }
 
-( globalThis as any ).__WEBERGENCY_TYPECHECKER_METADATA_STORE__ = MetadataStore;
-( globalThis as any ).__WEBERGENCY_TYPECHECKER_VALIDATORS__ = validators;

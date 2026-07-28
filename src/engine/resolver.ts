@@ -11,7 +11,6 @@ import {
     createIntersectionCheck,
     createTupleCheck,
     createRecordCheck,
-    templateToAst,
     createRegExpCheck,
     createTemplateLiteralCheck,
     createConstrainedPrimitiveCheck,
@@ -104,8 +103,7 @@ function isNativeEnumType( type: ts.Type ): boolean
 function buildEnumValidator(
     type: ts.Type,
     checker: ts.TypeChecker,
-    validatorsMap: Map<string, ts.Expression>,
-    requiredUtils: Set<string>
+    validatorsMap: Map<string, ts.Expression>
 ): ts.Expression
 {
     const symbol = type.getSymbol();
@@ -122,25 +120,25 @@ function buildEnumValidator(
             if( !declaration ){ return }
 
             const memberType = checker.getTypeOfSymbolAtLocation( member, declaration );
-            checks.push( buildValidator( memberType, checker, validatorsMap, requiredUtils ));
+            checks.push( buildValidator( memberType, checker, validatorsMap ));
         });
     }
 
     if( checks.length === 0 && type.isUnion())
     {
-        const unionChecks = ( type as ts.UnionType ).types.map( t => buildValidator( t, checker, validatorsMap, requiredUtils ));
+        const unionChecks = ( type as ts.UnionType ).types.map( t => buildValidator( t, checker, validatorsMap ));
 
-        return createUnionCheck( unionChecks, requiredUtils, `Type<${minifyTypeString( checker.typeToString( type ))}>` );
+        return createUnionCheck( unionChecks, `Type<${minifyTypeString( checker.typeToString( type ))}>` );
     }
 
     if( checks.length === 0 )
     {
-        return createPrimitiveCheck( 'any', requiredUtils );
+        return createPrimitiveCheck( 'any' );
     }
 
     if( checks.length === 1 ){ return checks[0] }
 
-    return createUnionCheck( checks, requiredUtils, `Type<${minifyTypeString( checker.typeToString( type ))}>` );
+    return createUnionCheck( checks, `Type<${minifyTypeString( checker.typeToString( type ))}>` );
 }
 
 function isConstraintOnlyType( type: ts.Type, checker: ts.TypeChecker ): boolean
@@ -154,7 +152,6 @@ function tryMergeObjectIntersection(
     types: readonly ts.Type[],
     checker: ts.TypeChecker,
     validatorsMap: Map<string, ts.Expression>,
-    requiredUtils: Set<string>,
     expected: string
 ): ts.Expression | undefined
 {
@@ -182,7 +179,7 @@ function tryMergeObjectIntersection(
 
         if( stringIndexInfo ) 
         {
-            indexValidator = buildValidator( stringIndexInfo.type, checker, validatorsMap, requiredUtils );
+            indexValidator = buildValidator( stringIndexInfo.type, checker, validatorsMap );
         }
 
         for( const prop of checker.getPropertiesOfType( t )) 
@@ -197,19 +194,18 @@ function tryMergeObjectIntersection(
             propMap.set( name, {
                 name,
                 isOptional : ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0,
-                validator  : buildValidator( propType, checker, validatorsMap, requiredUtils )
+                validator  : buildValidator( propType, checker, validatorsMap )
             });
         }
     }
 
-    return createObjectCheck([ ...propMap.values() ], requiredUtils, expected, indexValidator );
+    return createObjectCheck([ ...propMap.values() ], expected, indexValidator );
 }
 
 export function buildValidator(
     type: ts.Type,
     checker: ts.TypeChecker,
     validatorsMap: Map<string, ts.Expression>,
-    requiredUtils: Set<string>,
     hash?: string
 ): ts.Expression 
 {
@@ -231,8 +227,8 @@ export function buildValidator(
 
     if( isUnion ) 
     {
-        const checks = ( type as ts.UnionType ).types.map( t => buildValidator( t, checker, validatorsMap, requiredUtils ));
-        result = createUnionCheck( checks, requiredUtils, `Type<${minifyTypeString( checker.typeToString( type ))}>` );
+        const checks = ( type as ts.UnionType ).types.map( t => buildValidator( t, checker, validatorsMap ));
+        result = createUnionCheck( checks, `Type<${minifyTypeString( checker.typeToString( type ))}>` );
     }
     else if( isIntersection ) 
     {
@@ -319,7 +315,6 @@ export function buildValidator(
                     else if( pName === '__transform_custom' ) 
                     {
                         let fnName: string | undefined;
-                        let filePath: string | undefined;
                         const symbol = actualType.getSymbol() || actualType.aliasSymbol || pType.getSymbol() || pType.aliasSymbol;
 
                         if( symbol ) 
@@ -341,13 +336,6 @@ export function buildValidator(
                                     }
                                     current = current.parent;
                                 }
-                            }
-
-                            if( dec ) 
-                            {
-                                const sourceFile = dec.getSourceFile();
-
-                                if( sourceFile ) { filePath = sourceFile.fileName }
                             }
                         }
                         else 
@@ -363,16 +351,11 @@ export function buildValidator(
                             throw new Error( '[Webergency] Custom transform must reference a named function via typeof (e.g. transform.Custom<typeof myFunc>).' );
                         }
 
-                        if( filePath ) 
-                        {
-                            requiredUtils.add( `custom:${fnName}:${filePath}` );
-                        }
                         constraints.push({ type : 'transform_custom', value : fnName });
                     }
                     else if( pName === '__custom' ) 
                     {
                         let fnName: string | undefined;
-                        let filePath: string | undefined;
                         const symbol = actualType.getSymbol() || actualType.aliasSymbol || pType.getSymbol() || pType.aliasSymbol;
 
                         if( symbol ) 
@@ -395,13 +378,6 @@ export function buildValidator(
                                     current = current.parent;
                                 }
                             }
-
-                            if( dec ) 
-                            {
-                                const sourceFile = dec.getSourceFile();
-
-                                if( sourceFile ) { filePath = sourceFile.fileName }
-                            }
                         }
                         else 
                         {
@@ -416,10 +392,6 @@ export function buildValidator(
                             throw new Error( '[Webergency] Custom validator must reference a named function via typeof (e.g. constraint.Custom<typeof myFunc>).' );
                         }
 
-                        if( filePath ) 
-                        {
-                            requiredUtils.add( `custom:${fnName}:${filePath}` );
-                        }
                         const msgProp = props.find( p => p.getName() === `${pName}_message` );
                         let constraintMsg: string | undefined;
 
@@ -496,17 +468,17 @@ export function buildValidator(
             {
                 if( baseName === 'array' && baseType ) 
                 {
-                    const baseValidator = buildValidator( baseType, checker, validatorsMap, requiredUtils );
-                    result = createConstrainedPrimitiveCheck( baseName, constraints, requiredUtils, baseValidator );
+                    const baseValidator = buildValidator( baseType, checker, validatorsMap );
+                    result = createConstrainedPrimitiveCheck( baseName, constraints, baseValidator );
                 }
                 else if( baseType && ( baseType.getFlags() & ts.TypeFlags.TemplateLiteral )) 
                 {
-                    const baseValidator = buildValidator( baseType, checker, validatorsMap, requiredUtils );
-                    result = createConstrainedPrimitiveCheck( baseName, constraints, requiredUtils, baseValidator );
+                    const baseValidator = buildValidator( baseType, checker, validatorsMap );
+                    result = createConstrainedPrimitiveCheck( baseName, constraints, baseValidator );
                 }
                 else 
                 {
-                    result = createConstrainedPrimitiveCheck( baseName, constraints, requiredUtils );
+                    result = createConstrainedPrimitiveCheck( baseName, constraints );
                 }
             }
             else 
@@ -522,7 +494,7 @@ export function buildValidator(
 
                 if( nonConstraintTypes.length === 1 ) 
                 {
-                    baseValidator = buildValidator( nonConstraintTypes[0], checker, validatorsMap, requiredUtils );
+                    baseValidator = buildValidator( nonConstraintTypes[0], checker, validatorsMap );
                 }
                 else if( nonConstraintTypes.length > 1 ) 
                 {
@@ -530,18 +502,16 @@ export function buildValidator(
                         nonConstraintTypes,
                         checker,
                         validatorsMap,
-                        requiredUtils,
                         minifyTypeString( checker.typeToString( type ))
                     );
                     baseValidator = merged || createIntersectionCheck(
-                        nonConstraintTypes.map( t => buildValidator( t, checker, validatorsMap, requiredUtils )),
-                        requiredUtils
+                        nonConstraintTypes.map( t => buildValidator( t, checker, validatorsMap ))
                     );
                 }
 
                 if( baseValidator ) 
                 {
-                    result = createConstrainedPrimitiveCheck( 'any', constraints, requiredUtils, baseValidator );
+                    result = createConstrainedPrimitiveCheck( 'any', constraints, baseValidator );
                 }
                 else 
                 {
@@ -549,12 +519,10 @@ export function buildValidator(
                         types,
                         checker,
                         validatorsMap,
-                        requiredUtils,
                         minifyTypeString( checker.typeToString( type ))
                     );
                     result = merged || createIntersectionCheck(
-                        ( type as ts.IntersectionType ).types.map( t => buildValidator( t, checker, validatorsMap, requiredUtils )),
-                        requiredUtils
+                        ( type as ts.IntersectionType ).types.map( t => buildValidator( t, checker, validatorsMap ))
                     );
                 }
             }
@@ -565,7 +533,6 @@ export function buildValidator(
                 types,
                 checker,
                 validatorsMap,
-                requiredUtils,
                 minifyTypeString( checker.typeToString( type ))
             );
 
@@ -575,76 +542,75 @@ export function buildValidator(
             }
             else 
             {
-                const checks = ( type as ts.IntersectionType ).types.map( t => buildValidator( t, checker, validatorsMap, requiredUtils ));
-                result = createIntersectionCheck( checks, requiredUtils );
+                const checks = ( type as ts.IntersectionType ).types.map( t => buildValidator( t, checker, validatorsMap ));
+                result = createIntersectionCheck( checks );
             }
         }
     }
     else if( type.getSymbol()?.name === 'Date' ) 
     {
-        result = createDateCheck( requiredUtils );
+        result = createDateCheck( );
     }
     else if( type.getSymbol()?.name === 'RegExp' ) 
     {
-        result = createRegExpCheck( requiredUtils );
+        result = createRegExpCheck( );
     }
     else if( type.getSymbol()?.name === 'Set' ) 
     {
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
-        result = createSetCheck( buildValidator( elementType, checker, validatorsMap, requiredUtils ), requiredUtils );
+        result = createSetCheck( buildValidator( elementType, checker, validatorsMap ) );
     }
     else if( type.getSymbol()?.name === 'Map' ) 
     {
         const keyType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
         const valueType = ( type as ts.TypeReference ).typeArguments?.[1] || checker.getAnyType();
         result = createMapCheck(
-            buildValidator( keyType, checker, validatorsMap, requiredUtils ),
-            buildValidator( valueType, checker, validatorsMap, requiredUtils ),
-            requiredUtils
+            buildValidator( keyType, checker, validatorsMap ),
+            buildValidator( valueType, checker, validatorsMap )
         );
     }
     else if( type.getSymbol()?.name === 'Promise' ) 
     {
-        result = createInstanceOfCheck( 'Promise', requiredUtils );
+        result = createInstanceOfCheck( 'Promise' );
     }
     else if( type.getSymbol()?.name && [
         'Uint8Array', 'Uint16Array', 'Uint32Array', 'Int8Array', 'Int16Array', 'Int32Array',
         'Float32Array', 'Float64Array', 'ArrayBuffer', 'SharedArrayBuffer', 'DataView', 'Buffer'
     ].includes( type.getSymbol()!.name )) 
     {
-        result = createInstanceOfCheck( type.getSymbol()!.name, requiredUtils );
+        result = createInstanceOfCheck( type.getSymbol()!.name );
     }
     else if( flags & ts.TypeFlags.Null ) 
     {
-        result = createNullCheck( requiredUtils );
+        result = createNullCheck( );
     }
     else if( flags & ts.TypeFlags.Undefined || flags & ts.TypeFlags.Void ) 
     {
-        result = createUndefinedCheck( requiredUtils );
+        result = createUndefinedCheck( );
     }
     else if( flags & ts.TypeFlags.String ) 
     {
-        result = createPrimitiveCheck( 'string', requiredUtils );
+        result = createPrimitiveCheck( 'string' );
     }
     else if( flags & ts.TypeFlags.Number ) 
     {
-        result = createPrimitiveCheck( 'number', requiredUtils );
+        result = createPrimitiveCheck( 'number' );
     }
     else if( flags & ts.TypeFlags.BigInt ) 
     {
-        result = createPrimitiveCheck( 'bigint', requiredUtils );
+        result = createPrimitiveCheck( 'bigint' );
     }
     else if( flags & ts.TypeFlags.Boolean ) 
     {
-        result = createPrimitiveCheck( 'boolean', requiredUtils );
+        result = createPrimitiveCheck( 'boolean' );
     }
     else if( flags & ts.TypeFlags.Never ) 
     {
-        result = createPrimitiveCheck( 'never', requiredUtils );
+        result = createPrimitiveCheck( 'never' );
     }
     else if( flags & ts.TypeFlags.ESSymbol || flags & ts.TypeFlags.UniqueESSymbol || ( type as any ).intrinsicName === 'symbol' ) 
     {
-        result = createPrimitiveCheck( 'symbol', requiredUtils );
+        result = createPrimitiveCheck( 'symbol' );
     }
     else if( flags & ts.TypeFlags.TemplateLiteral ) 
     {
@@ -668,41 +634,41 @@ export function buildValidator(
             }
         }
         regexStr += '$';
-        result = createTemplateLiteralCheck( regexStr, checker.typeToString( type ), requiredUtils );
+        result = createTemplateLiteralCheck( regexStr, checker.typeToString( type ) );
     }
     else if( type.isStringLiteral()) 
     {
-        result = createLiteralCheck( type.value, requiredUtils );
+        result = createLiteralCheck( type.value );
     }
     else if( type.isNumberLiteral()) 
     {
-        result = createLiteralCheck( type.value, requiredUtils );
+        result = createLiteralCheck( type.value );
     }
     else if( flags & ts.TypeFlags.BooleanLiteral ) 
     {
-        result = createLiteralCheck(( type as any ).intrinsicName === 'true', requiredUtils );
+        result = createLiteralCheck(( type as any ).intrinsicName === 'true' );
     }
     else if( flags & ts.TypeFlags.BigIntLiteral ) 
     {
-        result = createLiteralCheck(( type as ts.BigIntLiteralType ).value, requiredUtils );
+        result = createLiteralCheck(( type as ts.BigIntLiteralType ).value );
     }
     else if( checker.isTupleType( type )) 
     {
         const typeArgs = ( type as ts.TupleTypeReference ).typeArguments || [];
-        result = createTupleCheck( typeArgs.map( t => buildValidator( t, checker, validatorsMap, requiredUtils )), requiredUtils );
+        result = createTupleCheck( typeArgs.map( t => buildValidator( t, checker, validatorsMap )) );
     }
     else if( checker.isArrayType( type )) 
     {
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
-        result = createArrayCheck( buildValidator( elementType, checker, validatorsMap, requiredUtils ), requiredUtils );
+        result = createArrayCheck( buildValidator( elementType, checker, validatorsMap ) );
     }
     else if( type.getCallSignatures().length > 0 && type.getConstructSignatures().length === 0 ) 
     {
-        result = createPrimitiveCheck( 'function', requiredUtils );
+        result = createPrimitiveCheck( 'function' );
     }
     else if( isNativeEnumType( type )) 
     {
-        result = buildEnumValidator( type, checker, validatorsMap, requiredUtils );
+        result = buildEnumValidator( type, checker, validatorsMap );
     }
     else 
     {
@@ -715,25 +681,25 @@ export function buildValidator(
             return {
                 name       : prop.getName(),
                 isOptional : ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0,
-                validator  : buildValidator( propType, checker, validatorsMap, requiredUtils )
+                validator  : buildValidator( propType, checker, validatorsMap )
             };
         });
 
         if( stringIndexInfo && props.length === 0 ) 
         {
-            result = createRecordCheck( buildValidator( stringIndexInfo.type, checker, validatorsMap, requiredUtils ), requiredUtils );
+            result = createRecordCheck( buildValidator( stringIndexInfo.type, checker, validatorsMap ) );
         }
         else if( flags & ts.TypeFlags.Object || type.isClassOrInterface() || type.isTypeParameter() || stringIndexInfo ) 
         {
             const typeName = checker.typeToString( type );
             const indexValidator = stringIndexInfo
-                ? buildValidator( stringIndexInfo.type, checker, validatorsMap, requiredUtils )
+                ? buildValidator( stringIndexInfo.type, checker, validatorsMap )
                 : undefined;
-            result = createObjectCheck( props, requiredUtils, typeName, indexValidator );
+            result = createObjectCheck( props, typeName, indexValidator );
         }
         else 
         {
-            result = createPrimitiveCheck( 'any', requiredUtils );
+            result = createPrimitiveCheck( 'any' );
         }
     }
 

@@ -11,18 +11,23 @@ import {
     assertGuardSchema
 } from '../index.js';
 
-describe( 'Runtime stubs without transformer', () => 
+describe( 'Runtime stubs without transformer', () =>
 {
-    it( 'throws a clear error when AOT rewrite did not run', () => 
+    it( 'throws a clear error when AOT rewrite did not run for typed helpers', () =>
     {
         expect(() => validate( 1 )).toThrow( /transformer was not applied/ );
         expect(() => is( 1 )).toThrow( /transformer was not applied/ );
         expect(() => assert( 1 )).toThrow( /transformer was not applied/ );
         expect(() => assertGuard( 1 )).toThrow( /transformer was not applied/ );
         expect(() => jsonSchema()).toThrow( /transformer was not applied/ );
-        expect(() => validateSchema({ type : 'string' }, 1 )).toThrow( /transformer was not applied/ );
-        expect(() => isSchema({ type : 'string' }, 1 )).toThrow( /transformer was not applied/ );
-        expect(() => assertSchema({ type : 'string' }, 1 )).toThrow( /transformer was not applied/ );
-        expect(() => assertGuardSchema({ type : 'string' }, 1 )).toThrow( /transformer was not applied/ );
+    });
+
+    it( 'runs schema helpers without the transformer', () =>
+    {
+        expect( isSchema({ type : 'string' }, 'ok' )).toBe( true );
+        expect( isSchema({ type : 'string' }, 1 )).toBe( false );
+        expect( assertSchema({ type : 'number' }, 42 )).toBe( 42 );
+        expect( validateSchema({ type : 'boolean' }, true )).toEqual({ success : true, errors : [], data : true });
+        expect(() => assertGuardSchema({ type : 'string' }, 1 )).toThrow( /Validation Error/ );
     });
 });

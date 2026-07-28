@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { convertPropertyCasing, ConvertPropertyCasing } from '../runtime/casing.js';
+import { convertPropertyCasing } from '../runtime/casing.js';
 
 describe( 'Casing Conversion Utilities', () => 
 {

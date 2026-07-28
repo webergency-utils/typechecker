@@ -46,7 +46,7 @@ describe( 'Transformer Call Expression Replacements', () =>
             const res = validate<number>(x, 'relaxed');
         `;
         const compiled = compileAndTransform( code );
-        expect( compiled ).toContain( 'MetadataStore.validate(' );
+        expect( compiled ).toContain( '__tcRuntime.validate(' );
         expect( compiled ).toContain( "'relaxed'" );
     });
 
@@ -58,13 +58,13 @@ describe( 'Transformer Call Expression Replacements', () =>
             const res = validate<number>(x, { mode: 'relaxed', from: 'query', mutate: true });
         `;
         const compiled = compileAndTransform( code );
-        expect( compiled ).toContain( 'MetadataStore.validate(' );
+        expect( compiled ).toContain( '__tcRuntime.validate(' );
         expect( compiled ).toContain( "mode: 'relaxed'" );
         expect( compiled ).toContain( "from: 'query'" );
         expect( compiled ).toContain( 'mutate: true' );
     });
 
-    it( 'should transform aliased helper imports', () =>
+    it( 'should transform aliased typed helpers and leave schema helpers alone', () =>
     {
         const code = `
             import { validate as check, validateSchema as checkSchema } from '../index.js';
@@ -73,13 +73,15 @@ describe( 'Transformer Call Expression Replacements', () =>
         `;
         const compiled = compileAndTransform( code );
 
-        expect( compiled ).toContain( 'MetadataStore.getValidator(' );
-        expect( compiled ).toContain( 'MetadataStore.getOrCompileSchema(' );
+        expect( compiled ).toContain( '__tcRuntime.validate(' );
+        expect( compiled ).toContain( '__val_' );
+        expect( compiled ).toContain( 'checkSchema(' );
         expect( compiled ).not.toContain( 'check<number>' );
-        expect( compiled ).not.toContain( 'checkSchema(' );
+        expect( compiled ).not.toContain( 'getOrCompileSchema(' );
+        expect( compiled ).not.toContain( 'MetadataStore' );
     });
 
-    it( 'should transform namespace helper imports', () =>
+    it( 'should transform namespace typed helpers and leave schema helpers alone', () =>
     {
         const code = `
             import * as typechecker from '../index.js';
@@ -88,10 +90,12 @@ describe( 'Transformer Call Expression Replacements', () =>
         `;
         const compiled = compileAndTransform( code );
 
-        expect( compiled ).toContain( 'MetadataStore.getValidator(' );
-        expect( compiled ).toContain( 'MetadataStore.getOrCompileSchema(' );
+        expect( compiled ).toContain( '__tcRuntime.validate(' );
+        expect( compiled ).toContain( '__val_' );
+        expect( compiled ).toContain( 'typechecker.validateSchema(' );
         expect( compiled ).not.toContain( 'typechecker.validate<number>' );
-        expect( compiled ).not.toContain( 'typechecker.validateSchema(' );
+        expect( compiled ).not.toContain( 'getOrCompileSchema(' );
+        expect( compiled ).not.toContain( 'MetadataStore' );
     });
 
     it( 'should not transform helpers imported from unrelated modules', () =>
@@ -209,9 +213,10 @@ describe( 'Transformer Call Expression Replacements', () =>
             const schema = jsonSchema<Account>();
         `;
         const compiled = compileAndTransform( code );
-        expect( compiled ).toContain( 'MetadataStore.registerSchema' );
-        expect( compiled ).toContain( 'MetadataStore.getSchema' );
-        expect( compiled ).not.toContain( 'MetadataStore.registerValidator' );
+        expect( compiled ).toContain( 'const __schema_' );
+        expect( compiled ).toContain( '__schema_' );
+        expect( compiled ).not.toContain( '__val_' );
+        expect( compiled ).not.toContain( 'MetadataStore' );
         expect( compiled ).toContain( '"type": "object"' );
         expect( compiled ).toContain( '"email"' );
         expect( compiled ).toContain( '"age"' );
@@ -220,7 +225,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).toContain( '"type": "boolean"' );
     });
 
-    it( 'should register validators without schemas for validate helpers', () =>
+    it( 'should hoist validators without schemas for validate helpers', () =>
     {
         const code = `
             import { validate } from '../index.js';
@@ -228,9 +233,11 @@ describe( 'Transformer Call Expression Replacements', () =>
             const res = validate<Row>({ id: 1, name: 'a' });
         `;
         const compiled = compileAndTransform( code );
-        expect( compiled ).toContain( 'MetadataStore.registerValidator' );
-        expect( compiled ).toContain( 'MetadataStore.getValidator' );
-        expect( compiled ).not.toContain( 'MetadataStore.registerSchema' );
+        expect( compiled ).toContain( '__val_' );
+        expect( compiled ).toContain( '__tcRuntime.validate(' );
+        expect( compiled ).not.toContain( '__schema_' );
+        expect( compiled ).not.toContain( 'MetadataStore' );
+        expect( compiled ).not.toContain( 'registerValidator' );
         expect( compiled ).toContain( 'new Set(' );
     });
 
@@ -284,7 +291,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).toContain( '"maxItems": 3' );
     });
 
-    it( 'should transform validateSchema and related schema entrypoints', () => 
+    it( 'should leave schema entrypoints untransformed', () =>
     {
         const code = `
             import { validateSchema, isSchema, assertSchema, assertGuardSchema } from './src/index.js';
@@ -302,12 +309,13 @@ describe( 'Transformer Call Expression Replacements', () =>
             assertGuardSchema(schema, { name: "Tom" });
         `;
         const compiled = compileAndTransform( code );
-        expect( compiled ).toContain( 'MetadataStore.getOrCompileSchema(schema)' );
-        expect( compiled ).toContain( 'MetadataStore.validate(' );
-        expect( compiled ).toContain( 'MetadataStore.is(' );
-        expect( compiled ).toContain( 'MetadataStore.assert(' );
-        expect( compiled ).toContain( 'MetadataStore.assertGuard(' );
-        expect( compiled.match( /getOrCompileSchema\(schema\)/g )?.length ).toBe( 4 );
+        expect( compiled ).toContain( 'validateSchema(schema,' );
+        expect( compiled ).toContain( 'isSchema(schema,' );
+        expect( compiled ).toContain( 'assertSchema(schema,' );
+        expect( compiled ).toContain( 'assertGuardSchema(schema,' );
+        expect( compiled ).not.toContain( 'getOrCompileSchema' );
+        expect( compiled ).not.toContain( '__tcRuntime' );
+        expect( compiled ).not.toContain( 'MetadataStore' );
     });
 
     it( 'should inline small repeating structures like Point while hoisting circular types', () => 
@@ -379,7 +387,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( new Set( mapHashes ).size ).toBe( 2 );
     });
 
-    it( 'should transform assertGuard to MetadataStore.assertGuard', () => 
+    it( 'should transform assertGuard to assertGuard', () => 
     {
         const code = `
             import { assertGuard } from '../index.js';
@@ -387,7 +395,7 @@ describe( 'Transformer Call Expression Replacements', () =>
             assertGuard<number>(x);
         `;
         const compiled = compileAndTransform( code );
-        expect( compiled ).toContain( 'MetadataStore.assertGuard(' );
+        expect( compiled ).toContain( '__tcRuntime.assertGuard(' );
     });
 
     it( 'should emit Date and Record json schemas matching runtime validators', () => 
@@ -489,11 +497,11 @@ describe( 'Transformer Call Expression Replacements', () =>
             const value = assert<string>('x');
         `;
         const compiled = compileAndTransform( code );
-        expect( compiled ).toContain( 'MetadataStore.is(' );
-        expect( compiled ).toContain( 'MetadataStore.assert(' );
+        expect( compiled ).toContain( '__tcRuntime.is(' );
+        expect( compiled ).toContain( '__tcRuntime.assert(' );
     });
 
-    it( 'should pass options through on validateSchema without treating them as the schema', () => 
+    it( 'should leave validateSchema options and calls untouched by the transformer', () =>
     {
         const code = `
             import { validateSchema } from '../index.js';
@@ -504,9 +512,10 @@ describe( 'Transformer Call Expression Replacements', () =>
             const c = validateSchema(schema, 'x', opts);
         `;
         const compiled = compileAndTransform( code );
-        expect( compiled ).toContain( 'getOrCompileSchema' );
-        expect( compiled.match( /getOrCompileSchema\(/g )?.length ).toBeGreaterThanOrEqual( 3 );
-        expect( compiled ).not.toContain( 'getValidator' );
+        expect( compiled ).toContain( 'validateSchema(' );
+        expect( compiled ).not.toContain( 'getOrCompileSchema' );
+        expect( compiled ).not.toContain( '__tcRuntime' );
+        expect( compiled ).not.toContain( 'MetadataStore' );
     });
 
     it( 'should transform enums never symbol template literals and bigint literals', () => 
@@ -554,12 +563,186 @@ describe( 'Transformer Call Expression Replacements', () =>
         const compiled = compileAndTransform( code );
 
         expect( compiled ).toMatch( /validators\.(minItems|maxItems|uniqueItems)/ );
-        expect( compiled ).toContain( 'MetadataStore.registerValidator' );
-        expect( compiled ).toContain( 'MetadataStore.registerSchema' );
+        expect( compiled ).toContain( '__val_' );
+        expect( compiled ).toContain( '__schema_' );
         expect( compiled ).toContain( '"requires": ".password"' );
         expect( compiled ).toContain( '"minItems": 1' );
         expect( compiled ).toContain( '"maxItems": 3' );
         expect( compiled ).toContain( '"uniqueItems": true' );
+    });
+
+    function compileAndEmit( sourceCode: string, module: ts.ModuleKind ): string
+    {
+        const tempFile = path.resolve( './temp_emit_file.ts' );
+        fs.writeFileSync( tempFile, sourceCode );
+
+        try
+        {
+            const program = ts.createProgram([tempFile], {
+                target       : ts.ScriptTarget.ES2022,
+                module,
+                skipLibCheck : true
+            });
+            const sourceFile = program.getSourceFile( tempFile );
+
+            if( !sourceFile ){ throw new Error( 'Could not load source file' ) }
+
+            let emitted = '';
+
+            program.emit( sourceFile, ( fileName, text ) =>
+            {
+                if( fileName.endsWith( '.js' )){ emitted = text }
+            }, undefined, false, { before : [transformer( program )] });
+
+            return emitted;
+        }
+        finally
+        {
+            if( fs.existsSync( tempFile )){ fs.unlinkSync( tempFile ) }
+        }
+    }
+
+    function topLevelBindings( compiled: string ): string[]
+    {
+        const file = ts.createSourceFile( 'out.ts', compiled, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS );
+        const names: string[] = [];
+
+        for( const statement of file.statements )
+        {
+            if( ts.isVariableStatement( statement ))
+            {
+                for( const decl of statement.declarationList.declarations )
+                {
+                    if( ts.isIdentifier( decl.name )){ names.push( decl.name.text ) }
+                }
+            }
+            else if(( ts.isFunctionDeclaration( statement ) || ts.isClassDeclaration( statement )) && statement.name )
+            {
+                names.push( statement.name.text );
+            }
+            else if( ts.isImportDeclaration( statement ))
+            {
+                const bindings = statement.importClause?.namedBindings;
+
+                if( bindings && ts.isNamespaceImport( bindings )){ names.push( bindings.name.text ) }
+
+                if( bindings && ts.isNamedImports( bindings ))
+                {
+                    for( const element of bindings.elements ){ names.push( element.name.text ) }
+                }
+            }
+        }
+
+        return names;
+    }
+
+    it( 'should not redeclare a validators name already bound by user code', () =>
+    {
+        const code = `
+            import { validate } from '../index.js';
+            function validators() { return 1; }
+            const r = validate<number>(1);
+        `;
+        const compiled = compileAndTransform( code );
+        const names = topLevelBindings( compiled );
+
+        expect( new Set( names ).size ).toBe( names.length );
+        expect( compiled ).toContain( 'function validators()' );
+        expect( compiled ).toMatch( /const validators_1 = __tcRuntime\.validators/ );
+        expect( compiled ).toMatch( /const __val_[a-f0-9]+ = validators_1\./ );
+    });
+
+    it( 'should not redeclare a validators name imported from another module', () =>
+    {
+        const code = `
+            import { validate } from '../index.js';
+            import { validators } from 'unrelated-validator';
+            const r = validate<number>(1);
+        `;
+        const compiled = compileAndTransform( code );
+        const names = topLevelBindings( compiled );
+
+        expect( new Set( names ).size ).toBe( names.length );
+        expect( compiled ).toContain( "import { validators } from 'unrelated-validator'" );
+        expect( compiled ).toMatch( /const validators_1 = __tcRuntime\.validators/ );
+    });
+
+    it( 'should not collide with a user declared runtime namespace name', () =>
+    {
+        const code = `
+            import { validate } from '../index.js';
+            const __tcRuntime = { nope: true };
+            const r = validate<number>(1);
+        `;
+        const compiled = compileAndTransform( code );
+        const names = topLevelBindings( compiled );
+
+        expect( new Set( names ).size ).toBe( names.length );
+        expect( compiled ).toContain( 'import * as __tcRuntime_1 from "@webergency-utils/typechecker/runtime"' );
+        expect( compiled ).toContain( '__tcRuntime_1.validate(' );
+        expect( compiled ).toContain( 'const __tcRuntime = { nope: true }' );
+    });
+
+    it( 'should not let a nested binding shadow the runtime namespace', () =>
+    {
+        const code = `
+            import { validate } from '../index.js';
+            export function f() {
+                const __tcRuntime = { fake: true };
+                return validate<number>(1);
+            }
+        `;
+        const compiled = compileAndTransform( code );
+
+        expect( compiled ).toContain( 'import * as __tcRuntime_1 from "@webergency-utils/typechecker/runtime"' );
+        expect( compiled ).toContain( '__tcRuntime_1.validate(' );
+        expect( compiled ).toContain( 'const __tcRuntime = { fake: true }' );
+    });
+
+    it( 'should not let a parameter shadow the runtime namespace', () =>
+    {
+        const code = `
+            import { validate } from '../index.js';
+            export function h(__tcRuntime: any) {
+                return validate<number>(1);
+            }
+        `;
+        const compiled = compileAndTransform( code );
+
+        expect( compiled ).toContain( 'import * as __tcRuntime_1 from "@webergency-utils/typechecker/runtime"' );
+        expect( compiled ).toContain( '__tcRuntime_1.validate(' );
+    });
+
+    it( 'should emit a self-contained runtime import that survives CommonJS emit', () =>
+    {
+        const code = `
+            import * as rt from '@webergency-utils/typechecker/runtime';
+            import { validate } from '../index.js';
+            export const r = validate<number>(1);
+        `;
+        const emitted = compileAndEmit( code, ts.ModuleKind.CommonJS );
+
+        // The user import is elided once calls become synthesized nodes, so the emit must not rely on it.
+        expect( emitted ).toContain( 'require("@webergency-utils/typechecker/runtime")' );
+        expect( emitted ).toMatch( /const __tcRuntime = .*require\("@webergency-utils\/typechecker\/runtime"\)/ );
+        expect( emitted ).toContain( '__tcRuntime.validate(' );
+        expect( emitted ).not.toMatch( /=\s*rt\.validators/ );
+    });
+
+    it( 'should reuse one local validator for duplicate typed calls', () =>
+    {
+        const code = `
+            import { validate, is } from '../index.js';
+            const a = validate<number>(1);
+            const b = is<number>(2);
+        `;
+        const compiled = compileAndTransform( code );
+        const vals = compiled.match( /const __val_[a-f0-9]+ =/g ) || [];
+        expect( vals.length ).toBe( 1 );
+        expect( compiled ).toContain( '__tcRuntime.validate(' );
+        expect( compiled ).toContain( '__tcRuntime.is(' );
+        expect( compiled ).not.toContain( 'registerValidator' );
+        expect( compiled ).not.toContain( 'getValidator' );
     });
 });
 

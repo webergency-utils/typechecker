@@ -1,4 +1,11 @@
 import { ResolveDefaults } from './runtime/tags.js';
+import {
+    getOrCompileSchema,
+    is as runIs,
+    assert as runAssert,
+    assertGuard as runAssertGuard,
+    validate as runValidate
+} from './runtime/validators.js';
 import type {
     IValidationError,
     ValidationMode,
@@ -46,29 +53,52 @@ export function jsonSchema<T>(): any
 }
 
 /** Schema type-predicate. Mutates in place; root-level coercion that replaces the value fails. */
-export function isSchema( _schema: any, _input: unknown, _options?: ValidationMode | GuardOptions ): boolean
+export function isSchema( schema: any, input: unknown, options?: ValidationMode | GuardOptions ): boolean
 {
-    throw new Error( TRANSFORMER_MISSING );
+    return runIs( getOrCompileSchema( schema ), input, options );
 }
 
 /** Validates `input` against a JSON Schema value and returns the (possibly coerced) data. */
-export function assertSchema<T = any>( _schema: any, _input: unknown, _options?: ValidationMode | AssertOptions ): T
+export function assertSchema<T = any>( schema: any, input: unknown, options?: ValidationMode | AssertOptions ): T
 {
-    throw new Error( TRANSFORMER_MISSING );
+    return runAssert( getOrCompileSchema( schema ), input, options );
 }
 
 /** Schema assertion guard. Mutates in place; root-level coercion that replaces the value throws. */
-export function assertGuardSchema( _schema: any, _input: unknown, _options?: ValidationMode | AssertGuardOptions ): void
+export function assertGuardSchema( schema: any, input: unknown, options?: ValidationMode | AssertGuardOptions ): void
 {
-    throw new Error( TRANSFORMER_MISSING );
+    runAssertGuard( getOrCompileSchema( schema ), input, options );
 }
 
 /** Validates `input` against a JSON Schema value. */
-export function validateSchema<T = any>( _schema: any, _input: unknown, _options?: ValidationMode | ValidationOptions ): IValidation<T>
+export function validateSchema<T = any>( schema: any, input: unknown, options?: ValidationMode | ValidationOptions ): IValidation<T>
 {
-    throw new Error( TRANSFORMER_MISSING );
+    return runValidate( getOrCompileSchema( schema ), input, options );
 }
 
-export * from './runtime/validators.js';
+export {
+    getOrCompileSchema,
+    compileSchema,
+    validators,
+    coerceQueryNumber,
+    coerceQueryBoolean,
+    coerceQueryDate,
+    coerceJsonDate,
+    groupErrorsByPath,
+    toZodIssues,
+    ZodLikeError
+} from './runtime/validators.js';
+export type {
+    IValidationError,
+    ValidationMode,
+    GuardOptions,
+    AssertGuardOptions,
+    ValidationOptions,
+    AssertOptions,
+    ValidationContext,
+    FromCoercionContext,
+    CoercionKind,
+    PathContext
+} from './runtime/validators.js';
 export * from './runtime/tags.js';
 export * from './runtime/casing.js';

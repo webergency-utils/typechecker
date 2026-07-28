@@ -170,7 +170,7 @@ function formatCasing( str: string, casing: CasingFormat, options: ConvertCasing
     else if( casing === 'dot.case' ){ formatted = normalized.replace( /_/g, '.' ) }
     else
     {
-        const camel = normalized.replace( /_([a-z0-9])/g, ( match, p1 ) => p1.toUpperCase());
+        const camel = normalized.replace( /_([a-z0-9])/g, ( _match, p1 ) => p1.toUpperCase());
 
         if( casing === 'camelCase' ){ formatted = camel }
         else if( casing === 'camelCaseID' ){ formatted = camel.replace( /Id$/, 'ID' ) }

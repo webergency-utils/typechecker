@@ -1,4 +1,4 @@
-import { MetadataStore, validators } from '../dist/runtime/validators.js';
+import { validators, getOrCompileSchema, is, validate } from '../dist/runtime/validators.js';
 
 function objectSize( value )
 {
@@ -66,7 +66,7 @@ function bench( label, iterations, fn, sample )
 
 const wideKeys = Array.from({ length : 40 }, ( _, i ) => `k${i}` );
 const wideObject = Object.fromEntries( wideKeys.map(( key, i ) => [key, i]));
-const wideValidator = MetadataStore.getOrCompileSchema({
+const wideValidator = getOrCompileSchema({
     type                 : 'object',
     properties           : Object.fromEntries( wideKeys.map( key => [key, { type : 'number' }])),
     required             : wideKeys,
@@ -77,7 +77,7 @@ const nested = {
     a : { b : { c : { d : 1, e : 'x' } } },
     list : Array.from({ length : 20 }, ( _, i ) => ({ id : i, ok : true }))
 };
-const nestedValidator = MetadataStore.getOrCompileSchema({
+const nestedValidator = getOrCompileSchema({
     type       : 'object',
     properties :
     {
@@ -134,18 +134,18 @@ let nestedIdx = 0;
 
 bench( 'wide object is() [reuse input]', 5000, () =>
 {
-    MetadataStore.is( wideValidator, wideObject );
+    is( wideValidator, wideObject );
 }, wideObject );
 
 bench( 'nested validate() copy-out [no mutate]', 3000, () =>
 {
-    MetadataStore.validate( nestedValidator, nested );
+    validate( nestedValidator, nested );
 }, nested );
 
 bench( 'nested mutate:true validate() [pooled clone]', 3000, () =>
 {
     const input = nestedPool[nestedIdx++ % nestedPool.length];
-    MetadataStore.validate( nestedValidator, input, { mutate : true });
+    validate( nestedValidator, input, { mutate : true });
 }, nested );
 
 {

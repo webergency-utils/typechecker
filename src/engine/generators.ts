@@ -1,16 +1,5 @@
 import * as ts from 'typescript';
 
-export interface IValidationRegistry {
-    validators : Map<string, ts.Expression>
-}
-
-export function createRegistry(): IValidationRegistry 
-{
-    return {
-        validators : new Map()
-    };
-}
-
 export function templateToAst( template: string ): ts.Expression 
 {
     const asExpression = ts.createSourceFile(
@@ -83,20 +72,16 @@ export function injectNodes( expr: ts.Expression, replacements: Record<string, t
     return stripPositions( result.transformed[0] as ts.Expression );
 }
 
-export function createPrimitiveCheck( type: string, requiredUtils: Set<string> ): ts.Expression 
+export function createPrimitiveCheck( type: string ): ts.Expression 
 {
-    requiredUtils.add( 'validators' );
-
     return ts.factory.createPropertyAccessExpression(
         ts.factory.createIdentifier( 'validators' ),
         ts.factory.createIdentifier( type )
     );
 }
 
-export function createConstrainedPrimitiveCheck( baseType: string, constraints: any[], requiredUtils: Set<string>, baseValidator?: ts.Expression ): ts.Expression 
+export function createConstrainedPrimitiveCheck( baseType: string, constraints: any[], baseValidator?: ts.Expression ): ts.Expression 
 {
-    requiredUtils.add( 'validators' );
-    
     const defaultConstraint = constraints.find( c => c.type === 'default' );
     const transformConstraints = constraints.filter( c => c.type === 'transform' || c.type === 'transform_custom' );
     const messageConstraint = constraints.find( c => c.type === 'message' );
@@ -225,9 +210,8 @@ export function createConstrainedPrimitiveCheck( baseType: string, constraints: 
     return injectNodes( templateToAst( tpl ), { '__BASE_CHECK__' : baseCheck });
 }
 
-export function createLiteralCheck( value: string | number | boolean | ts.PseudoBigInt, requiredUtils: Set<string> ): ts.Expression 
+export function createLiteralCheck( value: string | number | boolean | ts.PseudoBigInt ): ts.Expression 
 {
-    requiredUtils.add( 'validators' );
     
     return ts.factory.createArrowFunction(
         undefined,
@@ -255,26 +239,22 @@ export function createLiteralCheck( value: string | number | boolean | ts.Pseudo
     );
 }
 
-export function createArrayCheck( elementValidator: ts.Expression, requiredUtils: Set<string> ): ts.Expression 
+export function createArrayCheck( elementValidator: ts.Expression ): ts.Expression 
 {
-    requiredUtils.add( 'validators' );
     const tpl = '(v, path, ctx) => validators.array(v, path, ctx, __CHILD__)';
 
     return injectNodes( templateToAst( tpl ), { '__CHILD__' : elementValidator });
 }
 
-export function createTemplateLiteralCheck( regexStr: string, expected: string, requiredUtils: Set<string> ): ts.Expression 
+export function createTemplateLiteralCheck( regexStr: string, expected: string ): ts.Expression 
 {
-    requiredUtils.add( 'validators' );
     const tpl = `(v, path, ctx) => validators.templateLiteral(v, path, ctx, validators.safeRegExp(${JSON.stringify( regexStr )}), ${JSON.stringify( expected )})`;
 
     return stripPositions( templateToAst( tpl ));
 }
 
-export function createUnionCheck( checks: ts.Expression[], requiredUtils: Set<string>, expected: string = 'Type<Union>' ): ts.Expression 
+export function createUnionCheck( checks: ts.Expression[], expected: string = 'Type<Union>' ): ts.Expression 
 {
-    requiredUtils.add( 'validators' );
-
     return ts.factory.createArrowFunction(
         undefined,
         undefined,
@@ -299,10 +279,8 @@ export function createUnionCheck( checks: ts.Expression[], requiredUtils: Set<st
     );
 }
 
-export function createObjectCheck( props: any[], requiredUtils: Set<string>, expected: string = 'object', indexValidator?: ts.Expression ): ts.Expression 
+export function createObjectCheck( props: any[], expected: string = 'object', indexValidator?: ts.Expression ): ts.Expression 
 {
-    requiredUtils.add( 'validators' );
-    
     const propDefinitions = props.map(( p ) => 
         ts.factory.createArrayLiteralExpression([
             ts.factory.createStringLiteral( p.name ),
@@ -357,17 +335,15 @@ export function createObjectCheck( props: any[], requiredUtils: Set<string>, exp
     });
 }
 
-export function createRecordCheck( valueValidator: ts.Expression, requiredUtils: Set<string> ): ts.Expression 
+export function createRecordCheck( valueValidator: ts.Expression ): ts.Expression 
 {
-    requiredUtils.add( 'validators' );
     const tpl = '(v, path, ctx) => validators.record(v, path, ctx, __CHILD__)';
 
     return injectNodes( templateToAst( tpl ), { '__CHILD__' : valueValidator });
 }
 
-export function createTupleCheck( checks: ts.Expression[], requiredUtils: Set<string> ): ts.Expression 
+export function createTupleCheck( checks: ts.Expression[] ): ts.Expression 
 {
-    requiredUtils.add( 'validators' );
     const arrayElements = checks.map(( _, i ) => `__CHECK_${i}__` ).join( ', ' );
     const tpl = `(v, path, ctx) => validators.tuple(v, path, ctx, [${arrayElements}])`;
     const replacements: Record<string, ts.Expression> = {};
@@ -376,35 +352,27 @@ export function createTupleCheck( checks: ts.Expression[], requiredUtils: Set<st
     return injectNodes( templateToAst( tpl ), replacements );
 }
 
-export function createDateCheck( requiredUtils: Set<string> ): ts.Expression 
+export function createDateCheck(): ts.Expression 
 {
-    requiredUtils.add( 'validators' );
-
     return ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'validators' ), ts.factory.createIdentifier( 'date' ));
 }
 
-export function createRegExpCheck( requiredUtils: Set<string> ): ts.Expression 
+export function createRegExpCheck(): ts.Expression 
 {
-    requiredUtils.add( 'validators' );
-
     return ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'validators' ), ts.factory.createIdentifier( 'regexp' ));
 }
 
-export function createNullCheck( requiredUtils: Set<string> ): ts.Expression 
+export function createNullCheck(): ts.Expression 
 {
-    requiredUtils.add( 'validators' );
-
     return ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'validators' ), ts.factory.createIdentifier( 'null' ));
 }
 
-export function createUndefinedCheck( requiredUtils: Set<string> ): ts.Expression 
+export function createUndefinedCheck(): ts.Expression 
 {
-    requiredUtils.add( 'validators' );
-
     return ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'validators' ), ts.factory.createIdentifier( 'undefined' ));
 }
 
-export function createIntersectionCheck( checks: ts.Expression[], requiredUtils: Set<string> ): ts.Expression 
+export function createIntersectionCheck( checks: ts.Expression[] ): ts.Expression 
 {
     const tpl = `
     (v, path, ctx) => {
@@ -424,25 +392,22 @@ export function createIntersectionCheck( checks: ts.Expression[], requiredUtils:
     });
 }
 
-export function createSetCheck( elementValidator: ts.Expression, requiredUtils: Set<string> ): ts.Expression 
+export function createSetCheck( elementValidator: ts.Expression ): ts.Expression 
 {
-    requiredUtils.add( 'validators' );
     const tpl = '(v, path, ctx) => validators.set(v, path, ctx, __CHILD__)';
 
     return injectNodes( templateToAst( tpl ), { '__CHILD__' : elementValidator });
 }
 
-export function createMapCheck( keyValidator: ts.Expression, valueValidator: ts.Expression, requiredUtils: Set<string> ): ts.Expression 
+export function createMapCheck( keyValidator: ts.Expression, valueValidator: ts.Expression ): ts.Expression 
 {
-    requiredUtils.add( 'validators' );
     const tpl = '(v, path, ctx) => validators.map(v, path, ctx, __KEY__, __VALUE__)';
 
     return injectNodes( templateToAst( tpl ), { '__KEY__' : keyValidator, '__VALUE__' : valueValidator });
 }
 
-export function createInstanceOfCheck( typeName: string, requiredUtils: Set<string> ): ts.Expression 
+export function createInstanceOfCheck( typeName: string ): ts.Expression 
 {
-    requiredUtils.add( 'validators' );
     const tpl = `(v, path, ctx) => validators.instanceOf(v, path, ctx, ${JSON.stringify( typeName )})`;
 
     return templateToAst( tpl );

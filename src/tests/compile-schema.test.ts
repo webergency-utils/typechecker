@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { MetadataStore, type ValidationContext } from '../runtime/validators.js';
+import { type ValidationContext, getOrCompileSchema } from '../runtime/validators.js';
 
 describe( 'compileSchema', () => 
 {
@@ -20,7 +20,7 @@ describe( 'compileSchema', () =>
         it( 'should accept and reject Promise instances', () => 
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({ 'x-typescript-type' : 'Promise' });
+            const fn = getOrCompileSchema({ 'x-typescript-type' : 'Promise' });
 
             // Act
             const ok = fn( Promise.resolve( 1 ), '', ctx );
@@ -43,7 +43,7 @@ describe( 'compileSchema', () =>
         it( 'should validate typed-array x-typescript-type schemas', () => 
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({ 'x-typescript-type' : 'Uint8Array' });
+            const fn = getOrCompileSchema({ 'x-typescript-type' : 'Uint8Array' });
             const bytes = new Uint8Array([1, 2]);
 
             // Act
@@ -67,8 +67,8 @@ describe( 'compileSchema', () =>
         it( 'should default Set and Map child schemas when items/key/value are omitted', () => 
         {
             // Arrange
-            const setFn = MetadataStore.getOrCompileSchema({ 'x-typescript-type' : 'Set' });
-            const mapFn = MetadataStore.getOrCompileSchema({ 'x-typescript-type' : 'Map' });
+            const setFn = getOrCompileSchema({ 'x-typescript-type' : 'Set' });
+            const mapFn = getOrCompileSchema({ 'x-typescript-type' : 'Map' });
 
             // Act
             const setResult = setFn( new Set([1]), '', ctx );
@@ -94,7 +94,7 @@ describe( 'compileSchema', () =>
         it( 'should validate anyOf as a union with nested issues', () => 
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 anyOf : [{ type : 'string' }, { type : 'number' }]
             });
 
@@ -111,7 +111,7 @@ describe( 'compileSchema', () =>
         it( 'should preserve strip mode instead of forcing relaxed for allOf', () => 
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 allOf : [
                     {
                         type                 : 'object',
@@ -145,7 +145,7 @@ describe( 'compileSchema', () =>
         it( 'should validate named props and additionalProperties together', () => 
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 type                 : 'object',
                 properties           : { id : { type : 'number' } },
                 required             : ['id'],
@@ -173,7 +173,7 @@ describe( 'compileSchema', () =>
         it( 'should allow open objects when additionalProperties is true', () => 
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 type                 : 'object',
                 properties           : { id : { type : 'number' } },
                 required             : ['id'],
@@ -208,7 +208,7 @@ describe( 'compileSchema', () =>
                 required             : ['name'],
                 additionalProperties : false
             };
-            const fn = MetadataStore.getOrCompileSchema( schema );
+            const fn = getOrCompileSchema( schema );
 
             // Act
             const ok = fn({ name : 'ab' }, '', ctx );
@@ -230,7 +230,7 @@ describe( 'compileSchema', () =>
         it( 'should enforce const values', () => 
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({ const : 'fixed' });
+            const fn = getOrCompileSchema({ const : 'fixed' });
 
             // Act
             expect( fn( 'fixed', '', ctx )).toBe( 'fixed' );
@@ -255,7 +255,7 @@ describe( 'compileSchema', () =>
             const schema = { $ref : '#/$defs/Missing' };
 
             // Act / Assert
-            expect(() => MetadataStore.getOrCompileSchema( schema )( 1, '', ctx )).toThrow( /Schema reference not found/ );
+            expect(() => getOrCompileSchema( schema )( 1, '', ctx )).toThrow( /Schema reference not found/ );
         });
     });
 
@@ -264,7 +264,7 @@ describe( 'compileSchema', () =>
         it( 'should enforce tuple items, minItems, maxItems, and uniqueItems', () => 
         {
             // Arrange
-            const tupleFn = MetadataStore.getOrCompileSchema({
+            const tupleFn = getOrCompileSchema({
                 type  : 'array',
                 items : [{ type : 'string' }, { type : 'number' }]
             });
@@ -274,7 +274,7 @@ describe( 'compileSchema', () =>
             expect( ctx.success ).toBe( true );
 
             // Arrange
-            const listFn = MetadataStore.getOrCompileSchema({
+            const listFn = getOrCompileSchema({
                 type        : 'array',
                 items       : { type : 'number' },
                 minItems    : 2,
@@ -302,7 +302,7 @@ describe( 'compileSchema', () =>
         it( 'should apply string pattern and format constraints from schema', () => 
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 type    : 'string',
                 pattern : '^web_',
                 format  : 'email'
@@ -318,7 +318,7 @@ describe( 'compileSchema', () =>
         it( 'should enforce string maxLength from schema', () => 
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 type      : 'string',
                 maxLength : 3
             });
@@ -334,7 +334,7 @@ describe( 'compileSchema', () =>
         it( 'should enforce number maximum and multipleOf from schema', () => 
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 type       : 'number',
                 maximum    : 10,
                 multipleOf : 2
@@ -361,11 +361,11 @@ describe( 'compileSchema', () =>
         it( 'should short-circuit string and number schemas on nullish values', () => 
         {
             // Arrange
-            const stringFn = MetadataStore.getOrCompileSchema({
+            const stringFn = getOrCompileSchema({
                 type      : 'string',
                 maxLength : 1
             });
-            const numberFn = MetadataStore.getOrCompileSchema({
+            const numberFn = getOrCompileSchema({
                 type    : 'number',
                 maximum : 1
             });
@@ -391,14 +391,14 @@ describe( 'compileSchema', () =>
         it( 'should throw when compiling a non-object schema', () => 
         {
             // Act / Assert
-            expect(() => MetadataStore.getOrCompileSchema( null )).toThrow( /Invalid JSON Schema/ );
-            expect(() => MetadataStore.getOrCompileSchema( 'string' as unknown as object )).toThrow( /Invalid JSON Schema/ );
+            expect(() => getOrCompileSchema( null )).toThrow( /Invalid JSON Schema/ );
+            expect(() => getOrCompileSchema( 'string' as unknown as object )).toThrow( /Invalid JSON Schema/ );
         });
 
         it( 'should replace allOf data when a member returns a non-object', () => 
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 allOf : [
                     { type : 'string' },
                     { type : 'string', minLength : 1 }

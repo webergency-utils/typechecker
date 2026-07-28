@@ -1,14 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import 
-{
-    validators,
-    MetadataStore,
-    coerceQueryBoolean,
-    coerceQueryDate,
-    coerceJsonDate,
-    type ValidationContext
-} 
-from '../runtime/validators.js';
+import { validators, coerceQueryBoolean, coerceQueryDate, coerceJsonDate, type ValidationContext, is, assert, assertGuard, validate } from '../runtime/validators.js';
 
 describe( 'validators coverage edges', () => 
 {
@@ -451,7 +442,7 @@ describe( 'validators coverage edges', () =>
         });
     });
 
-    describe( 'mutate shells, anonymous custom, and MetadataStore modes', () => 
+    describe( 'mutate shells, anonymous custom, and validator modes', () => 
     {
         it( 'should mutate arrays and records in place when mutate is true', () => 
         {
@@ -510,24 +501,24 @@ describe( 'validators coverage edges', () =>
             expect( ctx.success ).toBe( true );
         });
 
-        it( 'should accept string ValidationMode on MetadataStore entrypoints', () => 
+        it( 'should accept string ValidationMode on validator entrypoints', () => 
         {
             // Arrange
             const input = { a : 1, extra : true };
             const fn = ( v: unknown, path: string, c: ValidationContext ) => validators.object( v, path, c, ['a']);
 
             // Act / Assert
-            expect( MetadataStore.is( fn, input, 'relaxed' )).toBe( true );
-            expect( MetadataStore.validate( fn, input, 'relaxed' ).success ).toBe( true );
-            expect( MetadataStore.assert( fn, input, 'relaxed' )).toEqual( input );
-            expect(() => MetadataStore.assertGuard( fn, input, 'relaxed' )).not.toThrow();
+            expect( is( fn, input, 'relaxed' )).toBe( true );
+            expect( validate( fn, input, 'relaxed' ).success ).toBe( true );
+            expect( assert( fn, input, 'relaxed' )).toEqual( input );
+            expect(() => assertGuard( fn, input, 'relaxed' )).not.toThrow();
         });
 
         it( 'should format assert errors without a path prefix when path is empty', () => 
         {
             // Act / Assert
-            expect(() => MetadataStore.assert( validators.string, 1 )).toThrow( /Validation Error: Type<string>/ );
-            expect(() => MetadataStore.assertGuard( validators.string, 1 )).toThrow( /Validation Error: Type<string>/ );
+            expect(() => assert( validators.string, 1 )).toThrow( /Validation Error: Type<string>/ );
+            expect(() => assertGuard( validators.string, 1 )).toThrow( /Validation Error: Type<string>/ );
         });
 
         it( 'should stringify nested arrays in uniqueItems', () => 
@@ -562,7 +553,7 @@ describe( 'validators coverage edges', () =>
             const fn = ( v: unknown, path: string, c: ValidationContext ) => validators.string( v, 'user.name', c );
 
             // Act / Assert
-            expect(() => MetadataStore.assertGuard( fn, 1 )).toThrow( /user\.name: Type<string>/ );
+            expect(() => assertGuard( fn, 1 )).toThrow( /user\.name: Type<string>/ );
         });
     });
 });

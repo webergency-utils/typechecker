@@ -1,14 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import 
-{
-    validators,
-    MetadataStore,
-    groupErrorsByPath,
-    toZodIssues,
-    coerceJsonDate,
-    type ValidationContext
-} 
-from '../runtime/validators.js';
+import { validators, groupErrorsByPath, toZodIssues, coerceJsonDate, type ValidationContext, is, assert, assertGuard, validate } from '../runtime/validators.js';
 
 describe( 'validators uncovered branches', () => 
 {
@@ -396,7 +387,7 @@ describe( 'validators uncovered branches', () =>
         });
     });
 
-    describe( 'MetadataStore option plumbing', () => 
+    describe( 'Validator option plumbing', () => 
     {
         it( 'should thread from through validate, assert, and in-place is; reject root rewrite on is', () => 
         {
@@ -404,9 +395,9 @@ describe( 'validators uncovered branches', () =>
             const numberOnly = validators.number;
 
             // Act / Assert
-            expect( MetadataStore.is( numberOnly, '1', { from : 'query' })).toBe( false );
-            expect( MetadataStore.validate( numberOnly, '1', { from : 'query' }).data ).toBe( 1 );
-            expect( MetadataStore.assert( numberOnly, '1', { from : 'query' })).toBe( 1 );
+            expect( is( numberOnly, '1', { from : 'query' })).toBe( false );
+            expect( validate( numberOnly, '1', { from : 'query' }).data ).toBe( 1 );
+            expect( assert( numberOnly, '1', { from : 'query' })).toBe( 1 );
         });
 
         it( 'should use errorFactory for assert and assertGuard failures', () => 
@@ -415,14 +406,14 @@ describe( 'validators uncovered branches', () =>
             const factory = vi.fn(() => new Error( 'custom-fail' ));
 
             // Act / Assert
-            expect(() => MetadataStore.assert( validators.string, 1, { errorFactory : factory })).toThrow( 'custom-fail' );
+            expect(() => assert( validators.string, 1, { errorFactory : factory })).toThrow( 'custom-fail' );
             expect( factory ).toHaveBeenCalled();
 
             // Arrange
             factory.mockClear();
 
             // Act / Assert
-            expect(() => MetadataStore.assertGuard( validators.string, 1, { errorFactory : factory })).toThrow( 'custom-fail' );
+            expect(() => assertGuard( validators.string, 1, { errorFactory : factory })).toThrow( 'custom-fail' );
         });
     });
 });

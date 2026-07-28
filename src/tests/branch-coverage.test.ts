@@ -1,13 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import
-{
-    MetadataStore,
-    validators,
-    groupErrorsByPath,
-    coerceQueryDate,
-    type ValidationContext
-}
-from '../runtime/validators.js';
+import { validators, groupErrorsByPath, coerceQueryDate, type ValidationContext, getOrCompileSchema, is, validate } from '../runtime/validators.js';
 
 describe( 'Branch coverage edges', () =>
 {
@@ -32,7 +24,7 @@ describe( 'Branch coverage edges', () =>
             const fn = ( v: any ) => v;
 
             // Act
-            expect( MetadataStore.is( fn, input )).toBe( true );
+            expect( is( fn, input )).toBe( true );
 
             // Assert
             expect( input ).toEqual({ a : 1 });
@@ -412,7 +404,7 @@ describe( 'Branch coverage edges', () =>
         it( 'should strip extras on closed allOf when mode is strip', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 allOf :
                 [
                     {
@@ -432,7 +424,7 @@ describe( 'Branch coverage edges', () =>
             const input = { a : 'x', b : 1, extra : true };
 
             // Act
-            const result = MetadataStore.validate( fn, input, { mode : 'strip', mutate : true });
+            const result = validate( fn, input, { mode : 'strip', mutate : true });
 
             // Assert
             expect( result.success ).toBe( true );
@@ -473,7 +465,7 @@ describe( 'Branch coverage edges', () =>
         it( 'should handle allOf members without closed additionalProperties', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 allOf :
                 [
                     {
@@ -491,7 +483,7 @@ describe( 'Branch coverage edges', () =>
             });
 
             // Act
-            const result = MetadataStore.validate( fn, { a : 'x', b : 1, extra : true });
+            const result = validate( fn, { a : 'x', b : 1, extra : true });
 
             // Assert
             expect( result.success ).toBe( true );
@@ -500,14 +492,14 @@ describe( 'Branch coverage edges', () =>
         it( 'should reject unknown x-typescript-type at compile time', () =>
         {
             // Act / Assert
-            expect(() => MetadataStore.getOrCompileSchema({ 'x-typescript-type' : 'Nope' }))
+            expect(() => getOrCompileSchema({ 'x-typescript-type' : 'Nope' }))
                 .toThrow( /Unsupported x-typescript-type/ );
         });
 
         it( 'should compile empty-property closed allOf members', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 allOf :
                 [
                     { type : 'object', properties : {}, additionalProperties : false },
@@ -516,8 +508,8 @@ describe( 'Branch coverage edges', () =>
             });
 
             // Act
-            const ok = MetadataStore.validate( fn, { a : 1 });
-            const bad = MetadataStore.validate( fn, { a : 1, extra : 2 });
+            const ok = validate( fn, { a : 1 });
+            const bad = validate( fn, { a : 1, extra : 2 });
 
             // Assert
             expect( ok.success ).toBe( true );

@@ -1,11 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import
-{
-    MetadataStore,
-    validators,
-    type ValidationContext
-}
-from '../runtime/validators.js';
+import { validators, type ValidationContext, getOrCompileSchema, is, assert, assertGuard, validate } from '../runtime/validators.js';
 
 describe( 'validators uniqueItems / commit / regex coverage', () =>
 {
@@ -44,7 +38,7 @@ describe( 'validators uniqueItems / commit / regex coverage', () =>
             const fn = ( v: any ) => ( Array.isArray( v ) ? v.map( Number ) : v );
 
             // Act
-            const ok = MetadataStore.is( fn, input );
+            const ok = is( fn, input );
 
             // Assert
             expect( ok ).toBe( true );
@@ -63,7 +57,7 @@ describe( 'validators uniqueItems / commit / regex coverage', () =>
             };
 
             // Act
-            expect( MetadataStore.is( setFn, setInput )).toBe( true );
+            expect( is( setFn, setInput )).toBe( true );
 
             // Assert
             expect([ ...setInput ]).toEqual([1]);
@@ -78,7 +72,7 @@ describe( 'validators uniqueItems / commit / regex coverage', () =>
             };
 
             // Act
-            expect( MetadataStore.is( mapFn, mapInput )).toBe( true );
+            expect( is( mapFn, mapInput )).toBe( true );
 
             // Assert
             expect([ ...mapInput.entries() ]).toEqual([['a', 1]]);
@@ -91,9 +85,9 @@ describe( 'validators uniqueItems / commit / regex coverage', () =>
             const input = ['1', '2'];
 
             // Act
-            const asserted = MetadataStore.assert( fn, input, { mutate : true });
+            const asserted = assert( fn, input, { mutate : true });
             const other = ['3', '4'];
-            const validated = MetadataStore.validate( fn, other, { mutate : true });
+            const validated = validate( fn, other, { mutate : true });
 
             // Assert
             expect( asserted ).toBe( input );
@@ -109,7 +103,7 @@ describe( 'validators uniqueItems / commit / regex coverage', () =>
             const rewrite = ( v: any ) => ( v === 1 ? 2 : v );
 
             // Act / Assert
-            expect(() => MetadataStore.assertGuard( rewrite, 1 )).toThrow( /RootNotRewritable|Validation Error/ );
+            expect(() => assertGuard( rewrite, 1 )).toThrow( /RootNotRewritable|Validation Error/ );
         });
 
         it( 'should return rewritten primitive data from validate/assert when mutate cannot commit', () =>
@@ -118,8 +112,8 @@ describe( 'validators uniqueItems / commit / regex coverage', () =>
             const rewrite = ( v: any ) => ( v === 1 ? 2 : v );
 
             // Act
-            const result = MetadataStore.validate( rewrite, 1, { mutate : true });
-            const asserted = MetadataStore.assert( rewrite, 1, { mutate : true });
+            const result = validate( rewrite, 1, { mutate : true });
+            const asserted = assert( rewrite, 1, { mutate : true });
 
             // Assert
             expect( result.success ).toBe( true );
@@ -277,19 +271,19 @@ describe( 'validators uniqueItems / commit / regex coverage', () =>
         it( 'should reject JSON Schema type arrays at compile time', () =>
         {
             // Act / Assert
-            expect(() => MetadataStore.getOrCompileSchema({ type : ['string', 'number'] }))
+            expect(() => getOrCompileSchema({ type : ['string', 'number'] }))
                 .toThrow( /Unsupported JSON Schema keyword: type arrays/ );
         });
 
         it( 'should replace allOf data when a later non-object arm returns a different value', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 allOf : [{ type : 'string' }, { type : 'number' }]
             });
 
             // Act
-            const result = MetadataStore.validate( fn, '5', { from : 'query' });
+            const result = validate( fn, '5', { from : 'query' });
 
             // Assert
             expect( result.success ).toBe( true );

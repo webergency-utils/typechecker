@@ -1,4 +1,4 @@
-import { validate } from '../../src/index';
+import { validate } from '../../src/index.js';
 
 interface Point {
     x : number

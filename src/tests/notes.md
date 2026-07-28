@@ -18,8 +18,8 @@
 - Object shapes require plain objects. Named props + string index signatures validate both required fields and additional keys.
 - `jsonSchema` uses `x-typescript-type` for Set/Map/bigint/undefined/Date/etc.; object intersections emit `allOf` (or a merged object).
 - Failed unions report **one** top-level error with per-arm failures in `error.issues`. `toZodIssues` / `groupErrorsByPath` flatten nested `issues`.
-- Prefer `MetadataStore.getOrCompileSchema` / `validateSchema` (and `isSchema` / `assertSchema` / `assertGuardSchema`) for JSON-Schema → runtime validator paths. Do not put `schema` on `ValidationOptions`.
-- Transformer registers validators only for `is`/`assert`/`assertGuard`/`validate`, and schemas only for `jsonSchema` (not both for every call).
+- Prefer `getOrCompileSchema` / `validateSchema` (and `isSchema` / `assertSchema` / `assertGuardSchema`) for JSON-Schema → runtime validator paths. Schema helpers are real runtime APIs and do not need the transformer. Do not put `schema` on `ValidationOptions`.
+- Transformer hoists validators only for `is`/`assert`/`assertGuard`/`validate`, and schemas only for `jsonSchema` (not both for every call). Schema helpers are not rewritten.
 - Closed-object AOT/schema key lists are `Set`s; `validators.safeRegExp` marks patterns as vetted so `pattern()` skips repeated safety scans.
 - `allOf` validates members without mutating, then applies `strict` / `strip` to the combined object-key set and commits only on success.
 - Microbench: `node scripts/perf-microbench.mjs` (after `npm run build`).
@@ -28,8 +28,7 @@
 - `constraint.Custom` receives `(val, PathContext)` including `key`.
 - Place branch-focused suites at `src/tests/{unit}.test.ts` (e.g. `compile-schema.test.ts`, `validators-branches.test.ts`), never next to source.
 - Format edge cases worth explicit tests: email/idn-email length limits (254 / local 64), URI/IRI `URL` constructor fallbacks (`http://`), empty uri/iri-reference, uri-template unmatched `}`.
-- `MetadataStore.is` → `GuardOptions`; `assertGuard` → `AssertGuardOptions`; `validate` → `ValidationOptions`; `assert` → `AssertOptions`. All accept a string `ValidationMode` as well.
-- Do not chase coverage for unreachable arms: `fromCustom` when `ctx.from` is not a function (all callers guard), `parseFormatDateTime` non-string (format always passes strings), and `resolvePath`’s `dotsMatch` else (paths that reach it always start with `.`).
+- Runtime entrypoints on `@webergency-utils/typechecker/runtime`: `is` / `assert` / `assertGuard` / `validate` take `(validator, value, options?)`. Typed AOT helpers rewrite to `__tcRuntime.<name>(__val_<hash>, …)`. There is no process-global validators registry.
 
 ## Anti-Patterns
 - Avoid mutating global configuration or state shared between tests.

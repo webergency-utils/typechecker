@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import ts from 'typescript';
 import 
 {
-    createRegistry,
     templateToAst,
     injectNodes,
     createPrimitiveCheck,
@@ -49,11 +48,9 @@ function printExpr( expr: ts.Expression ): string
 
 describe( 'generators', () => 
 {
-    let requiredUtils: Set<string>;
 
     beforeEach(() => 
     {
-        requiredUtils = new Set();
     });
 
     afterEach(() => 
@@ -61,17 +58,8 @@ describe( 'generators', () =>
         vi.clearAllMocks();
     });
 
-    describe( 'registry and template helpers', () => 
+    describe( 'template helpers', () => 
     {
-        it( 'should create an empty validation registry', () => 
-        {
-            // Act
-            const registry = createRegistry();
-
-            // Assert
-            expect( registry.validators.size ).toBe( 0 );
-        });
-
         it( 'should parse parenthesized and property-access templates', () => 
         {
             // Act
@@ -113,50 +101,49 @@ describe( 'generators', () =>
         it( 'should emit property-access validators for primitives and nullish types', () => 
         {
             // Act / Assert
-            expect( printExpr( createPrimitiveCheck( 'string', requiredUtils ))).toBe( 'validators.string' );
-            expect( printExpr( createDateCheck( requiredUtils ))).toBe( 'validators.date' );
-            expect( printExpr( createRegExpCheck( requiredUtils ))).toBe( 'validators.regexp' );
-            expect( printExpr( createNullCheck( requiredUtils ))).toBe( 'validators.null' );
-            expect( printExpr( createUndefinedCheck( requiredUtils ))).toBe( 'validators.undefined' );
-            expect( requiredUtils.has( 'validators' )).toBe( true );
+            expect( printExpr( createPrimitiveCheck( 'string' ))).toBe( 'validators.string' );
+            expect( printExpr( createDateCheck())).toBe( 'validators.date' );
+            expect( printExpr( createRegExpCheck())).toBe( 'validators.regexp' );
+            expect( printExpr( createNullCheck())).toBe( 'validators.null' );
+            expect( printExpr( createUndefinedCheck())).toBe( 'validators.undefined' );
         });
 
         it( 'should emit literal checks for string number boolean and bigint', () => 
         {
             // Act / Assert
-            expect( printExpr( createLiteralCheck( 'x', requiredUtils ))).toContain( '"x"' );
-            expect( printExpr( createLiteralCheck( 3, requiredUtils ))).toContain( '3' );
-            expect( printExpr( createLiteralCheck( true, requiredUtils ))).toContain( 'true' );
-            expect( printExpr( createLiteralCheck( false, requiredUtils ))).toContain( 'false' );
-            expect( printExpr( createLiteralCheck({ base10Value : '9', negative : false } as ts.PseudoBigInt, requiredUtils ))).toContain( '9n' );
+            expect( printExpr( createLiteralCheck( 'x' ))).toContain( '"x"' );
+            expect( printExpr( createLiteralCheck( 3 ))).toContain( '3' );
+            expect( printExpr( createLiteralCheck( true ))).toContain( 'true' );
+            expect( printExpr( createLiteralCheck( false ))).toContain( 'false' );
+            expect( printExpr( createLiteralCheck({ base10Value : '9', negative : false } as ts.PseudoBigInt ))).toContain( '9n' );
         });
 
         it( 'should wrap child validators for array record set map tuple and instanceOf', () => 
         {
             // Arrange
-            const child = createPrimitiveCheck( 'number', requiredUtils );
-            const key = createPrimitiveCheck( 'string', requiredUtils );
+            const child = createPrimitiveCheck( 'number' );
+            const key = createPrimitiveCheck( 'string' );
 
             // Act / Assert
-            expect( printExpr( createArrayCheck( child, requiredUtils ))).toContain( 'validators.array' );
-            expect( printExpr( createRecordCheck( child, requiredUtils ))).toContain( 'validators.record' );
-            expect( printExpr( createSetCheck( child, requiredUtils ))).toContain( 'validators.set' );
-            expect( printExpr( createMapCheck( key, child, requiredUtils ))).toContain( 'validators.map' );
-            expect( printExpr( createTupleCheck([key, child], requiredUtils ))).toContain( 'validators.tuple' );
-            expect( printExpr( createInstanceOfCheck( 'Date', requiredUtils ))).toContain( 'validators.instanceOf' );
-            expect( printExpr( createInstanceOfCheck( 'Date', requiredUtils ))).toContain( '"Date"' );
+            expect( printExpr( createArrayCheck( child ))).toContain( 'validators.array' );
+            expect( printExpr( createRecordCheck( child ))).toContain( 'validators.record' );
+            expect( printExpr( createSetCheck( child ))).toContain( 'validators.set' );
+            expect( printExpr( createMapCheck( key, child ))).toContain( 'validators.map' );
+            expect( printExpr( createTupleCheck([key, child] ))).toContain( 'validators.tuple' );
+            expect( printExpr( createInstanceOfCheck( 'Date' ))).toContain( 'validators.instanceOf' );
+            expect( printExpr( createInstanceOfCheck( 'Date' ))).toContain( '"Date"' );
         });
 
         it( 'should emit union templateLiteral and intersection checks', () => 
         {
             // Arrange
-            const a = createPrimitiveCheck( 'string', requiredUtils );
-            const b = createPrimitiveCheck( 'number', requiredUtils );
+            const a = createPrimitiveCheck( 'string' );
+            const b = createPrimitiveCheck( 'number' );
 
             // Act
-            const union = printExpr( createUnionCheck([a, b], requiredUtils, 'Type<Union>' ));
-            const tpl = printExpr( createTemplateLiteralCheck( '^id_', 'Template', requiredUtils ));
-            const inter = printExpr( createIntersectionCheck([a, b], requiredUtils ));
+            const union = printExpr( createUnionCheck([a, b], 'Type<Union>' ));
+            const tpl = printExpr( createTemplateLiteralCheck( '^id_', 'Template' ));
+            const inter = printExpr( createIntersectionCheck([a, b] ));
 
             // Assert
             expect( union ).toContain( 'validators.union' );
@@ -173,19 +160,19 @@ describe( 'generators', () =>
                 {
                     name       : 'id',
                     isOptional : false,
-                    validator  : createPrimitiveCheck( 'number', requiredUtils )
+                    validator  : createPrimitiveCheck( 'number' )
                 },
                 {
                     name       : 'tag',
                     isOptional : true,
-                    validator  : createPrimitiveCheck( 'string', requiredUtils )
+                    validator  : createPrimitiveCheck( 'string' )
                 }
             ];
-            const index = createPrimitiveCheck( 'string', requiredUtils );
+            const index = createPrimitiveCheck( 'string' );
 
             // Act
-            const closed = printExpr( createObjectCheck( props, requiredUtils, 'Type<Row>' ));
-            const open = printExpr( createObjectCheck( props, requiredUtils, 'Type<Row>', index ));
+            const closed = printExpr( createObjectCheck( props, 'Type<Row>' ));
+            const open = printExpr( createObjectCheck( props, 'Type<Row>', index ));
 
             // Assert
             expect( closed ).toContain( 'validators.stripExtras' );
@@ -232,7 +219,7 @@ describe( 'generators', () =>
             ];
 
             // Act
-            const code = printExpr( createConstrainedPrimitiveCheck( 'string', constraints, requiredUtils ));
+            const code = printExpr( createConstrainedPrimitiveCheck( 'string', constraints ));
 
             // Assert
             expect( code ).toContain( 'v = "web_"' );
@@ -257,10 +244,10 @@ describe( 'generators', () =>
         it( 'should use a provided baseValidator when composing constrained checks', () => 
         {
             // Arrange
-            const base = createPrimitiveCheck( 'number', requiredUtils );
+            const base = createPrimitiveCheck( 'number' );
 
             // Act
-            const code = printExpr( createConstrainedPrimitiveCheck( 'number', [{ type : 'minimum', value : 1 }], requiredUtils, base ));
+            const code = printExpr( createConstrainedPrimitiveCheck( 'number', [{ type : 'minimum', value : 1 }], base ));
 
             // Assert
             expect( code ).toContain( 'validators.number' );
@@ -277,7 +264,7 @@ describe( 'generators', () =>
             ];
 
             // Act
-            const code = printExpr( createConstrainedPrimitiveCheck( 'string', constraints, requiredUtils ));
+            const code = printExpr( createConstrainedPrimitiveCheck( 'string', constraints ));
 
             // Assert
             expect( code ).toContain( '[".a", ".b"]' );

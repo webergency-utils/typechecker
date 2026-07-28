@@ -102,15 +102,15 @@ graph TD
     B --> C[TypeScript compiler plugin / Transformer]
     C --> D[Extract types via compiler TypeChecker]
     D --> E[Generate optimized JS validator function]
-    E --> F[Hoisted Validator Registry & MetadataStore registration]
-    F --> G[Replace source call with MetadataStore invocation]
+    E --> F[Hoist file-local __val_hash / __schema_hash constants]
+    F --> G[Replace typed calls with __tcRuntime.validate / is / assert]
     G --> H[Emit optimized JavaScript files]
 ```
 
-1. **Build-Time Transformation**: The compiler transformer intercepts calls to validation helper functions (`validate`, `is`, `assert`, `assertGuard`, `jsonSchema`, `validateSchema`, `isSchema`, `assertSchema`, `assertGuardSchema`).
+1. **Build-Time Transformation**: The compiler transformer intercepts typed helper calls (`validate`, `is`, `assert`, `assertGuard`, `jsonSchema`). Schema helpers (`validateSchema`, `isSchema`, `assertSchema`, `assertGuardSchema`) are plain runtime APIs and do not require transformation.
 2. **Type Extraction & Analysis**: It parses the target TS type structure, extracting intersection constraints, formats, transforms, and defaults recursively.
-3. **Hoisted Registry**: The transformer generates highly optimized, direct JavaScript validator functions for each resolved type shape, generates a unique hash, and registers them in a global `MetadataStore`.
-4. **Call Replacement**: The transformer replaces the original compile-time call expressions with direct, zero-reflection references to the runtime `MetadataStore`.
+3. **File-local validators**: The transformer generates highly optimized JavaScript validator functions for each resolved type shape, names them with a structural hash (`__val_<hash>` / `__schema_<hash>`), and hoists them in the same file.
+4. **Call Replacement**: Typed calls are rewritten to `__tcRuntime.validate(__val_<hash>, …)` (and the matching `is` / `assert` / `assertGuard` helpers) with no global registry lookup.
 
 ### External dependencies
 
@@ -464,7 +464,7 @@ Sanitizes and converts input values during validation.
 
 ### `validate`, `is`, or `assert` throw “transformer was not applied”
 - **Cause**: The compiler transformer did not rewrite the call at build time. Untransformed stubs always throw.
-- **Diagnostics Check**: Inspect your built `.js` output. If it still contains `validate(...)` / `is(...)` / `assert(...)` as package imports rather than `MetadataStore.validate(...)` (etc.), the transformer did not run.
+- **Diagnostics Check**: Inspect your built `.js` output. If it still contains `validate(...)` / `is(...)` / `assert(...)` as package imports rather than `__tcRuntime.validate(...)` (etc.), the transformer did not run.
 - **Fix**:
   1. Verify `npx ts-patch install` was executed successfully.
   2. Verify `{ "transform": "@webergency-utils/typechecker/transformer" }` is registered in `tsconfig.json` `compilerOptions.plugins`.

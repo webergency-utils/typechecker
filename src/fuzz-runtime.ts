@@ -4,7 +4,11 @@
  */
 export {
     validators,
-    MetadataStore,
+    getOrCompileSchema,
+    is,
+    assert,
+    assertGuard,
+    validate,
     compileSchema,
     coerceQueryNumber,
     coerceQueryBoolean,

@@ -56,7 +56,6 @@ describe( 'resolver coverage', () =>
             type Callable = ( value: number ) => string;
             type EnumType = Flag;
         ` );
-        const requiredUtils = new Set<string>();
         const validators = new Map<string, ts.Expression>();
         const names =
         [
@@ -75,13 +74,12 @@ describe( 'resolver coverage', () =>
         {
             const type = typeOfAlias( sourceFile, checker, name );
 
-            return buildValidator( type, checker, validators, requiredUtils );
+            return buildValidator( type, checker, validators );
         });
 
         // Assert
         expect( ids ).toHaveLength( names.length );
         expect( validators.size ).toBeGreaterThan( names.length );
-        expect( requiredUtils.has( 'validators' )).toBe( true );
     });
 
     it( 'should build schemas for constrained containers, intersections, and nested recursion', () =>

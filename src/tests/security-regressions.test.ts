@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MetadataStore, validators, type ValidationContext } from '../runtime/validators.js';
+import { validators, type ValidationContext, getOrCompileSchema, validate } from '../runtime/validators.js';
 
 function context( root?: any ): ValidationContext
 {
@@ -41,15 +41,15 @@ describe( 'Security and correctness regressions', () =>
                 }
             ]
         };
-        const validator = MetadataStore.getOrCompileSchema( schema );
+        const validator = getOrCompileSchema( schema );
         const strictInput = { a : 'x', b : 1, extra : true };
-        const strict = MetadataStore.validate( validator, strictInput );
+        const strict = validate( validator, strictInput );
 
         expect( strict.success ).toBe( false );
         expect( strictInput ).toEqual({ a : 'x', b : 1, extra : true });
 
         const stripInput = { a : 'x', b : 1, extra : true };
-        const stripped = MetadataStore.validate( validator, stripInput, { mode : 'strip', mutate : true });
+        const stripped = validate( validator, stripInput, { mode : 'strip', mutate : true });
 
         expect( stripped.success ).toBe( true );
         expect( stripped.data ).toBe( stripInput );
@@ -58,7 +58,7 @@ describe( 'Security and correctness regressions', () =>
 
     it( 'does not modify input when allOf validation fails', () =>
     {
-        const validator = MetadataStore.getOrCompileSchema({
+        const validator = getOrCompileSchema({
             allOf :
             [
                 {
@@ -76,7 +76,7 @@ describe( 'Security and correctness regressions', () =>
             ]
         });
         const input: any = { a : 'x', b : 'invalid' };
-        const result = MetadataStore.validate( validator, input, { mode : 'strip', mutate : true });
+        const result = validate( validator, input, { mode : 'strip', mutate : true });
 
         expect( result.success ).toBe( false );
         expect( result.data ).toBeUndefined();
@@ -85,7 +85,7 @@ describe( 'Security and correctness regressions', () =>
 
     it( 'does not overwrite an earlier allOf coercion with an unvalidated extra from a later member', () =>
     {
-        const validator = MetadataStore.getOrCompileSchema({
+        const validator = getOrCompileSchema({
             allOf :
             [
                 {
@@ -102,7 +102,7 @@ describe( 'Security and correctness regressions', () =>
                 }
             ]
         });
-        const result = MetadataStore.validate( validator, { a : '1', b : 2 }, { from : 'query' });
+        const result = validate( validator, { a : '1', b : 2 }, { from : 'query' });
 
         expect( result.success ).toBe( true );
         expect( result.data ).toEqual({ a : 1, b : 2 });
@@ -110,16 +110,16 @@ describe( 'Security and correctness regressions', () =>
 
     it( 'rejects recognized unsupported schema keywords and x-typescript-type values', () =>
     {
-        expect(() => MetadataStore.getOrCompileSchema({ enum : ['a', 'b'] })).toThrow( /Unsupported JSON Schema keyword: enum/ );
-        expect(() => MetadataStore.getOrCompileSchema({ oneOf : [{ type : 'string' }] })).toThrow( /Unsupported JSON Schema keyword: oneOf/ );
-        expect(() => MetadataStore.getOrCompileSchema({ 'x-typescript-type' : 'UnknownType' })).toThrow( /Unsupported x-typescript-type/ );
-        expect(() => MetadataStore.getOrCompileSchema({})).not.toThrow();
+        expect(() => getOrCompileSchema({ enum : ['a', 'b'] })).toThrow( /Unsupported JSON Schema keyword: enum/ );
+        expect(() => getOrCompileSchema({ oneOf : [{ type : 'string' }] })).toThrow( /Unsupported JSON Schema keyword: oneOf/ );
+        expect(() => getOrCompileSchema({ 'x-typescript-type' : 'UnknownType' })).toThrow( /Unsupported x-typescript-type/ );
+        expect(() => getOrCompileSchema({})).not.toThrow();
     });
 
     it( 'implements boolean JSON Schemas instead of treating false as an empty schema', () =>
     {
-        const allow = MetadataStore.validate( MetadataStore.getOrCompileSchema( true ), 'value' );
-        const deny = MetadataStore.validate( MetadataStore.getOrCompileSchema( false ), 'value' );
+        const allow = validate( getOrCompileSchema( true ), 'value' );
+        const deny = validate( getOrCompileSchema( false ), 'value' );
 
         expect( allow.success ).toBe( true );
         expect( deny.success ).toBe( false );
@@ -128,7 +128,7 @@ describe( 'Security and correctness regressions', () =>
 
     it( 'rejects unsafe schema patterns before validation', () =>
     {
-        expect(() => MetadataStore.getOrCompileSchema({
+        expect(() => getOrCompileSchema({
             type    : 'string',
             pattern : '(a+)+$'
         })).toThrow( /Unsafe regular expression/ );

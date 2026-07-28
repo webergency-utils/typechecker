@@ -1,14 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import
-{
-    MetadataStore,
-    validators,
-    toZodIssues,
-    groupErrorsByPath,
-    type ValidationContext,
-    type IValidationError
-}
-from '../runtime/validators.js';
+import { validators, toZodIssues, groupErrorsByPath, type ValidationContext, type IValidationError, getOrCompileSchema, is, assert, assertGuard, validate } from '../runtime/validators.js';
 
 function ctx( mode: ValidationContext['mode'] = 'strict', from?: ValidationContext['from'] ): ValidationContext
 {
@@ -210,10 +201,10 @@ describe( 'Error capture matrix', () =>
             it( `captures ${entry.name} failure via validate`, () =>
             {
                 // Arrange
-                const fn = MetadataStore.getOrCompileSchema( entry.schema );
+                const fn = getOrCompileSchema( entry.schema );
 
                 // Act
-                const result = MetadataStore.validate( fn, entry.value );
+                const result = validate( fn, entry.value );
 
                 // Assert
                 expect( result.success ).toBe( false );
@@ -230,12 +221,12 @@ describe( 'Error capture matrix', () =>
         it( 'string | number rejects boolean and nests both arm errors', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 anyOf : [{ type : 'string' }, { type : 'number' }]
             });
 
             // Act
-            const result = MetadataStore.validate( fn, true );
+            const result = validate( fn, true );
 
             // Assert
             expectUnionFailure( result.errors, '', 'Type<Union>', true, 2 );
@@ -248,22 +239,22 @@ describe( 'Error capture matrix', () =>
         it( 'three-arm union rejects and keeps one issues list', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 anyOf : [{ type : 'string' }, { type : 'number' }, { type : 'boolean' }]
             });
 
             // Act
-            MetadataStore.validate( fn, null ).errors;
+            validate( fn, null ).errors;
 
             // Assert
-            const result = MetadataStore.validate( fn, null );
+            const result = validate( fn, null );
             expectUnionFailure( result.errors, '', 'Type<Union>', null, 3 );
         });
 
         it( 'object | array rejects scalar with nested issues', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 anyOf :
                 [
                     { type : 'object', properties : { a : { type : 'string' } }, additionalProperties : false },
@@ -272,7 +263,7 @@ describe( 'Error capture matrix', () =>
             });
 
             // Act
-            const result = MetadataStore.validate( fn, 'nope' );
+            const result = validate( fn, 'nope' );
 
             // Assert
             expectUnionFailure( result.errors, '', 'Type<Union>', 'nope', 2 );
@@ -284,12 +275,12 @@ describe( 'Error capture matrix', () =>
         it( 'accepts matching string arm and ignores failing number arm', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 anyOf : [{ type : 'string' }, { type : 'number' }]
             });
 
             // Act
-            const result = MetadataStore.validate( fn, 'ok' );
+            const result = validate( fn, 'ok' );
 
             // Assert
             expect( result.success ).toBe( true );
@@ -300,7 +291,7 @@ describe( 'Error capture matrix', () =>
         it( 'accepts matching object arm among incompatible shapes', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 anyOf :
                 [
                     {
@@ -319,7 +310,7 @@ describe( 'Error capture matrix', () =>
             });
 
             // Act
-            const result = MetadataStore.validate( fn, { kind : 'b', s : 'x' });
+            const result = validate( fn, { kind : 'b', s : 'x' });
 
             // Assert
             expect( result.success ).toBe( true );
@@ -329,7 +320,7 @@ describe( 'Error capture matrix', () =>
         it( 'rejects when object matches neither discriminant', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 anyOf :
                 [
                     {
@@ -348,7 +339,7 @@ describe( 'Error capture matrix', () =>
             });
 
             // Act
-            const result = MetadataStore.validate( fn, { kind : 'c', n : 1 });
+            const result = validate( fn, { kind : 'c', n : 1 });
 
             // Assert
             expect( result.success ).toBe( false );
@@ -365,7 +356,7 @@ describe( 'Error capture matrix', () =>
             const value = { left : { left : 1, right : 2 }, right : 3 };
 
             // Act
-            const result = MetadataStore.validate( tree, value );
+            const result = validate( tree, value );
 
             // Assert
             expect( result.success ).toBe( true );
@@ -379,7 +370,7 @@ describe( 'Error capture matrix', () =>
             const value = { left : { left : 'bad', right : 2 }, right : 3 };
 
             // Act
-            const result = MetadataStore.validate( tree, value );
+            const result = validate( tree, value );
 
             // Assert
             expect( result.success ).toBe( false );
@@ -397,7 +388,7 @@ describe( 'Error capture matrix', () =>
             const tree = makeTreeUnion( 4 );
 
             // Act
-            const result = MetadataStore.validate( tree, true );
+            const result = validate( tree, true );
 
             // Assert
             expectUnionFailure( result.errors, '', 'Tree<4>', true, 2 );
@@ -406,7 +397,7 @@ describe( 'Error capture matrix', () =>
         it( 'nested schema anyOf inside object property reports path-qualified union error', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 type       : 'object',
                 properties :
                 {
@@ -434,7 +425,7 @@ describe( 'Error capture matrix', () =>
             });
 
             // Act
-            const result = MetadataStore.validate( fn, { node : { child : 'nope' } });
+            const result = validate( fn, { node : { child : 'nope' } });
 
             // Assert
             expect( result.success ).toBe( false );
@@ -470,7 +461,7 @@ describe( 'Error capture matrix', () =>
             const value = { left : 1 };
 
             // Act
-            const result = MetadataStore.validate( tree, value );
+            const result = validate( tree, value );
 
             // Assert
             expect( result.success ).toBe( true );
@@ -484,9 +475,9 @@ describe( 'Error capture matrix', () =>
             const value = { left : false };
 
             // Act / Assert
-            expect( MetadataStore.is( tree, value )).toBe( false );
-            expect(() => MetadataStore.assertGuard( tree, value )).toThrow( /Tree|Union|Validation Error/ );
-            expect(() => MetadataStore.assert( tree, value )).toThrow( /Tree|Union|Validation Error/ );
+            expect( is( tree, value )).toBe( false );
+            expect(() => assertGuard( tree, value )).toThrow( /Tree|Union|Validation Error/ );
+            expect(() => assert( tree, value )).toThrow( /Tree|Union|Validation Error/ );
         });
     });
 
@@ -495,7 +486,7 @@ describe( 'Error capture matrix', () =>
         it( 'collects multiple property errors without short-circuiting siblings', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 type       : 'object',
                 properties :
                 {
@@ -508,7 +499,7 @@ describe( 'Error capture matrix', () =>
             });
 
             // Act
-            const result = MetadataStore.validate( fn, { a : 1, b : 'x', c : 'y' });
+            const result = validate( fn, { a : 1, b : 'x', c : 'y' });
 
             // Assert
             expect( result.success ).toBe( false );
@@ -519,13 +510,13 @@ describe( 'Error capture matrix', () =>
         it( 'array element failures keep index paths', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 type  : 'array',
                 items : { type : 'number' }
             });
 
             // Act
-            const result = MetadataStore.validate( fn, [1, 'x', 3, true]);
+            const result = validate( fn, [1, 'x', 3, true]);
 
             // Assert
             expect( result.success ).toBe( false );
@@ -564,12 +555,12 @@ describe( 'Error capture matrix', () =>
         it( 'without from, numeric string fails number|boolean union', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 anyOf : [{ type : 'number' }, { type : 'boolean' }]
             });
 
             // Act
-            const result = MetadataStore.validate( fn, '12' );
+            const result = validate( fn, '12' );
 
             // Assert
             expect( result.success ).toBe( false );
@@ -579,12 +570,12 @@ describe( 'Error capture matrix', () =>
         it( 'with from query, numeric string succeeds on number arm', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 anyOf : [{ type : 'number' }, { type : 'boolean' }]
             });
 
             // Act
-            const result = MetadataStore.validate( fn, '12', { from : 'query' });
+            const result = validate( fn, '12', { from : 'query' });
 
             // Assert
             expect( result.success ).toBe( true );
@@ -594,12 +585,12 @@ describe( 'Error capture matrix', () =>
         it( 'with from query, still fails when no arm can coerce', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 anyOf : [{ type : 'number' }, { type : 'boolean' }]
             });
 
             // Act
-            const result = MetadataStore.validate( fn, { x : 1 }, { from : 'query' });
+            const result = validate( fn, { x : 1 }, { from : 'query' });
 
             // Assert
             expect( result.success ).toBe( false );
@@ -612,7 +603,7 @@ describe( 'Error capture matrix', () =>
         it( 'reports errors from every failing allOf member', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({
+            const fn = getOrCompileSchema({
                 allOf :
                 [
                     {
@@ -631,7 +622,7 @@ describe( 'Error capture matrix', () =>
             });
 
             // Act
-            const result = MetadataStore.validate( fn, { a : 1, b : 'x' });
+            const result = validate( fn, { a : 1, b : 'x' });
 
             // Assert
             expect( result.success ).toBe( false );
@@ -644,7 +635,7 @@ describe( 'Error capture matrix', () =>
         it( 'assert and assertGuard honor custom errorFactory payloads', () =>
         {
             // Arrange
-            const fn = MetadataStore.getOrCompileSchema({ type : 'string' });
+            const fn = getOrCompileSchema({ type : 'string' });
             const factory = ( errors: IValidationError[] ) =>
             {
                 const err = new Error( 'custom' );
@@ -654,8 +645,8 @@ describe( 'Error capture matrix', () =>
             };
 
             // Act / Assert
-            expect(() => MetadataStore.assert( fn, 1, { errorFactory : factory })).toThrow( 'custom' );
-            expect(() => MetadataStore.assertGuard( fn, 1, { errorFactory : factory })).toThrow( 'custom' );
+            expect(() => assert( fn, 1, { errorFactory : factory })).toThrow( 'custom' );
+            expect(() => assertGuard( fn, 1, { errorFactory : factory })).toThrow( 'custom' );
         });
     });
 });

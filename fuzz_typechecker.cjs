@@ -103,7 +103,6 @@ module.exports.fuzz = function( data )
         const from = pickFrom( provider );
         const {
             validators,
-            MetadataStore,
             compileSchema,
             coerceQueryNumber,
             coerceQueryBoolean,
@@ -112,7 +111,9 @@ module.exports.fuzz = function( data )
             groupErrorsByPath,
             toZodIssues,
             ZodLikeError,
-            convertPropertyCasing
+            convertPropertyCasing,
+            validate,
+            is
         } = runtime;
 
         coerceQueryNumber( input );
@@ -138,8 +139,8 @@ module.exports.fuzz = function( data )
         const compiled = compileSchema( schema );
         compiled( input, '', { success : true, errors : [], mode, from });
 
-        MetadataStore.validate( validators.any, input, { mode, from });
-        MetadataStore.is( validators.any, input, mode );
+        validate( validators.any, input, { mode, from });
+        is( validators.any, input, mode );
 
         if( input && typeof input === 'object' && !Array.isArray( input ))
         {

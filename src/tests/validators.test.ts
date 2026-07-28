@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { validators, MetadataStore, coerceQueryNumber, coerceQueryBoolean, coerceQueryDate } from '../runtime/validators.js';
+import { validators, coerceQueryNumber, coerceQueryBoolean, coerceQueryDate, getOrCompileSchema, is, assert, assertGuard, validate } from '../runtime/validators.js';
 
 describe( 'Validators', () => 
 {
@@ -22,7 +22,7 @@ describe( 'Validators', () =>
 
             ctx.from = 'query';
             expect( validators.number( '42', 'n', ctx )).toBe( 42 );
-            expect( MetadataStore.assert(
+            expect( assert(
                 ( v, path, c ) => validators.number( coerceQueryNumber( v ), path, c ),
                 '42'
             )).toBe( 42 );
@@ -763,21 +763,6 @@ describe( 'Validators', () =>
             expect( validators.any( 123 )).toBe( 123 );
         });
 
-        it( 'should manage schema and validator registration in MetadataStore', () => 
-        {
-            // Validator
-            const dummyVal = () => {};
-            MetadataStore.registerValidator( 'h1', dummyVal );
-            expect( MetadataStore.getValidator( 'h1' )).toBe( dummyVal );
-            expect(() => MetadataStore.getValidator( 'h2' )).toThrow( 'Validator not found' );
-
-            // Schema
-            const dummySchema = { type : 'string' };
-            MetadataStore.registerSchema( 's1', dummySchema );
-            expect( MetadataStore.getSchema( 's1' )).toBe( dummySchema );
-            expect(() => MetadataStore.getSchema( 's2' )).toThrow( 'Schema not found' );
-        });
-
         it( 'should validate bigint and from conversions', () => 
         {
             expect( validators.bigint( 123n, 'path', ctx )).toBe( 123n );
@@ -888,7 +873,7 @@ describe( 'Validators', () =>
                 required : ['name', 'age']
             };
 
-            const validateFn = MetadataStore.getOrCompileSchema( schema );
+            const validateFn = getOrCompileSchema( schema );
 
             // Valid payload
             ctx.success = true;
@@ -939,7 +924,7 @@ describe( 'Validators', () =>
                 $ref : '#/$defs/Node'
             };
 
-            const validateFn = MetadataStore.getOrCompileSchema( circularSchema );
+            const validateFn = getOrCompileSchema( circularSchema );
 
             ctx.success = true;
             ctx.errors = [];
@@ -968,7 +953,7 @@ describe( 'Validators', () =>
                 }
             };
 
-            const validateFn = MetadataStore.getOrCompileSchema( schema );
+            const validateFn = getOrCompileSchema( schema );
 
             ctx.mode = 'strip';
 
@@ -996,7 +981,7 @@ describe( 'Validators', () =>
                 }
             };
 
-            const validateFn = MetadataStore.getOrCompileSchema( schema );
+            const validateFn = getOrCompileSchema( schema );
 
             ctx.mode = 'strip';
 
@@ -1023,7 +1008,7 @@ describe( 'Validators', () =>
                 }
             };
 
-            const validateFn = MetadataStore.getOrCompileSchema( schema );
+            const validateFn = getOrCompileSchema( schema );
 
             ctx.mode = 'strip';
             ctx.mutate = true;
@@ -1054,7 +1039,7 @@ describe( 'Validators', () =>
                 ]
             };
 
-            const validateFn = MetadataStore.getOrCompileSchema( schema );
+            const validateFn = getOrCompileSchema( schema );
 
             // Valid tuple
             ctx.success = true;
@@ -1083,7 +1068,7 @@ describe( 'Validators', () =>
                 }
             };
 
-            const validateFn = MetadataStore.getOrCompileSchema( schema );
+            const validateFn = getOrCompileSchema( schema );
 
             ctx.mode = 'strip';
 
@@ -1102,13 +1087,13 @@ describe( 'Validators', () =>
         it( 'should treat an empty schema as accepting any value', () =>
         {
             const schema = {};
-            const validateFn = MetadataStore.getOrCompileSchema( schema );
+            const validateFn = getOrCompileSchema( schema );
 
             const result = validateFn( 'anything goes', 'path', ctx );
 
             expect( ctx.success ).toBe( true );
             expect( result ).toBe( 'anything goes' );
-            expect(() => MetadataStore.getOrCompileSchema({ type : 'unknown' })).toThrow(
+            expect(() => getOrCompileSchema({ type : 'unknown' })).toThrow(
                 'Unsupported JSON Schema type: unknown'
             );
         });
@@ -1124,7 +1109,7 @@ describe( 'Validators', () =>
                 }
             };
 
-            expect(() => MetadataStore.getOrCompileSchema( schema )).toThrow(
+            expect(() => getOrCompileSchema( schema )).toThrow(
                 'Invalid JSON Schema: subschemas must be objects or booleans'
             );
         });
@@ -1136,7 +1121,7 @@ describe( 'Validators', () =>
                 $ref : '#/$defs/NonExistent'
             };
 
-            expect(() => MetadataStore.getOrCompileSchema( schema )).toThrow( 'Schema reference not found: #/$defs/NonExistent' );
+            expect(() => getOrCompileSchema( schema )).toThrow( 'Schema reference not found: #/$defs/NonExistent' );
         });
 
         it( 'should validate integer type and reject float values', () => 
@@ -1146,7 +1131,7 @@ describe( 'Validators', () =>
                 type : 'integer'
             };
 
-            const validateFn = MetadataStore.getOrCompileSchema( schema );
+            const validateFn = getOrCompileSchema( schema );
 
             ctx.success = true;
             ctx.errors = [];
@@ -1163,8 +1148,8 @@ describe( 'Validators', () =>
                 type : 'string'
             };
 
-            const fn1 = MetadataStore.getOrCompileSchema( schema );
-            const fn2 = MetadataStore.getOrCompileSchema( schema );
+            const fn1 = getOrCompileSchema( schema );
+            const fn2 = getOrCompileSchema( schema );
 
             expect( fn1 ).toBe( fn2 );
         });
@@ -1255,7 +1240,7 @@ describe( 'Validators', () =>
         });
     });
 
-    describe( 'MetadataStore Exception customization', () => 
+    describe( 'Validator exception customization', () => 
     {
         it( 'should throw custom error using errorFactory', () => 
         {
@@ -1276,7 +1261,7 @@ describe( 'Validators', () =>
 
             expect(() => 
             {
-                MetadataStore.assert( customVal, 'test', {
+                assert( customVal, 'test', {
                     errorFactory : ( errors ) => new CustomValidationError( errors )
                 });
             }).toThrow( CustomValidationError );
@@ -1296,14 +1281,14 @@ describe( 'Validators', () =>
             };
 
             // Success case
-            const resSuccess = MetadataStore.validate( dummyVal, 'hello' );
+            const resSuccess = validate( dummyVal, 'hello' );
 
             expect( resSuccess.success ).toBe( true );
             expect( resSuccess.data ).toBe( 'hello' );
             expect( resSuccess.errors ).toEqual([]);
 
             // Failure case with options object
-            const resFail = MetadataStore.validate( dummyVal, 'world', { mode : 'strict', from : 'query' } );
+            const resFail = validate( dummyVal, 'world', { mode : 'strict', from : 'query' } );
 
             expect( resFail.success ).toBe( false );
             expect( resFail.data ).toBeUndefined();
@@ -1323,25 +1308,25 @@ describe( 'Validators', () =>
                 return v;
             };
 
-            expect( MetadataStore.is( dummyVal, 'hello' )).toBe( true );
-            expect( MetadataStore.is( dummyVal, 'world' )).toBe( false );
+            expect( is( dummyVal, 'hello' )).toBe( true );
+            expect( is( dummyVal, 'world' )).toBe( false );
         });
 
         it( 'should reject root-level coercion on is and assertGuard; allow in-place object from', () => 
         {
-            expect( MetadataStore.is( validators.number, '42', { from : 'query' })).toBe( false );
-            expect(() => MetadataStore.assertGuard( validators.number, '42', { from : 'query' })).toThrow( /Type<number>/ );
-            expect( MetadataStore.assert( validators.number, '42', { from : 'query' })).toBe( 42 );
+            expect( is( validators.number, '42', { from : 'query' })).toBe( false );
+            expect(() => assertGuard( validators.number, '42', { from : 'query' })).toThrow( /Type<number>/ );
+            expect( assert( validators.number, '42', { from : 'query' })).toBe( 42 );
 
             const schema = 
             {
                 type       : 'object',
                 properties : { age : { type : 'number' }}
             };
-            const fn = MetadataStore.getOrCompileSchema( schema );
+            const fn = getOrCompileSchema( schema );
             const data = { age : '20' };
 
-            expect( MetadataStore.is( fn, data, { from : 'query' })).toBe( true );
+            expect( is( fn, data, { from : 'query' })).toBe( true );
             expect( data.age ).toBe( 20 );
         });
 
@@ -1352,15 +1337,15 @@ describe( 'Validators', () =>
                 type       : 'object',
                 properties : { name : { type : 'string' }}
             };
-            const fn = MetadataStore.getOrCompileSchema( schema );
+            const fn = getOrCompileSchema( schema );
             const a = { name : 'A', extra : 1 };
             const b = { name : 'B', extra : 2 };
 
-            expect( MetadataStore.is( fn, a, 'strip' )).toBe( true );
+            expect( is( fn, a, 'strip' )).toBe( true );
             expect( a ).toEqual({ name : 'A' });
             expect( a ).not.toHaveProperty( 'extra' );
 
-            MetadataStore.assertGuard( fn, b, 'strip' );
+            assertGuard( fn, b, 'strip' );
             expect( b ).toEqual({ name : 'B' });
             expect( b ).not.toHaveProperty( 'extra' );
         });
@@ -1381,7 +1366,7 @@ describe( 'Validators', () =>
             };
 
             const iso = '2024-01-15T12:00:00.000Z';
-            const revived = MetadataStore.assert( validators.date, { $date : iso }, { from });
+            const revived = assert( validators.date, { $date : iso }, { from });
             expect( revived ).toBeInstanceOf( Date );
             expect( revived.toISOString()).toBe( iso );
             expect( calls ).toEqual([{
@@ -1394,7 +1379,7 @@ describe( 'Validators', () =>
 
             calls.length = 0;
             const already = new Date( iso );
-            expect( MetadataStore.assert( validators.date, already, { from })).toBe( already );
+            expect( assert( validators.date, already, { from })).toBe( already );
             expect( calls ).toEqual([]);
         });
 
@@ -1408,12 +1393,12 @@ describe( 'Validators', () =>
                 return v;
             };
 
-            expect(() => MetadataStore.assert( dummyVal, 'value' )).toThrow( 'Validation Error: some.path: some_error' );
+            expect(() => assert( dummyVal, 'value' )).toThrow( 'Validation Error: some.path: some_error' );
         });
 
         it( 'should enforce exclusiveMinimum and exclusiveMaximum in compileSchema', () => 
         {
-            const validateFn = MetadataStore.getOrCompileSchema({
+            const validateFn = getOrCompileSchema({
                 type             : 'number',
                 exclusiveMinimum : 0,
                 exclusiveMaximum : 10
@@ -1434,7 +1419,7 @@ describe( 'Validators', () =>
 
         it( 'should compile Date and RegExp x-typescript-type schemas', () => 
         {
-            const dateFn = MetadataStore.getOrCompileSchema({ 'x-typescript-type' : 'Date' });
+            const dateFn = getOrCompileSchema({ 'x-typescript-type' : 'Date' });
             const dateCtx = { success : true, errors : [], mode : 'strict' as const };
             const now = new Date();
             expect( dateFn( now, '', dateCtx )).toBe( now );
@@ -1449,7 +1434,7 @@ describe( 'Validators', () =>
             dateFn( now.toISOString(), '', strictIsoCtx );
             expect( strictIsoCtx.success ).toBe( false );
 
-            const reFn = MetadataStore.getOrCompileSchema({ 'x-typescript-type' : 'RegExp' });
+            const reFn = getOrCompileSchema({ 'x-typescript-type' : 'RegExp' });
             const reCtx = { success : true, errors : [], mode : 'strict' as const };
             const re = /abc/;
             expect( reFn( re, '', reCtx )).toBe( re );
@@ -1464,19 +1449,19 @@ describe( 'Validators', () =>
 
         it( 'should compile bigint, undefined, Set, Map via x-typescript-type', () => 
         {
-            const bigFn = MetadataStore.getOrCompileSchema({ 'x-typescript-type' : 'bigint' });
+            const bigFn = getOrCompileSchema({ 'x-typescript-type' : 'bigint' });
             const bigCtx = { success : true, errors : [], mode : 'strict' as const, from : 'json' as const };
             expect( bigFn( '42', '', bigCtx )).toBe( 42n );
             expect( bigCtx.success ).toBe( true );
 
-            const undefFn = MetadataStore.getOrCompileSchema({ 'x-typescript-type' : 'undefined' });
+            const undefFn = getOrCompileSchema({ 'x-typescript-type' : 'undefined' });
             const undefCtx = { success : true, errors : [], mode : 'strict' as const };
             expect( undefFn( undefined, '', undefCtx )).toBeUndefined();
             expect( undefCtx.success ).toBe( true );
             undefFn( null, '', undefCtx );
             expect( undefCtx.success ).toBe( false );
 
-            const setFn = MetadataStore.getOrCompileSchema({
+            const setFn = getOrCompileSchema({
                 'x-typescript-type' : 'Set',
                 items               : { type : 'number' }
             });
@@ -1485,7 +1470,7 @@ describe( 'Validators', () =>
             expect( setRes ).toBeInstanceOf( Set );
             expect( Array.from( setRes )).toEqual([1, 2]);
 
-            const mapFn = MetadataStore.getOrCompileSchema({
+            const mapFn = getOrCompileSchema({
                 'x-typescript-type' : 'Map',
                 key                 : { type : 'string' },
                 value               : { type : 'number' }
@@ -1498,7 +1483,7 @@ describe( 'Validators', () =>
 
         it( 'should honor additionalProperties schemas for Record-like objects', () => 
         {
-            const validateFn = MetadataStore.getOrCompileSchema({
+            const validateFn = getOrCompileSchema({
                 type                 : 'object',
                 additionalProperties : { type : 'number' }
             });
@@ -1514,7 +1499,7 @@ describe( 'Validators', () =>
 
         it( 'should merge allOf object schemas', () => 
         {
-            const validateFn = MetadataStore.getOrCompileSchema({
+            const validateFn = getOrCompileSchema({
                 allOf : [
                     { type : 'object', properties : { a : { type : 'string' } }, required : ['a'], additionalProperties : false },
                     { type : 'object', properties : { b : { type : 'number' } }, required : ['b'], additionalProperties : false }
