@@ -183,3 +183,71 @@ bench( 'pattern string validate', 50000, () =>
     const ctx = { success : true, errors : [], mode : 'strict' };
     validators.pattern( patternValue, 'v', ctx, pattern, 'Pattern' );
 }, patternValue );
+
+// Optional-heavy shape: 4 of 40 declared properties are actually present, which is what a wide
+// settings/patch payload looks like in practice.
+const optionalKeys = Array.from({ length : 40 }, ( _, i ) => `o${i}` );
+const sparseObject = Object.fromEntries( optionalKeys.slice( 0, 4 ).map(( key, i ) => [key, i]));
+const optionalValidator = getOrCompileSchema({
+    type                 : 'object',
+    properties           : Object.fromEntries( optionalKeys.map( key => [key, { type : 'number' }])),
+    required             : [],
+    additionalProperties : false
+});
+
+bench( 'optional-heavy object is() [4 of 40 present]', 20000, () =>
+{
+    is( optionalValidator, sparseObject );
+}, sparseObject );
+
+const numberOrUndefinedUnion = ( v, path, ctx ) =>
+    validators.union( v, path, ctx, [validators.number, validators.undefined], 'Type<number|undefined>' );
+const numberOrUndefinedFast = ( v, path, ctx ) => validators.optional( v, path, ctx, validators.number );
+
+bench( 'nullable union via union()', 100000, () =>
+{
+    const ctx = { success : true, errors : [], mode : 'strict' };
+    numberOrUndefinedUnion( 42, 'v', ctx );
+}, 42 );
+
+bench( 'nullable union via optional()', 100000, () =>
+{
+    const ctx = { success : true, errors : [], mode : 'strict' };
+    numberOrUndefinedFast( 42, 'v', ctx );
+}, 42 );
+
+// Eight tagged arms, matching the last one — the case sequential arm-trying handles worst.
+const taggedArms = Array.from({ length : 8 }, ( _, i ) =>
+{
+    const keys = ['kind', 'value'];
+
+    return ( v, path, ctx ) =>
+    {
+        const obj = validators.object( v, path, ctx, keys );
+
+        if( obj === false ){ return v }
+
+        const data = validators.objectShell( obj, ctx, true );
+        validators.props( obj, data, path, ctx, [
+            ['kind', false, ( val, p, c ) => validators.literal( val, p, c, `t${i}` )],
+            ['value', false, validators.number]
+        ]);
+
+        return data;
+    };
+});
+
+const taggedMap = new Map( taggedArms.map(( arm, i ) => [`t${i}`, arm]));
+const taggedValue = { kind : 't7', value : 1 };
+
+bench( 'discriminated union via union() [8 arms, last match]', 20000, () =>
+{
+    const ctx = { success : true, errors : [], mode : 'strict' };
+    validators.union( taggedValue, 'v', ctx, taggedArms, 'Type<Tagged>' );
+}, taggedValue );
+
+bench( 'discriminated union via taggedUnion() [8 arms]', 20000, () =>
+{
+    const ctx = { success : true, errors : [], mode : 'strict' };
+    validators.taggedUnion( taggedValue, 'v', ctx, 'kind', taggedMap, 'Type<Tagged>' );
+}, taggedValue );

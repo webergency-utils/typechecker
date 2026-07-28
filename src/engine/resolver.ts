@@ -3,7 +3,10 @@ import {
     createPrimitiveCheck,
     createLiteralCheck,
     createArrayCheck,
+    createNullableCheck,
+    createTaggedUnionCheck,
     createUnionCheck,
+    NullableKind,
     createObjectCheck,
     createDateCheck,
     createNullCheck,
@@ -18,7 +21,16 @@ import {
     createMapCheck,
     createInstanceOfCheck
 } from './generators.js';
+import { isTagKey } from './tagKeys.js';
+import {
+    ICustomFunctionScope,
+    declarationSite,
+    resolveFunctionIdentity
+} from './customFns.js';
 import { createHash } from 'crypto';
+
+/** Used when a caller builds a validator outside a source-file context; emits names verbatim. */
+const VERBATIM_SCOPE: ICustomFunctionScope = { bind : identity => identity.name, imports : []};
 
 function getStringLiteralValue( type: ts.Type ): string | undefined 
 {
@@ -76,6 +88,20 @@ function getTagPropertyValue( type: ts.Type ): any
     return val;
 }
 
+/**
+ * A `Default` tag makes an absent optional property meaningful — the validator supplies the value —
+ * so it must not be skipped. Looks through `| undefined` and intersection members alike.
+ */
+function typeHasDefaultTag( type: ts.Type, checker: ts.TypeChecker ): boolean
+{
+    if( type.isUnionOrIntersection())
+    {
+        return type.types.some( t => typeHasDefaultTag( t, checker ));
+    }
+
+    return checker.getPropertiesOfType( type ).some( p => p.getName() === '__default' );
+}
+
 function minifyTypeString( str: string ): string 
 {
     return str
@@ -103,7 +129,8 @@ function isNativeEnumType( type: ts.Type ): boolean
 function buildEnumValidator(
     type: ts.Type,
     checker: ts.TypeChecker,
-    validatorsMap: Map<string, ts.Expression>
+    validatorsMap: Map<string, ts.Expression>,
+    scope: ICustomFunctionScope
 ): ts.Expression
 {
     const symbol = type.getSymbol();
@@ -120,13 +147,13 @@ function buildEnumValidator(
             if( !declaration ){ return }
 
             const memberType = checker.getTypeOfSymbolAtLocation( member, declaration );
-            checks.push( buildValidator( memberType, checker, validatorsMap ));
+            checks.push( buildValidatorScoped( memberType, checker, validatorsMap, scope ));
         });
     }
 
     if( checks.length === 0 && type.isUnion())
     {
-        const unionChecks = ( type as ts.UnionType ).types.map( t => buildValidator( t, checker, validatorsMap ));
+        const unionChecks = ( type as ts.UnionType ).types.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ));
 
         return createUnionCheck( unionChecks, `Type<${minifyTypeString( checker.typeToString( type ))}>` );
     }
@@ -145,14 +172,15 @@ function isConstraintOnlyType( type: ts.Type, checker: ts.TypeChecker ): boolean
 {
     const props = checker.getPropertiesOfType( type );
 
-    return props.length > 0 && props.every( p => p.getName().startsWith( '__' ));
+    return props.length > 0 && props.every( p => isTagKey( p.getName()));
 }
 
 function tryMergeObjectIntersection(
     types: readonly ts.Type[],
     checker: ts.TypeChecker,
     validatorsMap: Map<string, ts.Expression>,
-    expected: string
+    expected: string,
+    scope: ICustomFunctionScope
 ): ts.Expression | undefined
 {
     const objectTypes = types.filter( t => 
@@ -170,7 +198,7 @@ function tryMergeObjectIntersection(
 
     if( others.length > 0 ){ return undefined }
 
-    const propMap = new Map<string, { name : string, isOptional : boolean, validator : ts.Expression }>();
+    const propMap = new Map<string, { name : string, isOptional : boolean, validator : ts.Expression, hasDefault : boolean }>();
     let indexValidator: ts.Expression | undefined;
 
     for( const t of objectTypes ) 
@@ -179,14 +207,14 @@ function tryMergeObjectIntersection(
 
         if( stringIndexInfo ) 
         {
-            indexValidator = buildValidator( stringIndexInfo.type, checker, validatorsMap );
+            indexValidator = buildValidatorScoped( stringIndexInfo.type, checker, validatorsMap, scope );
         }
 
         for( const prop of checker.getPropertiesOfType( t )) 
         {
             const name = prop.getName();
 
-            if( name.startsWith( '__' )){ continue }
+            if( isTagKey( name )){ continue }
 
             const declaration = prop.valueDeclaration || prop.declarations?.[0];
             const propType = declaration ? checker.getTypeOfSymbolAtLocation( prop, declaration ) : checker.getAnyType();
@@ -194,7 +222,8 @@ function tryMergeObjectIntersection(
             propMap.set( name, {
                 name,
                 isOptional : ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0,
-                validator  : buildValidator( propType, checker, validatorsMap )
+                validator  : buildValidatorScoped( propType, checker, validatorsMap, scope ),
+                hasDefault : typeHasDefaultTag( propType, checker )
             });
         }
     }
@@ -202,10 +231,136 @@ function tryMergeObjectIntersection(
     return createObjectCheck([ ...propMap.values() ], expected, indexValidator );
 }
 
+/**
+ * `T | undefined`, `T | null` and `T | null | undefined` do not need an arm-by-arm search. A null check
+ * delegating to the single remaining arm skips the union's speculative context entirely.
+ *
+ * Deliberately conservative: `boolean | undefined` arrives as `true | false | undefined` and keeps the
+ * generic union.
+ */
+function tryNullableUnion(
+    members: readonly ts.Type[],
+    checker: ts.TypeChecker,
+    validatorsMap: Map<string, ts.Expression>,
+    scope: ICustomFunctionScope
+): ts.Expression | undefined
+{
+    let hasUndefined = false;
+    let hasNull = false;
+    const rest: ts.Type[] = [];
+
+    for( const member of members )
+    {
+        const memberFlags = member.getFlags();
+
+        if( memberFlags & ts.TypeFlags.Undefined ){ hasUndefined = true }
+        else if( memberFlags & ts.TypeFlags.Null ){ hasNull = true }
+        else { rest.push( member ) }
+    }
+
+    if( rest.length !== 1 || ( !hasUndefined && !hasNull )){ return undefined }
+
+    const kind: NullableKind = hasUndefined && hasNull ? 'nullish' : ( hasUndefined ? 'optional' : 'nullable' );
+
+    return createNullableCheck( kind, buildValidatorScoped( rest[0], checker, validatorsMap, scope ));
+}
+
+/** Object-like enough to hold a discriminant: excludes arrays, tuples, callables and the built-ins. */
+function isDiscriminableObject( type: ts.Type, checker: ts.TypeChecker ): boolean
+{
+    if( !( type.getFlags() & ts.TypeFlags.Object )){ return false }
+
+    if( checker.isArrayType( type ) || checker.isTupleType( type )){ return false }
+
+    if( type.getCallSignatures().length > 0 ){ return false }
+
+    const name = type.getSymbol()?.name;
+
+    return name !== 'Date' && name !== 'Set' && name !== 'Map' && name !== 'RegExp';
+}
+
+/** The value of a type that is exactly one string or number literal — a usable discriminant. */
+function singleLiteralValue( type: ts.Type ): string | number | undefined
+{
+    if( type.isStringLiteral() || type.isNumberLiteral()){ return type.value }
+
+    return undefined;
+}
+
+/**
+ * When every arm is an object and some shared property holds a distinct literal in each, that property
+ * selects the arm in one lookup instead of the arms being tried in sequence.
+ */
+function tryTaggedUnion(
+    members: readonly ts.Type[],
+    checks: readonly ts.Expression[],
+    checker: ts.TypeChecker,
+    expected: string
+): ts.Expression | undefined
+{
+    if( members.length < 2 ){ return undefined }
+
+    const literalsByMember: Map<string, string | number>[] = [];
+
+    for( const member of members )
+    {
+        if( !isDiscriminableObject( member, checker )){ return undefined }
+
+        const literals = new Map<string, string | number>();
+
+        for( const prop of checker.getPropertiesOfType( member ))
+        {
+            const declaration = prop.valueDeclaration || prop.declarations?.[0];
+
+            if( !declaration ){ continue }
+
+            const value = singleLiteralValue( checker.getTypeOfSymbolAtLocation( prop, declaration ));
+
+            if( value !== undefined ){ literals.set( prop.getName(), value ) }
+        }
+
+        if( literals.size === 0 ){ return undefined }
+
+        literalsByMember.push( literals );
+    }
+
+    for( const key of literalsByMember[0].keys())
+    {
+        const byTag: [string | number, ts.Expression][] = [];
+        const seen = new Set<string | number>();
+
+        for( let i = 0; i < literalsByMember.length; i++ )
+        {
+            const value = literalsByMember[i].get( key );
+
+            if( value === undefined || seen.has( value )){ break }
+
+            seen.add( value );
+            byTag.push([value, checks[i]]);
+        }
+
+        if( byTag.length === members.length ){ return createTaggedUnionCheck( key, byTag, expected ) }
+    }
+
+    return undefined;
+}
+
 export function buildValidator(
     type: ts.Type,
     checker: ts.TypeChecker,
     validatorsMap: Map<string, ts.Expression>,
+    hash?: string,
+    scope: ICustomFunctionScope = VERBATIM_SCOPE
+): ts.Expression
+{
+    return buildValidatorScoped( type, checker, validatorsMap, scope, hash );
+}
+
+function buildValidatorScoped(
+    type: ts.Type,
+    checker: ts.TypeChecker,
+    validatorsMap: Map<string, ts.Expression>,
+    scope: ICustomFunctionScope,
     hash?: string
 ): ts.Expression 
 {
@@ -227,8 +382,17 @@ export function buildValidator(
 
     if( isUnion ) 
     {
-        const checks = ( type as ts.UnionType ).types.map( t => buildValidator( t, checker, validatorsMap ));
-        result = createUnionCheck( checks, `Type<${minifyTypeString( checker.typeToString( type ))}>` );
+        const members = ( type as ts.UnionType ).types;
+        const expected = `Type<${minifyTypeString( checker.typeToString( type ))}>`;
+        const nullable = tryNullableUnion( members, checker, validatorsMap, scope );
+
+        if( nullable ){ result = nullable }
+        else
+        {
+            const checks = members.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ));
+
+            result = tryTaggedUnion( members, checks, checker, expected ) || createUnionCheck( checks, expected );
+        }
     }
     else if( isIntersection ) 
     {
@@ -270,7 +434,7 @@ export function buildValidator(
             {
                 const pName = prop.getName();
 
-                if( pName.startsWith( '__' )) 
+                if( isTagKey( pName )) 
                 {
                     const pType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0]);
                     const actualType = stripUndefinedFromType( pType );
@@ -314,80 +478,20 @@ export function buildValidator(
                     }
                     else if( pName === '__transform_custom' ) 
                     {
-                        let fnName: string | undefined;
-                        const symbol = actualType.getSymbol() || actualType.aliasSymbol || pType.getSymbol() || pType.aliasSymbol;
+                        const identity = resolveFunctionIdentity( actualType, checker, pType );
 
-                        if( symbol ) 
-                        {
-                            fnName = symbol.getName();
-                            let dec = symbol.valueDeclaration || symbol.declarations?.[0];
-
-                            if( fnName === '__function' && dec ) 
-                            {
-                                let current: ts.Node | undefined = dec;
-
-                                while( current ) 
-                                {
-                                    if( ts.isVariableDeclaration( current ) && ts.isIdentifier( current.name )) 
-                                    {
-                                        fnName = current.name.text;
-                                        dec = current;
-                                        break;
-                                    }
-                                    current = current.parent;
-                                }
-                            }
-                        }
-                        else 
-                        {
-                            const str = checker.typeToString( actualType );
-                            const match = str.match( /typeof\s+([a-zA-Z0-9_]+)/ );
-
-                            if( match ) { fnName = match[1] }
-                        }
-
-                        if( fnName === '__function' || !fnName ) 
+                        if( !identity ) 
                         {
                             throw new Error( '[Webergency] Custom transform must reference a named function via typeof (e.g. transform.Custom<typeof myFunc>).' );
                         }
 
-                        constraints.push({ type : 'transform_custom', value : fnName });
+                        constraints.push({ type : 'transform_custom', value : scope.bind( identity ) });
                     }
                     else if( pName === '__custom' ) 
                     {
-                        let fnName: string | undefined;
-                        const symbol = actualType.getSymbol() || actualType.aliasSymbol || pType.getSymbol() || pType.aliasSymbol;
+                        const identity = resolveFunctionIdentity( actualType, checker, pType );
 
-                        if( symbol ) 
-                        {
-                            fnName = symbol.getName();
-                            let dec = symbol.valueDeclaration || symbol.declarations?.[0];
-
-                            if( fnName === '__function' && dec ) 
-                            {
-                                let current: ts.Node | undefined = dec;
-
-                                while( current ) 
-                                {
-                                    if( ts.isVariableDeclaration( current ) && ts.isIdentifier( current.name )) 
-                                    {
-                                        fnName = current.name.text;
-                                        dec = current;
-                                        break;
-                                    }
-                                    current = current.parent;
-                                }
-                            }
-                        }
-                        else 
-                        {
-                            const str = checker.typeToString( actualType );
-                            const match = str.match( /typeof\s+([a-zA-Z0-9_]+)/ );
-
-                            if( match ) { fnName = match[1] }
-                        }
-
-                        if( fnName === '__function' || !fnName ) 
+                        if( !identity ) 
                         {
                             throw new Error( '[Webergency] Custom validator must reference a named function via typeof (e.g. constraint.Custom<typeof myFunc>).' );
                         }
@@ -400,7 +504,7 @@ export function buildValidator(
                             const msgType = checker.getTypeOfSymbolAtLocation( msgProp, msgProp.valueDeclaration || ( msgProp as any ).declarations?.[0]);
                             constraintMsg = getStringLiteralValue( msgType );
                         }
-                        constraints.push({ type : 'custom', value : fnName, message : constraintMsg });
+                        constraints.push({ type : 'custom', value : scope.bind( identity ), message : constraintMsg });
                     }
                     else if( val !== undefined ) 
                     {
@@ -468,12 +572,12 @@ export function buildValidator(
             {
                 if( baseName === 'array' && baseType ) 
                 {
-                    const baseValidator = buildValidator( baseType, checker, validatorsMap );
+                    const baseValidator = buildValidatorScoped( baseType, checker, validatorsMap, scope );
                     result = createConstrainedPrimitiveCheck( baseName, constraints, baseValidator );
                 }
                 else if( baseType && ( baseType.getFlags() & ts.TypeFlags.TemplateLiteral )) 
                 {
-                    const baseValidator = buildValidator( baseType, checker, validatorsMap );
+                    const baseValidator = buildValidatorScoped( baseType, checker, validatorsMap, scope );
                     result = createConstrainedPrimitiveCheck( baseName, constraints, baseValidator );
                 }
                 else 
@@ -487,14 +591,14 @@ export function buildValidator(
                 {
                     const props = checker.getPropertiesOfType( t );
 
-                    return !props.some( p => p.getName().startsWith( '__' ));
+                    return !props.some( p => isTagKey( p.getName()));
                 });
 
                 let baseValidator: ts.Expression | undefined;
 
                 if( nonConstraintTypes.length === 1 ) 
                 {
-                    baseValidator = buildValidator( nonConstraintTypes[0], checker, validatorsMap );
+                    baseValidator = buildValidatorScoped( nonConstraintTypes[0], checker, validatorsMap, scope );
                 }
                 else if( nonConstraintTypes.length > 1 ) 
                 {
@@ -502,10 +606,11 @@ export function buildValidator(
                         nonConstraintTypes,
                         checker,
                         validatorsMap,
-                        minifyTypeString( checker.typeToString( type ))
+                        minifyTypeString( checker.typeToString( type )),
+                        scope
                     );
                     baseValidator = merged || createIntersectionCheck(
-                        nonConstraintTypes.map( t => buildValidator( t, checker, validatorsMap ))
+                        nonConstraintTypes.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ))
                     );
                 }
 
@@ -519,10 +624,11 @@ export function buildValidator(
                         types,
                         checker,
                         validatorsMap,
-                        minifyTypeString( checker.typeToString( type ))
+                        minifyTypeString( checker.typeToString( type )),
+                        scope
                     );
                     result = merged || createIntersectionCheck(
-                        ( type as ts.IntersectionType ).types.map( t => buildValidator( t, checker, validatorsMap ))
+                        ( type as ts.IntersectionType ).types.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ))
                     );
                 }
             }
@@ -533,7 +639,8 @@ export function buildValidator(
                 types,
                 checker,
                 validatorsMap,
-                minifyTypeString( checker.typeToString( type ))
+                minifyTypeString( checker.typeToString( type )),
+                scope
             );
 
             if( merged ) 
@@ -542,7 +649,7 @@ export function buildValidator(
             }
             else 
             {
-                const checks = ( type as ts.IntersectionType ).types.map( t => buildValidator( t, checker, validatorsMap ));
+                const checks = ( type as ts.IntersectionType ).types.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ));
                 result = createIntersectionCheck( checks );
             }
         }
@@ -558,15 +665,15 @@ export function buildValidator(
     else if( type.getSymbol()?.name === 'Set' ) 
     {
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
-        result = createSetCheck( buildValidator( elementType, checker, validatorsMap ) );
+        result = createSetCheck( buildValidatorScoped( elementType, checker, validatorsMap, scope ) );
     }
     else if( type.getSymbol()?.name === 'Map' ) 
     {
         const keyType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
         const valueType = ( type as ts.TypeReference ).typeArguments?.[1] || checker.getAnyType();
         result = createMapCheck(
-            buildValidator( keyType, checker, validatorsMap ),
-            buildValidator( valueType, checker, validatorsMap )
+            buildValidatorScoped( keyType, checker, validatorsMap, scope ),
+            buildValidatorScoped( valueType, checker, validatorsMap, scope )
         );
     }
     else if( type.getSymbol()?.name === 'Promise' ) 
@@ -655,12 +762,12 @@ export function buildValidator(
     else if( checker.isTupleType( type )) 
     {
         const typeArgs = ( type as ts.TupleTypeReference ).typeArguments || [];
-        result = createTupleCheck( typeArgs.map( t => buildValidator( t, checker, validatorsMap )) );
+        result = createTupleCheck( typeArgs.map( t => buildValidatorScoped( t, checker, validatorsMap, scope )) );
     }
     else if( checker.isArrayType( type )) 
     {
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
-        result = createArrayCheck( buildValidator( elementType, checker, validatorsMap ) );
+        result = createArrayCheck( buildValidatorScoped( elementType, checker, validatorsMap, scope ) );
     }
     else if( type.getCallSignatures().length > 0 && type.getConstructSignatures().length === 0 ) 
     {
@@ -668,7 +775,7 @@ export function buildValidator(
     }
     else if( isNativeEnumType( type )) 
     {
-        result = buildEnumValidator( type, checker, validatorsMap );
+        result = buildEnumValidator( type, checker, validatorsMap, scope );
     }
     else 
     {
@@ -681,19 +788,20 @@ export function buildValidator(
             return {
                 name       : prop.getName(),
                 isOptional : ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0,
-                validator  : buildValidator( propType, checker, validatorsMap )
+                validator  : buildValidatorScoped( propType, checker, validatorsMap, scope ),
+                hasDefault : typeHasDefaultTag( propType, checker )
             };
         });
 
         if( stringIndexInfo && props.length === 0 ) 
         {
-            result = createRecordCheck( buildValidator( stringIndexInfo.type, checker, validatorsMap ) );
+            result = createRecordCheck( buildValidatorScoped( stringIndexInfo.type, checker, validatorsMap, scope ) );
         }
         else if( flags & ts.TypeFlags.Object || type.isClassOrInterface() || type.isTypeParameter() || stringIndexInfo ) 
         {
             const typeName = checker.typeToString( type );
             const indexValidator = stringIndexInfo
-                ? buildValidator( stringIndexInfo.type, checker, validatorsMap )
+                ? buildValidatorScoped( stringIndexInfo.type, checker, validatorsMap, scope )
                 : undefined;
             result = createObjectCheck( props, typeName, indexValidator );
         }
@@ -709,14 +817,42 @@ export function buildValidator(
     return ts.factory.createIdentifier( `__val_${resolvedHash}` );
 }
 
-function buildStructuralSignature( type: ts.Type, checker: ts.TypeChecker, visited: Set<number> = new Set()): string 
+const signatureByType = new WeakMap<object, string>();
+
+function buildStructuralSignature( type: ts.Type, checker: ts.TypeChecker, visited: Set<number> = new Set()): string
 {
-    const flags = type.getFlags();
     const typeId = ( type as any ).id;
 
     if( typeId && visited.has( typeId )) { return `[Circular:${typeId}]` }
 
-    if( typeId ) { visited.add( typeId ) }
+    const memo = signatureByType.get( type as object );
+
+    if( memo !== undefined ){ return memo }
+
+    if( !typeId ){ return signatureOf( type, checker, visited ) }
+
+    visited.add( typeId );
+
+    try
+    {
+        const signature = signatureOf( type, checker, visited );
+
+        // A circular marker is only meaningful relative to the ancestors that were on the stack when it
+        // was produced, so such a signature cannot be reused elsewhere.
+        if( !signature.includes( '[Circular:' )){ signatureByType.set( type as object, signature ) }
+
+        return signature;
+    }
+    finally
+    {
+        // Unwind, so a type appearing as two siblings is not mistaken for a cycle on the second visit.
+        visited.delete( typeId );
+    }
+}
+
+function signatureOf( type: ts.Type, checker: ts.TypeChecker, visited: Set<number> ): string 
+{
+    const flags = type.getFlags();
 
     if(( flags & ts.TypeFlags.Union ) && ( type as any ).types ) 
     {
@@ -756,7 +892,16 @@ function buildStructuralSignature( type: ts.Type, checker: ts.TypeChecker, visit
 
     if( flags & ts.TypeFlags.ESSymbol || flags & ts.TypeFlags.UniqueESSymbol || ( type as any ).intrinsicName === 'symbol' ) { return 'symbol' }
 
-    if( type.getCallSignatures().length > 0 && type.getConstructSignatures().length === 0 ){ return 'function' }
+    if( type.getCallSignatures().length > 0 && type.getConstructSignatures().length === 0 )
+    {
+        // `Custom<typeof isEven>` and `Custom<typeof isOdd>` are structurally identical, so without the
+        // binding they compile to one shared validator that calls whichever function was seen first.
+        const identity = resolveFunctionIdentity( type, checker );
+
+        if( !identity ){ return 'function' }
+
+        return `function<${identity.name}${declarationSite( identity.declaration )}>`;
+    }
 
     if( isNativeEnumType( type ))
     {
@@ -904,73 +1049,104 @@ export function objectToAst( val: any ): ts.Expression
     return ts.factory.createIdentifier( 'undefined' );
 }
 
+interface IComplexityWalk
+{
+    visited      : Set<number>
+    /** Counted rather than flagged, so one cyclic subtree does not block caching of later siblings. */
+    circularHits : number
+}
+
+const complexityByType = new WeakMap<object, number>();
+
 export function getTypeComplexity(
     type: ts.Type,
     checker: ts.TypeChecker,
     visited: Set<number>
 ): number 
 {
+    return complexityOf( type, checker, { visited, circularHits : 0 });
+}
+
+function complexityOf( type: ts.Type, checker: ts.TypeChecker, walk: IComplexityWalk ): number
+{
     const typeId = ( type as any ).id;
 
-    if( typeId ) 
+    if( typeId && walk.visited.has( typeId )) 
     {
-        if( visited.has( typeId )) { return 1 }
-        visited.add( typeId );
+        walk.circularHits++;
+
+        return 1;
     }
 
-    const flags = type.getFlags();
-    let complexity = 1;
+    const memo = complexityByType.get( type as object );
 
-    const isUnion = ((( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion()) && ( type as any ).types ) ? true : false;
-    const isIntersection = ((( flags & ts.TypeFlags.Intersection ) !== 0 || type.isIntersection()) && ( type as any ).types ) ? true : false;
+    if( memo !== undefined ){ return memo }
 
-    if( isUnion ) 
+    if( typeId ) { walk.visited.add( typeId ) }
+
+    const hits = walk.circularHits;
+
+    try
     {
-        for( const t of ( type as ts.UnionType ).types ) 
+        const flags = type.getFlags();
+        let complexity = 1;
+
+        const isUnion = ((( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion()) && ( type as any ).types ) ? true : false;
+        const isIntersection = ((( flags & ts.TypeFlags.Intersection ) !== 0 || type.isIntersection()) && ( type as any ).types ) ? true : false;
+
+        if( isUnion ) 
         {
-            complexity += getTypeComplexity( t, checker, visited );
-        }
-    }
-    else if( isIntersection ) 
-    {
-        for( const t of ( type as ts.IntersectionType ).types ) 
-        {
-            complexity += getTypeComplexity( t, checker, visited );
-        }
-    }
-    else if( checker.isArrayType( type )) 
-    {
-        const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
-        complexity += getTypeComplexity( elementType, checker, visited );
-    }
-    else if( checker.isTupleType( type )) 
-    {
-        const elementTypes = ( type as ts.TypeReference ).typeArguments || [];
-
-        for( const t of elementTypes ) 
-        {
-            complexity += getTypeComplexity( t, checker, visited );
-        }
-    }
-    else if( flags & ts.TypeFlags.Object || type.isClassOrInterface()) 
-    {
-        const name = type.getSymbol()?.name;
-
-        if( name !== 'Date' && name !== 'Set' && name !== 'Map' && name !== 'RegExp' ) 
-        {
-            const props = checker.getPropertiesOfType( type );
-
-            for( const prop of props ) 
+            for( const t of ( type as ts.UnionType ).types ) 
             {
-                const propType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0]);
-                complexity += getTypeComplexity( propType, checker, visited );
+                complexity += complexityOf( t, checker, walk );
             }
         }
+        else if( isIntersection ) 
+        {
+            for( const t of ( type as ts.IntersectionType ).types ) 
+            {
+                complexity += complexityOf( t, checker, walk );
+            }
+        }
+        else if( checker.isArrayType( type )) 
+        {
+            const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
+            complexity += complexityOf( elementType, checker, walk );
+        }
+        else if( checker.isTupleType( type )) 
+        {
+            const elementTypes = ( type as ts.TypeReference ).typeArguments || [];
+
+            for( const t of elementTypes ) 
+            {
+                complexity += complexityOf( t, checker, walk );
+            }
+        }
+        else if( flags & ts.TypeFlags.Object || type.isClassOrInterface()) 
+        {
+            const name = type.getSymbol()?.name;
+
+            if( name !== 'Date' && name !== 'Set' && name !== 'Map' && name !== 'RegExp' ) 
+            {
+                const props = checker.getPropertiesOfType( type );
+
+                for( const prop of props ) 
+                {
+                    const propType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0]);
+                    complexity += complexityOf( propType, checker, walk );
+                }
+            }
+        }
+
+        // Only an acyclic subtree has a complexity independent of the path that reached it.
+        if( typeId && walk.circularHits === hits ) { complexityByType.set( type as object, complexity ) }
+
+        return complexity;
     }
-
-    if( typeId ) { visited.delete( typeId ) }
-
-    return complexity;
+    finally
+    {
+        if( typeId ) { walk.visited.delete( typeId ) }
+    }
 }
 
 export function preScanType(
@@ -1131,7 +1307,7 @@ function buildJsonSchemaInternal(
         {
             const sFlags = sub.getFlags();
             const subProps = checker.getPropertiesOfType( sub );
-            const isConstraintPhantom = subProps.length > 0 && subProps.every( p => p.getName().startsWith( '__' ));
+            const isConstraintPhantom = subProps.length > 0 && subProps.every( p => isTagKey( p.getName()));
 
             if( isConstraintPhantom ) 
             {

@@ -10,7 +10,9 @@ const filesToUpdate =
     { file : 'dist/engine/hoister.js', relativePath : '../ts.js' },
     { file : 'dist/engine/hoister.d.ts', relativePath : '../ts.js' },
     { file : 'dist/engine/generators.js', relativePath : '../ts.js' },
-    { file : 'dist/engine/generators.d.ts', relativePath : '../ts.js' }
+    { file : 'dist/engine/generators.d.ts', relativePath : '../ts.js' },
+    { file : 'dist/engine/customFns.js', relativePath : '../ts.js' },
+    { file : 'dist/engine/customFns.d.ts', relativePath : '../ts.js' }
 ];
 
 for( const { file, relativePath } of filesToUpdate )

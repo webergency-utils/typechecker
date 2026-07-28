@@ -1,4 +1,5 @@
 import ts from 'typescript';
+import type { ICustomFunctionImport } from './customFns.js';
 
 const RUNTIME_NS = '__tcRuntime';
 const RUNTIME_MODULE = '@webergency-utils/typechecker/runtime';
@@ -29,7 +30,8 @@ export function hoistEmitLocals(
     sourceFile: ts.SourceFile,
     cache: Map<string, ts.Expression>,
     schemasMap?: Map<string, ts.Expression>,
-    emitNames?: IEmitNames
+    emitNames?: IEmitNames,
+    customImports?: readonly ICustomFunctionImport[]
 )
 {
     const hasSchemas = !!( schemasMap && schemasMap.size > 0 );
@@ -67,6 +69,11 @@ export function hoistEmitLocals(
                 )
             )
         );
+    }
+
+    for( const custom of customImports || [])
+    {
+        importStatements.push( customFunctionImport( custom ));
     }
 
     for( const [hash, expr] of cache.entries())
@@ -110,6 +117,32 @@ export function hoistEmitLocals(
             ...localStatements,
             ...rest
         ]);
+}
+
+
+/**
+ * Synthesized imports survive TypeScript's emit, unlike the user's own `typeof`-only import, so the
+ * custom function is re-imported here under the name the generated validator calls.
+ */
+function customFunctionImport( custom: ICustomFunctionImport ): ts.Statement
+{
+    const local = ts.factory.createIdentifier( custom.localName );
+    const clause = custom.importedName === 'default'
+        ? ts.factory.createImportClause( false, local, undefined )
+        : ts.factory.createImportClause( false, undefined, ts.factory.createNamedImports([
+            ts.factory.createImportSpecifier(
+                false,
+                ts.factory.createIdentifier( custom.importedName ),
+                local
+            )
+        ]));
+
+    return ts.factory.createImportDeclaration(
+        undefined,
+        clause,
+        ts.factory.createStringLiteral( custom.module ),
+        undefined
+    );
 }
 
 
@@ -196,7 +229,7 @@ function collectAllBindingNames( sourceFile: ts.SourceFile ): Set<string>
 }
 
 
-function collectBindingNames( statements: readonly ts.Statement[]): Set<string>
+export function collectBindingNames( statements: readonly ts.Statement[]): Set<string>
 {
     const names = new Set<string>();
 

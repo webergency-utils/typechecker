@@ -172,6 +172,45 @@ describe( 'Error Reporting Unit Tests', () =>
             expect( issues[1]).toEqual( expectedSecond );
         });
 
+        it( 'should keep a numeric-looking object key as a string', () =>
+        {
+            // Arrange: a record key of "0" is an object key, not an array index.
+            const errors = [{ path : 'counts.0', error : 'Type<number>', value : 'abc' }];
+
+            // Act
+            const issues = toZodIssues( errors );
+
+            // Assert
+            expect( issues[0].path ).toEqual(['counts', '0']);
+        });
+
+        it( 'should keep a bracketed map key as one segment', () =>
+        {
+            // Arrange
+            const errors = [{ path : 'm[some-key]', error : 'Type<number>', value : 'abc' }];
+
+            // Act
+            const issues = toZodIssues( errors );
+
+            // Assert
+            expect( issues[0].path ).toEqual(['m', 'some-key']);
+        });
+
+        it( 'should report unquoted map key and value paths', () =>
+        {
+            // Arrange
+            const ctx = createCtx( 'strict' );
+            const map = new Map<any, any>([['a', 'not-a-number']]);
+
+            // Act
+            validators.map( map, 'm', ctx, validators.string, validators.number );
+
+            // Assert
+            expect( ctx.success ).toBe( false );
+            expect( ctx.errors[0].path ).toBe( 'm[a]' );
+            expect( toZodIssues( ctx.errors )[0].path ).toEqual(['m', 'a']);
+        });
+
         it( 'should construct ZodLikeError with zod-like issues', () => 
         {
             // Arrange

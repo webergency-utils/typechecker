@@ -1,4 +1,5 @@
 import ts from 'typescript';
+import { TagName, tagKey } from './tagKeys.js';
 
 export interface IStaticConstraint
 {
@@ -7,19 +8,17 @@ export interface IStaticConstraint
     message? : string
 }
 
-const CONSTRAINT_KEYS: Record<string, string> =
-{
-    __minLength        : 'minLength',
-    __maxLength        : 'maxLength',
-    __minimum          : 'minimum',
-    __maximum          : 'maximum',
-    __exclusiveMinimum : 'exclusiveMinimum',
-    __exclusiveMaximum : 'exclusiveMaximum',
-    __multipleOf       : 'multipleOf',
-    __minItems         : 'minItems',
-    __maxItems         : 'maxItems',
-    __uniqueItems      : 'uniqueItems'
-};
+/** The subset of tags whose satisfaction can be decided from a literal at compile time. */
+const STATICALLY_CHECKED: readonly TagName[] =
+[
+    'minLength', 'maxLength',
+    'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf',
+    'minItems', 'maxItems', 'uniqueItems'
+];
+
+const CONSTRAINT_KEYS: ReadonlyMap<string, TagName> = new Map(
+    STATICALLY_CHECKED.map(( name ): [string, TagName] => [tagKey( name ), name])
+);
 
 function stripUndefined( type: ts.Type ): ts.Type
 {
@@ -86,7 +85,7 @@ export function extractStaticConstraints( type: ts.Type, checker: ts.TypeChecker
         for( const prop of props )
         {
             const pName = prop.getName();
-            const mapped = CONSTRAINT_KEYS[pName];
+            const mapped = CONSTRAINT_KEYS.get( pName );
 
             if( !mapped ){ continue }
 

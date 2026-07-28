@@ -1183,11 +1183,16 @@ export const validators = {
         return data;
     },
 
-    props : ( v: any, data: any, path: string, ctx: ValidationContext, props: [string, boolean, Function][]) => 
+    props : ( v: any, data: any, path: string, ctx: ValidationContext, props: [string, boolean, Function, boolean?][]) => 
     {
-        for( const [key, isOptional, validator] of props ) 
+        for( const [key, isOptional, validator, hasDefault] of props ) 
         {
             const val = v[key];
+
+            // An absent optional property stays absent. Running its `T | undefined` validator would cost
+            // a union attempt and then write the key back as an explicit `undefined`.
+            if( isOptional && val === undefined && !hasDefault ){ continue }
+
             const oldErrors = ctx.errors.length;
             const wasSuccess = ctx.success;
             const result = validator( val, path + '.' + key, ctx );
@@ -1204,13 +1209,17 @@ export const validators = {
         }
     },
 
-    objectShell : ( v: any, ctx: ValidationContext ) => 
+    objectShell : ( v: any, ctx: ValidationContext, closed?: boolean ) => 
     {
         if( shouldMutate( ctx )) { return v }
 
         if( !isPlainObject( v )) { return v }
 
         if( ctx.mode === 'strip' ) { return {} }
+
+        // A closed shape writes back every key it keeps, so copying the input first is wasted work.
+        // Only `relaxed` needs the copy, being the one mode where an unknown key is kept as-is.
+        if( closed && ctx.mode !== 'relaxed' ) { return {} }
 
         return { ...v };
     },
@@ -1379,7 +1388,8 @@ export const validators = {
         {
             case 'email': isValid = isEmail( v ); break;
             case 'idn-email': isValid = isIdnEmail( v ); break;
-            case 'uuid': regex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i; break;
+            // Versions 1-8 plus the nil UUID; a version nibble of 1-5 rejects v6 and v7.
+            case 'uuid': regex = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|00000000-0000-0000-0000-000000000000)$/i; break;
             case 'url': regex = /^(?:https?|ftp):\/\/[^\s/$.?#].[^\s]*$/i; break;
             case 'ipv4': regex = /^(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/; break;
             case 'ipv6': regex = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$/; break;
@@ -1411,7 +1421,7 @@ export const validators = {
             case 'iri': isValid = isIri( v ); break;
             case 'iri-reference': isValid = isIriReference( v ); break;
             case 'uri-template': isValid = isUriTemplate( v ); break;
-            case 'time': regex = /^\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[zZ]|[+-]\d{2}:\d{2})$/; break;
+            case 'time': regex = /^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:[zZ]|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/; break;
             case 'duration': regex = /^P(?!$)(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+S)?)?$/; break;
             case 'objectId': regex = /^[0-9a-fA-F]{24}$/; break;
             default: isValid = false; break;
@@ -1677,6 +1687,52 @@ export const validators = {
         return v;
     },
 
+
+    /**
+     * `T | undefined`. With one real arm there is nothing to search, so the value goes straight to it
+     * with the caller's own context — no speculative sub-context, no rolled-back error list, and the
+     * failure is reported as the inner type rather than as a union summary.
+     */
+    optional : ( v: any, path: string, ctx: ValidationContext, inner: Function ) =>
+    {
+        if( v === undefined ){ return v }
+
+        return inner( v, path, ctx );
+    },
+
+    /** `T | null`. See `optional`. */
+    nullable : ( v: any, path: string, ctx: ValidationContext, inner: Function ) =>
+    {
+        if( v === null ){ return v }
+
+        return inner( v, path, ctx );
+    },
+
+    /** `T | null | undefined`. See `optional`. */
+    nullish : ( v: any, path: string, ctx: ValidationContext, inner: Function ) =>
+    {
+        if( v === undefined || v === null ){ return v }
+
+        return inner( v, path, ctx );
+    },
+
+    /**
+     * A union whose arms are objects carrying distinct literal values at `key`. The tag picks the arm in
+     * one lookup, and since the tags are distinct that arm is the only one that could match — its errors
+     * are reported directly. Anything the tag cannot resolve (a non-object, an unknown or not-yet-coerced
+     * tag) goes back through `union`, which is what would have run anyway.
+     */
+    taggedUnion : ( v: any, path: string, ctx: ValidationContext, key: string, byTag: Map<any, Function>, expected: string = 'Type<Union>' ) =>
+    {
+        if( isPlainObject( v ))
+        {
+            const check = byTag.get( v[key]);
+
+            if( check ){ return check( v, path, ctx ) }
+        }
+
+        return validators.union( v, path, ctx, [ ...byTag.values() ], expected );
+    },
 
     union : ( v: any, path: string, ctx: ValidationContext, checks: Function[], expected: string = 'Type<Union>' ) => 
     {
@@ -1980,8 +2036,8 @@ export const validators = {
 
             for( const [key, val] of source )
             {
-                const validatedKey = keyValidator( key, `${path}.key(${JSON.stringify( key )})`, ctx );
-                const validatedVal = valueValidator( val, `${path}[${JSON.stringify( key )}]`, ctx );
+                const validatedKey = keyValidator( key, `${path}.key(${key})`, ctx );
+                const validatedVal = valueValidator( val, `${path}[${key}]`, ctx );
                 v.set( validatedKey, validatedVal );
             }
 
@@ -1992,8 +2048,8 @@ export const validators = {
 
         for( const [key, val] of source )
         {
-            const validatedKey = keyValidator( key, `${path}.key(${JSON.stringify( key )})`, ctx );
-            const validatedVal = valueValidator( val, `${path}[${JSON.stringify( key )}]`, ctx );
+            const validatedKey = keyValidator( key, `${path}.key(${key})`, ctx );
+            const validatedVal = valueValidator( val, `${path}[${key}]`, ctx );
             data.set( validatedKey, validatedVal );
         }
 
@@ -2680,13 +2736,16 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
                 : false;
             const strictKeys = additional === false ? knownKeys : undefined;
             const additionalCheck = additional && typeof additional === 'object' ? build( additional ) : undefined;
+            // `additionalProperties: true` keeps unknown keys without validating them, so only then does
+            // the shell have to carry them over.
+            const closedShape = additional === false || !!additionalCheck;
 
             return ( v, path, ctx ) => 
             {
                 const obj = validators.object( v, path, ctx, strictKeys, 'Object' );
 
                 if( obj === false ){ return v }
-                const data = validators.objectShell( obj, ctx );
+                const data = validators.objectShell( obj, ctx, closedShape );
                 validators.props( obj, data, path, ctx, propVals );
 
                 if( additionalCheck ) 
@@ -2723,6 +2782,23 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
     return build( schema );
 }
 
+/**
+ * Array indices become numbers, the way Zod reports them. Every other segment stays a string, so an
+ * object key that merely looks numeric is not turned into an index, and a key containing a bracket
+ * survives as one segment instead of being split apart.
+ */
+function zodPathSegments( path: string ): ( string | number )[]
+{
+    return tokenizePath( path ).map( segment =>
+    {
+        if( !isIndexSegment( segment )){ return segment }
+
+        const inner = segment.slice( 1, -1 );
+
+        return /^\d+$/.test( inner ) ? Number( inner ) : inner;
+    });
+}
+
 export function toZodIssues( errors: IValidationError[])
 {
     const issues: any[] = [];
@@ -2731,19 +2807,9 @@ export function toZodIssues( errors: IValidationError[])
     {
         for( const err of list ) 
         {
-            const zodPath = err.path
-                .split( /\.|\[|\]/ )
-                .filter( Boolean )
-                .map(( segment ) => 
-                {
-                    if( isNaN( Number( segment ))){ return segment }
-
-                    return Number( segment );
-                });
-
             issues.push({
                 code     : 'custom',
-                path     : zodPath,
+                path     : zodPathSegments( err.path ),
                 message  : err.error,
                 received : err.value
             });

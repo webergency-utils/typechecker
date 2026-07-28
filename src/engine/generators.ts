@@ -253,6 +253,43 @@ export function createTemplateLiteralCheck( regexStr: string, expected: string )
     return stripPositions( templateToAst( tpl ));
 }
 
+export type NullableKind = 'optional' | 'nullable' | 'nullish';
+
+export function createTaggedUnionCheck(
+    key: string,
+    byTag: [string | number, ts.Expression][],
+    expected: string
+): ts.Expression
+{
+    const entries = byTag.map(([value, check]) => ts.factory.createArrayLiteralExpression([
+        typeof value === 'number'
+            ? ts.factory.createNumericLiteral( value.toString())
+            : ts.factory.createStringLiteral( value ),
+        check
+    ]));
+
+    // The lookup table is bound by an immediately applied arrow so it is built once at module load
+    // rather than on every validation.
+    const tpl = '((byTag) => (v, path, ctx) => validators.taggedUnion(v, path, ctx, __KEY__, byTag, __EXPECTED__))(__BY_TAG__)';
+
+    return injectNodes( templateToAst( tpl ), {
+        '__KEY__'      : ts.factory.createStringLiteral( key ),
+        '__EXPECTED__' : ts.factory.createStringLiteral( expected ),
+        '__BY_TAG__'   : ts.factory.createNewExpression(
+            ts.factory.createIdentifier( 'Map' ),
+            undefined,
+            [ts.factory.createArrayLiteralExpression( entries, true )]
+        )
+    });
+}
+
+export function createNullableCheck( kind: NullableKind, inner: ts.Expression ): ts.Expression
+{
+    const tpl = `(v, path, ctx) => validators.${kind}(v, path, ctx, __INNER__)`;
+
+    return injectNodes( templateToAst( tpl ), { '__INNER__' : inner });
+}
+
 export function createUnionCheck( checks: ts.Expression[], expected: string = 'Type<Union>' ): ts.Expression 
 {
     return ts.factory.createArrowFunction(
@@ -282,12 +319,19 @@ export function createUnionCheck( checks: ts.Expression[], expected: string = 'T
 export function createObjectCheck( props: any[], expected: string = 'object', indexValidator?: ts.Expression ): ts.Expression 
 {
     const propDefinitions = props.map(( p ) => 
-        ts.factory.createArrayLiteralExpression([
+    {
+        const parts: ts.Expression[] =
+        [
             ts.factory.createStringLiteral( p.name ),
             p.isOptional ? ts.factory.createTrue() : ts.factory.createFalse(),
             p.validator
-        ])
-    );
+        ];
+
+        // Only carried when set: an absent optional property is skipped unless a default fills it in.
+        if( p.hasDefault ){ parts.push( ts.factory.createTrue()) }
+
+        return ts.factory.createArrayLiteralExpression( parts );
+    });
 
     const allowedKeys = props.map( p => ts.factory.createStringLiteral( p.name ));
     const allowedKeySet = ts.factory.createNewExpression(
@@ -302,7 +346,7 @@ export function createObjectCheck( props: any[], expected: string = 'object', in
         (v, path, ctx) => {
             const obj = validators.object(v, path, ctx, undefined, __EXPECTED__);
             if (obj === false) return v;
-            const data = validators.objectShell(obj, ctx);
+            const data = validators.objectShell(obj, ctx, true);
             validators.props(obj, data, path, ctx, __PROPS__);
             validators.additionalProps(obj, data, path, ctx, __KEYS__, __INDEX__);
             return data;
@@ -321,7 +365,7 @@ export function createObjectCheck( props: any[], expected: string = 'object', in
     (v, path, ctx) => {
         const obj = validators.object(v, path, ctx, __KEYS__, __EXPECTED__);
         if (obj === false) return v;
-        const data = validators.objectShell(obj, ctx);
+        const data = validators.objectShell(obj, ctx, true);
         validators.props(obj, data, path, ctx, __PROPS__);
         validators.stripExtras(data, ctx, __KEYS__);
         return data;

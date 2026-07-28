@@ -29,7 +29,10 @@ export default tseslint.config(
                     'PropertyDefinition > ArrayExpression',
                     'PropertyDefinition > ObjectExpression',
                     'AssignmentExpression > ArrayExpression',
-                    'AssignmentExpression > ObjectExpression'
+                    'AssignmentExpression > ObjectExpression',
+                    // `as const` / `as T` wraps the literal, which would otherwise lose the exemptions above
+                    'VariableDeclarator > TSAsExpression > ArrayExpression',
+                    'VariableDeclarator > TSAsExpression > ObjectExpression'
                 ]
             }],
             'indent': 'off', 

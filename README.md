@@ -419,14 +419,14 @@ Standard formats for string primitives.
 
 - `format.Email`: Practical mailbox check (`local@domain`, length limits, DNS-like domain with a real TLD). Not full RFC 5322.
 - `format.IdnEmail`: Like email, but Unicode local/domain labels allowed.
-- `format.UUID`: UUID (v1-v5).
+- `format.UUID`: UUID (v1-v8, plus the nil UUID).
 - `format.URL`: HTTP/HTTPS/FTP URLs.
 - `format.IPv4` / `format.IPv6`: IP addresses.
 - `format.Date`: `YYYY-MM-DD` validated via `new Date(...)` (calendar overflow like `2024-02-31` is allowed). With `from: 'query'`, the runtime value becomes a `Date` (the TypeScript type remains `string & format.Date`).
 - `format.DateTime`: date-time validated via `new Date(...)`. With `from: 'query'`, returns a `Date`; otherwise keeps the string.
 - `format.ObjectId`: MongoDB 24-character hex ObjectId.
 - `format.Duration`: ISO-8601 duration.
-- `format.Time`: Time string `HH:MM:SS` with a required timezone (`Z` or `±HH:MM`), e.g. `19:55:00Z`.
+- `format.Time`: Time string `HH:MM:SS` in real ranges (`00-23`, `00-59`, `00-59`) with an optional fraction and a required timezone (`Z` or `±HH:MM`), e.g. `19:55:00Z`.
 - `format.Byte`: Base64 string.
 - `format.Password`: Any string (always valid placeholder).
 - `format.Regex`: Valid regular expression string.

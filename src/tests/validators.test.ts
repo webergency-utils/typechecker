@@ -611,6 +611,8 @@ describe( 'Validators', () =>
                 { format : 'email', valid : 'test@example.com', invalid : '.test@example.com' },
                 { format : 'email', valid : 'test@example.com', invalid : 'test@-example.com' },
                 { format : 'uuid', valid : '123e4567-e89b-12d3-a456-426614174000', invalid : 'invalid-uuid' },
+                { format : 'uuid', valid : '018f8c7e-3d7a-7e5f-9c3d-2f1a4b6c8d9e', invalid : '123e4567-e89b-92d3-a456-426614174000' },
+                { format : 'uuid', valid : '00000000-0000-0000-0000-000000000000', invalid : '123e4567-e89b-12d3-c456-426614174000' },
                 { format : 'url', valid : 'https://google.com', invalid : 'google.com' },
                 { format : 'ipv4', valid : '192.168.1.1', invalid : '999.999.999.999' },
                 { format : 'ipv6', valid : '2001:0db8:85a3:0000:0000:8a2e:0370:7334', invalid : 'invalid-ipv6' },
@@ -630,6 +632,9 @@ describe( 'Validators', () =>
                 { format : 'iri-reference', valid : './相对', invalid : 'has space' },
                 { format : 'uri-template', valid : 'https://example.com/users/{userId}', invalid : 'https://example.com/{unclosed' },
                 { format : 'time', valid : '19:55:00Z', invalid : '19-55-00' },
+                { format : 'time', valid : '23:59:59+01:00', invalid : '99:99:99Z' },
+                { format : 'time', valid : '00:00:00.123Z', invalid : '24:00:00Z' },
+                { format : 'time', valid : '12:30:45-05:30', invalid : '12:60:00Z' },
                 { format : 'duration', valid : 'P3D', invalid : 'invalid-duration' },
                 { format : 'objectId', valid : '507f1f77bcf86cd799439011', invalid : 'invalid-object-id' }
             ];

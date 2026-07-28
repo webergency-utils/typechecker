@@ -2,6 +2,7 @@ import ts from 'typescript';
 import { buildValidator, generateHash, buildJsonSchema, objectToAst } from './engine/resolver.js';
 export { buildValidator, generateHash, buildJsonSchema } from './engine/resolver.js';
 import { hoistEmitLocals, resolveEmitNames } from './engine/hoister.js';
+import { createCustomFunctionScope } from './engine/customFns.js';
 import { installStaticConstraintDiagnostics } from './engine/staticAsserts.js';
 
 const TYPE_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate', 'jsonSchema'];
@@ -32,6 +33,7 @@ export default function transformer( program: ts.Program )
         return ( sourceFile: ts.SourceFile ) =>
         {
             const emitNames = resolveEmitNames( sourceFile );
+            const customFns = createCustomFunctionScope( sourceFile, checker );
             const validatorCache = new Map<string, ts.Expression>();
             const schemasCache = new Map<string, ts.Expression>();
             const helperBindings = new Map<string, string>();
@@ -135,7 +137,7 @@ export default function transformer( program: ts.Program )
                             {
                                 if( !validatorCache.has( hash ))
                                 {
-                                    buildValidator( type, checker, validatorCache, hash );
+                                    buildValidator( type, checker, validatorCache, hash, customFns );
                                 }
 
                                 const inputArg = argOrUndefined( node.arguments, 0 );
@@ -153,7 +155,7 @@ export default function transformer( program: ts.Program )
 
             const transformedFile = ts.visitNode( sourceFile, visitor ) as ts.SourceFile;
 
-            return hoistEmitLocals( transformedFile, validatorCache, schemasCache, emitNames );
+            return hoistEmitLocals( transformedFile, validatorCache, schemasCache, emitNames, customFns.imports );
         };
     };
 }
