@@ -81,8 +81,9 @@ export function emitWithTransformer( files: Record<string, string>, tempName: st
 }
 
 /**
- * Emit `source` (a `main.ts` body) through the transformer, rewrite runtime imports to the
- * built `dist/` tree, and dynamically import the result. Requires `npm run build` first.
+ * Emit `source` (a `main.ts` body) through the transformer, rewrite imports to the built
+ * `dist/` tree, and dynamically import the result. Requires a prior `npm run build`
+ * (`npm test` / `npm run coverage` already do this).
  * Each caller needs its own `tempName` — tests run in parallel from the package root.
  */
 export async function emitAndImport<T extends Record<string, unknown> = Record<string, unknown>>(
@@ -91,6 +92,13 @@ export async function emitAndImport<T extends Record<string, unknown> = Record<s
 ): Promise<T>
 {
     const dir = path.resolve( `./${tempName}_pkg` );
+    const runtimeDist = path.resolve( './dist/runtime/validators.js' );
+    const indexDist = path.resolve( './dist/index.js' );
+
+    if( !fs.existsSync( runtimeDist ))
+    {
+        throw new Error( 'emitAndImport requires dist/ — run `npm run build` first (or use `npm test` / `npm run coverage`).' );
+    }
 
     fs.mkdirSync( dir, { recursive : true });
 
@@ -98,8 +106,8 @@ export async function emitAndImport<T extends Record<string, unknown> = Record<s
     {
         const output = emitWithTransformer({ 'main.ts' : source }, `${tempName}_src` );
         const patched = output
-            .replace( '@webergency-utils/typechecker/runtime', '../dist/runtime/validators.js' )
-            .replace( /from ['"]\.\.\/src\/index\.js['"]/, "from '../dist/index.js'" );
+            .replace( '@webergency-utils/typechecker/runtime', pathToFileURL( runtimeDist ).href )
+            .replace( /from ['"]\.\.\/src\/index\.js['"]/, `from '${pathToFileURL( indexDist ).href}'` );
         const file = path.join( dir, 'main.js' );
 
         fs.writeFileSync( file, patched );

@@ -41,10 +41,10 @@
   ],
   "scripts": {
     "lint": "eslint .",
-    "test": "vitest run",
+    "test": "npm run build && vitest run",
     "bench": "npm run build && node scripts/perf-microbench.mjs",
     "fuzz": "npm run build:fuzz && jazzer fuzz_typechecker.cjs",
-    "coverage": "vitest run --coverage",
+    "coverage": "npm run build && vitest run --coverage",
     "clean": "rm -rf ./dist ./dist-fuzz",
     "reset": "npm run clean && rm -rf node_modules package-lock.json && npm i",
     "build": "npm run clean && tsc && node update_imports.js",
