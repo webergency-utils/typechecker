@@ -89,6 +89,38 @@ function getTagPropertyValue( type: ts.Type ): any
 }
 
 /**
+ * Property types on mapped / conditional results (e.g. `ResolveDefaults`, `ConvertPropertyCasing`)
+ * often have no declaration. Falling back to `any` would drop Defaults and constraints, so prefer
+ * `getTypeOfSymbol` (and the parent lookup) over `getTypeOfSymbolAtLocation`.
+ */
+function typeOfProperty( parentType: ts.Type, prop: ts.Symbol, checker: ts.TypeChecker ): ts.Type
+{
+    const fromSymbol = ( checker as ts.TypeChecker & { getTypeOfSymbol?: ( s: ts.Symbol ) => ts.Type }).getTypeOfSymbol?.( prop );
+
+    if( fromSymbol && !( fromSymbol.flags & ts.TypeFlags.Any )){ return fromSymbol }
+
+    const declaration = prop.valueDeclaration || prop.declarations?.[0];
+
+    if( declaration )
+    {
+        const fromDecl = checker.getTypeOfSymbolAtLocation( prop, declaration );
+
+        if( !( fromDecl.flags & ts.TypeFlags.Any )){ return fromDecl }
+    }
+
+    const parentProp = checker.getPropertyOfType( parentType, prop.getName());
+
+    if( parentProp && parentProp !== prop )
+    {
+        const fromParent = ( checker as ts.TypeChecker & { getTypeOfSymbol?: ( s: ts.Symbol ) => ts.Type }).getTypeOfSymbol?.( parentProp );
+
+        if( fromParent && !( fromParent.flags & ts.TypeFlags.Any )){ return fromParent }
+    }
+
+    return checker.getAnyType();
+}
+
+/**
  * A `Default` tag makes an absent optional property meaningful — the validator supplies the value —
  * so it must not be skipped. Looks through `| undefined` and intersection members alike.
  */
@@ -216,8 +248,7 @@ function tryMergeObjectIntersection(
 
             if( isTagKey( name )){ continue }
 
-            const declaration = prop.valueDeclaration || prop.declarations?.[0];
-            const propType = declaration ? checker.getTypeOfSymbolAtLocation( prop, declaration ) : checker.getAnyType();
+            const propType = typeOfProperty( t, prop, checker );
 
             propMap.set( name, {
                 name,
@@ -382,16 +413,31 @@ function buildValidatorScoped(
 
     if( isUnion ) 
     {
-        const members = ( type as ts.UnionType ).types;
+        const rawMembers = ( type as ts.UnionType ).types;
         const expected = `Type<${minifyTypeString( checker.typeToString( type ))}>`;
-        const nullable = tryNullableUnion( members, checker, validatorsMap, scope );
 
-        if( nullable ){ result = nullable }
+        // A Default tag treats missing as "fill me in". A bare `undefined` arm would win first
+        // (or, after the optional fast-path, short-circuit before the default runs) and leave the
+        // property unset. Drop that arm whenever a sibling can supply the value.
+        const members = rawMembers.some( m => typeHasDefaultTag( m, checker ))
+            ? rawMembers.filter( m => !( m.getFlags() & ts.TypeFlags.Undefined ))
+            : rawMembers;
+
+        if( members.length === 1 )
+        {
+            result = buildValidatorScoped( members[0], checker, validatorsMap, scope );
+        }
         else
         {
-            const checks = members.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ));
+            const nullable = tryNullableUnion( members, checker, validatorsMap, scope );
 
-            result = tryTaggedUnion( members, checks, checker, expected ) || createUnionCheck( checks, expected );
+            if( nullable ){ result = nullable }
+            else
+            {
+                const checks = members.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ));
+
+                result = tryTaggedUnion( members, checks, checker, expected ) || createUnionCheck( checks, expected );
+            }
         }
     }
     else if( isIntersection ) 
@@ -780,10 +826,9 @@ function buildValidatorScoped(
     else 
     {
         const stringIndexInfo = checker.getIndexInfoOfType( type, ts.IndexKind.String );
-        const props = checker.getPropertiesOfType( type ).map( prop => 
+        const props = checker.getPropertiesOfType( type ).map( prop =>
         {
-            const declaration = prop.valueDeclaration || prop.declarations?.[0];
-            const propType = declaration ? checker.getTypeOfSymbolAtLocation( prop, declaration ) : checker.getAnyType();
+            const propType = typeOfProperty( type, prop, checker );
 
             return {
                 name       : prop.getName(),
@@ -985,10 +1030,9 @@ function signatureOf( type: ts.Type, checker: ts.TypeChecker, visited: Set<numbe
             // Handle Record or empty object
             if( stringIndexInfo ) { return `Record<${buildStructuralSignature( stringIndexInfo.type, checker, visited )}>` }
         }
-        const propSigs = props.map( prop => 
+        const propSigs = props.map( prop =>
         {
-            const declaration = prop.valueDeclaration || prop.declarations?.[0];
-            const propType = declaration ? checker.getTypeOfSymbolAtLocation( prop, declaration ) : checker.getAnyType();
+            const propType = typeOfProperty( type, prop, checker );
             const isOptional = ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0;
 
             return `${prop.getName()}${isOptional ? '?' : ''}:${buildStructuralSignature( propType, checker, visited )}`;
@@ -1571,11 +1615,11 @@ function buildJsonSchemaInternal(
         const required: string[] = [];
         const props = checker.getPropertiesOfType( type );
 
-        for( const prop of props ) 
+        for( const prop of props )
         {
             const pName = prop.getName();
             const isOptional = ( prop.flags & ts.SymbolFlags.Optional ) !== 0;
-            const propType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0]);
+            const propType = typeOfProperty( type, prop, checker );
 
             properties[pName] = buildJsonSchemaInternal( propType, checker, defs, visited, counts, circularHashes );
 

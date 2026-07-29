@@ -1190,21 +1190,16 @@ export const validators = {
             const val = v[key];
 
             // An absent optional property stays absent. Running its `T | undefined` validator would cost
-            // a union attempt and then write the key back as an explicit `undefined`.
+            // a union attempt and then write the key back as an explicit `undefined`. A Defaulted
+            // optional must still run — and if the filled default fails a constraint, that error
+            // must stick (there is no silent rollback here).
             if( isOptional && val === undefined && !hasDefault ){ continue }
 
-            const oldErrors = ctx.errors.length;
-            const wasSuccess = ctx.success;
             const result = validator( val, path + '.' + key, ctx );
 
-            if( ctx.success ) 
+            if( ctx.success )
             {
                 setOwnProperty( data, key, result );
-            }
-            else if( isOptional && val === undefined ) 
-            {
-                ctx.errors.length = oldErrors;
-                ctx.success = wasSuccess;
             }
         }
     },

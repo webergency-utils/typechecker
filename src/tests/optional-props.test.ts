@@ -86,5 +86,53 @@ describe( 'Optional properties', () =>
 
             expect( compile( code )).toMatch( /\["port", true, __val_[0-9a-f]+, true\]/ );
         });
+
+        it( 'should mark a required property with a Default tag', () =>
+        {
+            const code = `
+                import { validate, tag } from './src/index.js';
+                const res = validate<{ retries: number & tag.Default<5> }>({});
+            `;
+
+            expect( compile( code )).toMatch( /\["retries", false, __val_[0-9a-f]+, true\]/ );
+        });
+    });
+
+    describe( 'runtime mixed shapes', () =>
+    {
+        it( 'should skip plain optionals and fill Defaulted ones in the same object', () =>
+        {
+            const ctx = context();
+            const data: any = {};
+            const withDefault = ( v: any ) => ( v === undefined ? 8080 : v );
+
+            validators.props({}, data, 'o', ctx, [
+                ['host', true, validators.string],
+                ['port', true, withDefault, true]
+            ]);
+
+            expect( ctx.success ).toBe( true );
+            expect( data ).toEqual({ port : 8080 });
+            expect( 'host' in data ).toBe( false );
+        });
+
+        it( 'should not roll back a Defaulted optional that fails its constraint', () =>
+        {
+            const ctx = context();
+            const data: any = {};
+            const failing = ( _v: any, path: string, c: ValidationContext ) =>
+            {
+                c.success = false;
+                c.errors.push({ path, error : 'Minimum<10>', value : 1 });
+
+                return 1;
+            };
+
+            validators.props({}, data, 'o', ctx, [['n', true, failing, true]]);
+
+            expect( ctx.success ).toBe( false );
+            expect( ctx.errors ).toHaveLength( 1 );
+            expect( 'n' in data ).toBe( false );
+        });
     });
 });
