@@ -31,7 +31,8 @@
 - Two distinct `constraint.Custom<typeof fn>` hash apart (the structural signature carries the function's binding and declaration site). An imported custom function is re-imported under a `__tc_fn_<name>` local, because TypeScript elides an import used only inside `typeof`; a function not reachable from module scope is a compile error.
 - `toZodIssues` paths come from `tokenizePath`: only true `[n]` index segments become numbers, so a numeric-looking object key stays a string. A record key containing a `.` is still ambiguous — the path string loses that information when it is built.
 - Prefer `getOrCompileSchema` / `validateSchema` (and `isSchema` / `assertSchema` / `assertGuardSchema`) for JSON-Schema → runtime validator paths. Schema helpers are real runtime APIs and do not need the transformer. Do not put `schema` on `ValidationOptions`.
-- Transformer hoists validators only for `is`/`assert`/`assertGuard`/`validate`, and schemas only for `jsonSchema` (not both for every call). Schema helpers are not rewritten.
+- Transformer hoists validators for `is`/`assert`/`assertGuard`/`validate`, serializers for `serializer`/`stringify`, parsers for `parse`, and schemas for `jsonSchema`. Schema helpers are not rewritten.
+- `parse` applies `tag.Default`, transforms, and constraints before/after the base type check (parity with `validate`). Query serialize is type-driven (deep brackets).
 - Closed-object AOT/schema key lists are `Set`s; `validators.safeRegExp` marks patterns as vetted so `pattern()` skips repeated safety scans.
 - `allOf` validates members without mutating, then applies `strict` / `strip` to the combined object-key set and commits only on success.
 - Microbench: `node scripts/perf-microbench.mjs` (after `npm run build`).

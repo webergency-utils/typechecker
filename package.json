@@ -1,6 +1,7 @@
 {
   "name": "@webergency-utils/typechecker",
-  "version": "0.4.4",
+  "version": "0.4.5",
+
   "type": "module",
   "description": "TypeScript compiler plugin for runtime validation",
   "author": "radixxko",
@@ -15,10 +16,10 @@
       "default": "./dist/index.js"
     },
     "./runtime": {
-      "types": "./dist/runtime/validators.d.ts",
-      "import": "./dist/runtime/validators.js",
-      "require": "./dist/runtime/validators.js",
-      "default": "./dist/runtime/validators.js"
+      "types": "./dist/runtime/index.d.ts",
+      "import": "./dist/runtime/index.js",
+      "require": "./dist/runtime/index.js",
+      "default": "./dist/runtime/index.js"
     },
     "./transformer": {
       "types": "./dist/transformer.d.ts",

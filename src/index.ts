@@ -103,15 +103,26 @@ export type {
 export * from './runtime/tags.js';
 export * from './runtime/casing.js';
 export * from './runtime/serializer-runtime.js';
+export * from './runtime/parse-runtime.js';
 
 export type SerializationMode = ValidationMode;
+export type SerializeFormat = 'json' | 'query';
+export type ParseSource = 'json' | 'query';
 
 export interface SerializerOptions
 {
-    mode?: SerializationMode
+    mode?   : SerializationMode;
+    format? : SerializeFormat;
+    to?     : SerializeFormat;
 }
 
-/** AOT Macro: Compiles a fast JSON serializer function for type `T`. */
+export interface ParseOptions
+{
+    mode? : ValidationMode;
+    from? : ParseSource;
+}
+
+/** AOT Macro: Compiles a fast serializer function for type `T`. */
 export function serializer<T>( _options?: ValidationMode | SerializerOptions ): ( input: T ) => string
 {
     throw new Error( TRANSFORMER_MISSING );
@@ -123,4 +134,8 @@ export function stringify<T>( _input: T, _options?: ValidationMode | SerializerO
     throw new Error( TRANSFORMER_MISSING );
 }
 
-
+/** AOT Macro: Single-pass parses and validates `input` into type `T`. */
+export function parse<T>( _input: unknown, _options?: ValidationMode | ParseOptions ): ResolveDefaults<T>
+{
+    throw new Error( TRANSFORMER_MISSING );
+}

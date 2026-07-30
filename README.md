@@ -138,6 +138,9 @@ const age: number & constraint.Minimum<18> = 5;
 - [`is`](src/index.ts): A type guard for `T`. Always mutates in place; `from` may coerce nested fields. Root replacement fails the guard.
 - [`assert`](src/index.ts): Validates a value and returns it, throwing a validation error on failure (supports `from` coercion).
 - [`assertGuard`](src/index.ts): Asserts a value is `T`. Always mutates in place; `from` may coerce nested fields. Root replacement throws.
+- [`serializer`](src/index.ts): AOT macro that compiles a zero-allocation `(input: T) => string` serializer for JSON or query strings.
+- [`stringify`](src/index.ts): AOT macro that validates and serializes a value as type `T` to a JSON or query string.
+- [`parse`](src/index.ts): AOT macro that single-pass parses JSON or query input into `ResolveDefaults<T>` (defaults, transforms, and constraints applied).
 - [`jsonSchema`](src/index.ts): Generates and returns a JSON Schema representation matching a TypeScript type at compile time (draft-07 shaped, with `x-typescript-type` for Date/RegExp/Set/Map/bigint/etc.).
 - [`validateSchema`](src/index.ts) / [`isSchema`](src/index.ts) / [`assertSchema`](src/index.ts) / [`assertGuardSchema`](src/index.ts): Same entrypoints against a runtime JSON Schema value instead of a TypeScript generic.
 - [`WithModifiers`](src/runtime/tags.ts): A utility type that applies constraint, format, or transformation tags to properties of deeply nested or external types using dot-separated path mappings.
@@ -248,6 +251,49 @@ Like `assert`, but against a JSON Schema value.
 #### `assertGuardSchema(schema: any, input: unknown, options?: ValidationMode | AssertGuardOptions): void`
 
 Like `assertGuard`, but against a JSON Schema value. Root replacement throws.
+
+---
+
+### Serialize / Parse Macros
+
+These are AOT macros rewritten by the transformer into hoisted `__ser_*` / `__parse_*` functions that call `@webergency-utils/typechecker/runtime`.
+
+#### `serializer<T>(options?: ValidationMode | SerializerOptions): (input: T) => string`
+
+Compiles a reusable serializer for `T`.
+
+- **Options**:
+  - `mode`: `'strict' | 'relaxed' | 'strip'` (default `'strip'`) — extra property handling when no index signature is present.
+  - `format` / `to`: `'json'` (default) or `'query'`.
+- **Encodings**: `Date` → ISO-8601; `Buffer`/`Uint8Array` → base64; `bigint` → decimal digits; tuples fixed-length; tagged unions by discriminant; `Record`/index signatures serialize extra keys with the value type.
+- **Example**:
+  ```typescript
+  const serializeUser = serializer<User>({ mode: 'strict' });
+  const json = serializeUser(user);
+  ```
+
+#### `stringify<T>(input: T, options?: ValidationMode | SerializerOptions): string`
+
+Same codegen as `serializer`, invoked immediately on `input`.
+
+#### `parse<T>(input: unknown, options?: ValidationMode | ParseOptions): ResolveDefaults<T>`
+
+Single-pass parse + validate into `T`.
+
+- **Options**:
+  - `mode`: `'strict' | 'relaxed' | 'strip'` (default `'strip'`).
+  - `from`: `'json'` (default) or `'query'` (coerces numbers/booleans/dates; uses `parseQueryString` bracket notation).
+- **Behavior**: Applies `tag.Default`, `transform.*`, and `constraint.*` / `format.*` (parity with `validate`). Rejects `NaN`; JSON allows `±Infinity`; query numbers must be finite. Throws `ParseError`.
+- **Example**:
+  ```typescript
+  const user = parse<User>(req.body);
+  const q = parse<Search>(req.url.search, { from: 'query', mode: 'strict' });
+  ```
+
+#### Errors
+
+- `SerializationError` — path + message for serialize failures.
+- `ParseError` — path + message for parse failures.
 
 ---
 

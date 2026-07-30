@@ -113,13 +113,58 @@ module.exports.fuzz = function( data )
             ZodLikeError,
             convertPropertyCasing,
             validate,
-            is
+            is,
+            parseQueryString,
+            serializeString,
+            serializeDate,
+            serializeBuffer,
+            serializeArray,
+            coerceNumber,
+            coerceBoolean,
+            coerceDate,
+            coerceBigInt,
+            applyParseConstraints,
+            ParseError,
+            SerializationError
         } = runtime;
 
         coerceQueryNumber( input );
         coerceQueryBoolean( input );
         coerceQueryDate( input );
         coerceJsonDate( input );
+
+        // Serialize / parse runtime helpers (expected errors swallowed)
+        try
+        {
+            if( typeof input === 'string' )
+            {
+                serializeString( input );
+                parseQueryString( input );
+                coerceNumber( input, 'n' );
+                coerceBoolean( input, 'b' );
+                coerceBigInt( input, 'bi' );
+            }
+
+            if( input instanceof Date ){ serializeDate( input ) }
+
+            if( Buffer.isBuffer( input )){ serializeBuffer( input ) }
+
+            if( Array.isArray( input ))
+            {
+                serializeArray( input, v => ( typeof v === 'string' ? serializeString( v ) : String( v )));
+            }
+
+            coerceDate( input, 'd' );
+            applyParseConstraints( input, 'c', [{ type : 'minLength', value : 0 }], 'json' );
+        }
+        catch( e )
+        {
+            if( !( e instanceof ParseError ) && !( e instanceof SerializationError ) &&
+                !( e instanceof RangeError ) && !( e instanceof TypeError ))
+            {
+                throw e;
+            }
+        }
 
         const ctx = { success : true, errors : [], mode, from, mutate : provider.consumeBoolean() };
         validators.string( input, 's', ctx );
@@ -159,7 +204,9 @@ module.exports.fuzz = function( data )
     }
     catch( e )
     {
-        if( e instanceof RangeError || e instanceof TypeError )
+        if( e instanceof RangeError || e instanceof TypeError ||
+            ( runtime.ParseError && e instanceof runtime.ParseError ) ||
+            ( runtime.SerializationError && e instanceof runtime.SerializationError ))
         {
             return;
         }

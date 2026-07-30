@@ -171,6 +171,65 @@ describe( 'hoister', () =>
         expect( printed ).toContain( 'const validators_1 = __tcRuntime.validators' );
         expect( printed ).toContain( 'const __val_global = validators_1.string' );
     });
+    it( 'should hoist serializer and parser locals and inject runtime without validators', () =>
+    {
+        const source = sourceFrom( `
+            import { value } from './x.js';
+            export const ready = 1;
+        ` );
+        const serializers = new Map<string, ts.Expression>([
+            ['s1', exprFrom( '( input ) => __tcRuntime.serializeString( input, "" )' )]
+        ]);
+        const parsers = new Map<string, ts.Expression>([
+            ['p1', exprFrom( '( input ) => __tcRuntime.coerceNumber( input, "" )' )]
+        ]);
+
+        const printed = printSource( hoistEmitLocals( source, new Map(), undefined, undefined, undefined, serializers, parsers ));
+
+        expect( printed ).toContain( 'import * as __tcRuntime from "@webergency-utils/typechecker/runtime"' );
+        expect( printed ).not.toContain( 'const validators' );
+        expect( printed ).toContain( 'const __ser_s1 =' );
+        expect( printed ).toContain( 'const __parse_p1 =' );
+        expect( printed.indexOf( 'import * as __tcRuntime' )).toBeLessThan( printed.indexOf( "import { value }" ));
+    });
+
+    it( 'should rename nested __tcRuntime references when the namespace is taken', () =>
+    {
+        const source = sourceFrom( `
+            import __tcRuntime from './other.js';
+            export const ready = true;
+        ` );
+        const serializers = new Map<string, ts.Expression>([
+            ['s1', exprFrom( '( input ) => __tcRuntime.serializeString( input, "" )' )]
+        ]);
+        const names = resolveEmitNames( source );
+        const printed = printSource( hoistEmitLocals( source, new Map(), undefined, names, undefined, serializers ));
+
+        expect( names.runtimeNs ).toBe( '__tcRuntime_1' );
+        expect( printed ).toContain( 'import * as __tcRuntime_1 from "@webergency-utils/typechecker/runtime"' );
+        expect( printed ).toContain( '__tcRuntime_1.serializeString' );
+        expect( printed ).not.toMatch( /[^_]__tcRuntime\.serializeString/ );
+    });
+
+    it( 'should skip duplicate serializer and parser declarations', () =>
+    {
+        const source = sourceFrom( `
+            const __ser_dup = ( input ) => input;
+            const __parse_dup = ( input ) => input;
+            export const ready = true;
+        ` );
+        const serializers = new Map<string, ts.Expression>([
+            ['dup', exprFrom( '( input ) => __tcRuntime.serializeString( input, "" )' )]
+        ]);
+        const parsers = new Map<string, ts.Expression>([
+            ['dup', exprFrom( '( input ) => __tcRuntime.coerceNumber( input, "" )' )]
+        ]);
+
+        const printed = printSource( hoistEmitLocals( source, new Map(), undefined, undefined, undefined, serializers, parsers ));
+
+        expect( printed.match( /const __ser_dup =/g )?.length ).toBe( 1 );
+        expect( printed.match( /const __parse_dup =/g )?.length ).toBe( 1 );
+    });
 });
 
 describe( 'resolveEmitNames', () =>

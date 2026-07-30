@@ -92,7 +92,7 @@ export async function emitAndImport<T extends Record<string, unknown> = Record<s
 ): Promise<T>
 {
     const dir = path.resolve( `./${tempName}_pkg` );
-    const runtimeDist = path.resolve( './dist/runtime/validators.js' );
+    const runtimeDist = path.resolve( './dist/runtime/index.js' );
     const indexDist = path.resolve( './dist/index.js' );
 
     if( !fs.existsSync( runtimeDist ))

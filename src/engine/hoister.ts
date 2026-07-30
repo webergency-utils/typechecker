@@ -31,13 +31,18 @@ export function hoistEmitLocals(
     cache: Map<string, ts.Expression>,
     schemasMap?: Map<string, ts.Expression>,
     emitNames?: IEmitNames,
-    customImports?: readonly ICustomFunctionImport[]
+    customImports?: readonly ICustomFunctionImport[],
+    serializerCache?: Map<string, ts.Expression>,
+    parserCache?: Map<string, ts.Expression>
 )
 {
     const hasSchemas = !!( schemasMap && schemasMap.size > 0 );
     const hasValidators = cache.size > 0;
+    const hasSerializers = !!( serializerCache && serializerCache.size > 0 );
+    const hasParsers = !!( parserCache && parserCache.size > 0 );
+    const needsRuntime = hasValidators || hasSerializers || hasParsers;
 
-    if( !hasValidators && !hasSchemas ){ return sourceFile }
+    if( !needsRuntime && !hasSchemas ){ return sourceFile }
 
     const names = emitNames || resolveEmitNames( sourceFile );
     const declaredNames = collectBindingNames( sourceFile.statements );
@@ -45,7 +50,7 @@ export function hoistEmitLocals(
     const localStatements: ts.Statement[] = [];
     const prependedNames = new Set<string>();
 
-    if( hasValidators )
+    if( needsRuntime )
     {
         importStatements.push(
             ts.factory.createImportDeclaration(
@@ -59,7 +64,10 @@ export function hoistEmitLocals(
                 undefined
             )
         );
+    }
 
+    if( hasValidators )
+    {
         localStatements.push(
             constStatement(
                 names.validatorsName,
@@ -84,6 +92,34 @@ export function hoistEmitLocals(
         {
             prependedNames.add( valName );
             localStatements.push( constStatement( valName, renameValidatorsRef( expr, names.validatorsName )));
+        }
+    }
+
+    if( serializerCache )
+    {
+        for( const [hash, expr] of serializerCache.entries())
+        {
+            const serName = `__ser_${hash}`;
+
+            if( !declaredNames.has( serName ) && !prependedNames.has( serName ))
+            {
+                prependedNames.add( serName );
+                localStatements.push( constStatement( serName, renameRuntimeRef( expr, names.runtimeNs )));
+            }
+        }
+    }
+
+    if( parserCache )
+    {
+        for( const [hash, expr] of parserCache.entries())
+        {
+            const parseName = `__parse_${hash}`;
+
+            if( !declaredNames.has( parseName ) && !prependedNames.has( parseName ))
+            {
+                prependedNames.add( parseName );
+                localStatements.push( constStatement( parseName, renameRuntimeRef( expr, names.runtimeNs )));
+            }
         }
     }
 
@@ -177,6 +213,29 @@ function renameValidatorsRef( expr: ts.Expression, validatorsName: string ): ts.
         if( ts.isIdentifier( node ) && node.text === VALIDATORS_NAME )
         {
             return ts.factory.createIdentifier( validatorsName );
+        }
+
+        return ts.visitEachChild( node, visit, undefined );
+    };
+
+    return visit( expr ) as ts.Expression;
+}
+
+/** Generated serialize/parse expressions always reference `__tcRuntime`; retarget when that name is taken. */
+function renameRuntimeRef( expr: ts.Expression, runtimeNs: string ): ts.Expression
+{
+    if( runtimeNs === RUNTIME_NS ){ return expr }
+
+    const visit = ( node: ts.Node ): ts.Node =>
+    {
+        if( ts.isPropertyAccessExpression( node ))
+        {
+            return ts.factory.updatePropertyAccessExpression( node, visit( node.expression ) as ts.Expression, node.name );
+        }
+
+        if( ts.isIdentifier( node ) && node.text === RUNTIME_NS )
+        {
+            return ts.factory.createIdentifier( runtimeNs );
         }
 
         return ts.visitEachChild( node, visit, undefined );
