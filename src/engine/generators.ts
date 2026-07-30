@@ -1,7 +1,16 @@
 import * as ts from 'typescript';
 
+const templateAstCache = new Map<string, ts.Expression>();
+
 export function templateToAst( template: string ): ts.Expression 
 {
+    const hit = templateAstCache.get( template );
+
+    if( hit )
+    {
+        return stripPositions( hit );
+    }
+
     const asExpression = ts.createSourceFile(
         'template.ts',
         `${template};`,
@@ -13,7 +22,10 @@ export function templateToAst( template: string ): ts.Expression
 
     if( ts.isExpressionStatement( expressionStatement ))
     {
-        return stripPositions( expressionStatement.expression );
+        const expr = stripPositions( expressionStatement.expression );
+        templateAstCache.set( template, expr );
+
+        return stripPositions( expr );
     }
 
     const asVariable = ts.createSourceFile(
@@ -27,7 +39,10 @@ export function templateToAst( template: string ): ts.Expression
 
     if( ts.isVariableStatement( variableStatement ))
     {
-        return stripPositions( variableStatement.declarationList.declarations[0].initializer! );
+        const expr = stripPositions( variableStatement.declarationList.declarations[0].initializer! );
+        templateAstCache.set( template, expr );
+
+        return stripPositions( expr );
     }
 
     throw new Error( 'Template must be an expression or variable declaration' );
@@ -293,28 +308,12 @@ export function createNullableCheck( kind: NullableKind, inner: ts.Expression ):
 
 export function createUnionCheck( checks: ts.Expression[], expected: string = 'Type<Union>' ): ts.Expression 
 {
-    return ts.factory.createArrowFunction(
-        undefined,
-        undefined,
-        [
-            ts.factory.createParameterDeclaration( undefined, undefined, ts.factory.createIdentifier( 'v' )),
-            ts.factory.createParameterDeclaration( undefined, undefined, ts.factory.createIdentifier( 'path' )),
-            ts.factory.createParameterDeclaration( undefined, undefined, ts.factory.createIdentifier( 'ctx' ))
-        ],
-        undefined,
-        undefined,
-        ts.factory.createCallExpression(
-            ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'validators' ), ts.factory.createIdentifier( 'union' )),
-            undefined,
-            [
-                ts.factory.createIdentifier( 'v' ),
-                ts.factory.createIdentifier( 'path' ),
-                ts.factory.createIdentifier( 'ctx' ),
-                ts.factory.createArrayLiteralExpression( checks ),
-                ts.factory.createStringLiteral( expected )
-            ]
-        )
-    );
+    const tpl = '((checks) => (v, path, ctx) => validators.union(v, path, ctx, checks, __EXPECTED__))(__CHECKS__)';
+
+    return injectNodes( templateToAst( tpl ), {
+        '__CHECKS__'   : ts.factory.createArrayLiteralExpression( checks ),
+        '__EXPECTED__' : ts.factory.createStringLiteral( expected )
+    });
 }
 
 export function createObjectCheck( props: any[], expected: string = 'object', indexValidator?: ts.Expression ): ts.Expression 
@@ -344,14 +343,14 @@ export function createObjectCheck( props: any[], expected: string = 'object', in
     if( indexValidator )
     {
         const tpl = `
-        (v, path, ctx) => {
+        ((keys, props) => (v, path, ctx) => {
             const obj = validators.object(v, path, ctx, undefined, __EXPECTED__);
             if (obj === false) return v;
             const data = validators.objectShell(obj, ctx, true);
-            validators.props(obj, data, path, ctx, __PROPS__);
-            validators.additionalProps(obj, data, path, ctx, __KEYS__, __INDEX__);
+            validators.props(obj, data, path, ctx, props);
+            validators.additionalProps(obj, data, path, ctx, keys, __INDEX__);
             return data;
-        }
+        })(__KEYS__, __PROPS__)
         `;
 
         return injectNodes( templateToAst( tpl ), {
@@ -363,14 +362,14 @@ export function createObjectCheck( props: any[], expected: string = 'object', in
     }
 
     const tpl = `
-    (v, path, ctx) => {
-        const obj = validators.object(v, path, ctx, __KEYS__, __EXPECTED__);
+    ((keys, props) => (v, path, ctx) => {
+        const obj = validators.object(v, path, ctx, keys, __EXPECTED__);
         if (obj === false) return v;
         const data = validators.objectShell(obj, ctx, true);
-        validators.props(obj, data, path, ctx, __PROPS__);
-        validators.stripExtras(data, ctx, __KEYS__);
+        validators.props(obj, data, path, ctx, props);
+        validators.stripExtras(data, ctx, keys);
         return data;
-    }
+    })(__KEYS__, __PROPS__)
     `;
     
     return injectNodes( templateToAst( tpl ), {
@@ -389,12 +388,11 @@ export function createRecordCheck( valueValidator: ts.Expression ): ts.Expressio
 
 export function createTupleCheck( checks: ts.Expression[] ): ts.Expression 
 {
-    const arrayElements = checks.map(( _, i ) => `__CHECK_${i}__` ).join( ', ' );
-    const tpl = `(v, path, ctx) => validators.tuple(v, path, ctx, [${arrayElements}])`;
-    const replacements: Record<string, ts.Expression> = {};
-    checks.forEach(( c, i ) => replacements[`__CHECK_${i}__`] = c );
+    const tpl = '((checks) => (v, path, ctx) => validators.tuple(v, path, ctx, checks))(__CHECKS__)';
 
-    return injectNodes( templateToAst( tpl ), replacements );
+    return injectNodes( templateToAst( tpl ), {
+        '__CHECKS__' : ts.factory.createArrayLiteralExpression( checks )
+    });
 }
 
 export function createDateCheck(): ts.Expression 
@@ -420,8 +418,7 @@ export function createUndefinedCheck(): ts.Expression
 export function createIntersectionCheck( checks: ts.Expression[] ): ts.Expression 
 {
     const tpl = `
-    (v, path, ctx) => {
-        const checks = __CHECKS__;
+    ((checks) => (v, path, ctx) => {
         let data = validators.objectShell(v, ctx);
         for (let i = 0; i < checks.length; i++) {
             const val = checks[i](v, path, ctx);
@@ -429,7 +426,7 @@ export function createIntersectionCheck( checks: ts.Expression[] ): ts.Expressio
             else data = val;
         }
         return data;
-    }
+    })(__CHECKS__)
     `;
 
     return injectNodes( templateToAst( tpl ), {

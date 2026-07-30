@@ -7,11 +7,22 @@ export class SerializationError extends Error
     }
 }
 
+function serializationErrorCode( err: SerializationError ): string
+{
+    if( !err.path ){ return err.message }
+
+    const prefix = `Serialization error at "${err.path}": `;
+
+    if( err.message.startsWith( prefix )){ return err.message.slice( prefix.length ) }
+
+    return err.message;
+}
+
 export function serializeString( val: string, path = '' ): string
 {
     if( typeof val !== 'string' )
     {
-        throw new SerializationError( path, `Expected string, got ${typeof val}` );
+        throw new SerializationError( path, 'Type<string>' );
     }
 
     return JSON.stringify( val );
@@ -21,7 +32,7 @@ export function serializeDate( val: Date | string | number, path = '' ): string
 {
     if( val instanceof Date )
     {
-        if( isNaN( val.getTime())){ throw new SerializationError( path, 'Expected valid Date' ) }
+        if( isNaN( val.getTime())){ throw new SerializationError( path, 'Type<Date>' ) }
 
         return `"${val.toISOString()}"`;
     }
@@ -33,7 +44,7 @@ export function serializeDate( val: Date | string | number, path = '' ): string
         if( !isNaN( d.getTime())){ return `"${d.toISOString()}"` }
     }
 
-    throw new SerializationError( path, `Expected valid Date, got ${String( val )}` );
+    throw new SerializationError( path, 'Type<Date>' );
 }
 
 export function serializeBuffer( val: Uint8Array | ArrayBuffer, path = '' ): string
@@ -45,14 +56,14 @@ export function serializeBuffer( val: Uint8Array | ArrayBuffer, path = '' ): str
         return `"${Buffer.from( buf ).toString( 'base64' )}"`;
     }
 
-    throw new SerializationError( path, `Expected Uint8Array or Buffer, got ${typeof val}` );
+    throw new SerializationError( path, 'Type<Buffer>' );
 }
 
 export function serializeArray<T>( val: T[], mapper: ( item: T ) => string, path = '' ): string
 {
     if( !Array.isArray( val ))
     {
-        throw new SerializationError( path, `Expected array, got ${typeof val}` );
+        throw new SerializationError( path, 'Type<Array>' );
     }
 
     const parts: string[] = [];
@@ -63,4 +74,36 @@ export function serializeArray<T>( val: T[], mapper: ( item: T ) => string, path
     }
 
     return `[${parts.join( ',' )}]`;
+}
+
+export function serializeUnion(
+    val      : any,
+    path     : string,
+    expected : string,
+    arms     : Array<( val: any ) => string>
+): string
+{
+    let last: SerializationError | undefined;
+
+    for( const arm of arms )
+    {
+        try
+        {
+            return arm( val );
+        }
+        catch( e )
+        {
+            if( e instanceof SerializationError )
+            {
+                last = e;
+                continue;
+            }
+
+            throw e;
+        }
+    }
+
+    if( last && serializationErrorCode( last ) === expected ){ throw last }
+
+    throw new SerializationError( path, expected );
 }

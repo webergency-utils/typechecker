@@ -1,5 +1,6 @@
 import ts from 'typescript';
-import { TagName, tagKey } from './tagKeys.js';
+import { TagName } from './tagKeys.js';
+import { collectConstraintsFromProps, getTypeProps } from './type-helpers.js';
 
 export interface IStaticConstraint
 {
@@ -9,56 +10,35 @@ export interface IStaticConstraint
 }
 
 /** The subset of tags whose satisfaction can be decided from a literal at compile time. */
-const STATICALLY_CHECKED: readonly TagName[] =
-[
+const STATICALLY_CHECKED: ReadonlySet<string> = new Set<TagName>([
     'minLength', 'maxLength',
     'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf',
     'minItems', 'maxItems', 'uniqueItems'
-];
+]);
 
-const CONSTRAINT_KEYS: ReadonlyMap<string, TagName> = new Map(
-    STATICALLY_CHECKED.map(( name ): [string, TagName] => [tagKey( name ), name])
-);
-
-function stripUndefined( type: ts.Type ): ts.Type
+/**
+ * Extract Minimum / Length / Items-style constraints from a (possibly intersected) type.
+ */
+export function extractStaticConstraints( type: ts.Type, checker: ts.TypeChecker ): IStaticConstraint[]
 {
-    if( !type.isUnion()){ return type }
+    const constraints: IStaticConstraint[] = [];
+    const types = typeof type.isIntersection === 'function' && type.isIntersection() ? type.types : [type];
 
-    const nonUndefined = type.types.filter( t => !( t.getFlags() & ts.TypeFlags.Undefined ));
-
-    if( nonUndefined.length === 1 ){ return nonUndefined[0] }
-
-    return type;
-}
-
-function getLiteralValue( type: ts.Type ): any
-{
-    const actual = stripUndefined( type );
-
-    if(( actual as any ).value !== undefined ){ return ( actual as any ).value }
-
-    if( actual.getFlags() & ts.TypeFlags.BooleanLiteral )
+    for( const sub of types )
     {
-        return ( actual as any ).intrinsicName === 'true';
+        for( const c of collectConstraintsFromProps( getTypeProps( sub, checker ), checker ))
+        {
+            if( !STATICALLY_CHECKED.has( c.type )){ continue }
+
+            const value = c.type === 'uniqueItems' ? true : c.value;
+
+            if( value === undefined ){ continue }
+
+            constraints.push({ type : c.type, value, message : c.message });
+        }
     }
 
-    return undefined;
-}
-
-function getStringLiteralValue( type: ts.Type ): string | undefined
-{
-    const actual = stripUndefined( type );
-
-    if( actual.isStringLiteral()){ return actual.value }
-
-    if( actual.isUnion())
-    {
-        const literal = actual.types.find( t => t.isStringLiteral());
-
-        if( literal && literal.isStringLiteral()){ return literal.value }
-    }
-
-    return undefined;
+    return constraints;
 }
 
 function getSymbolType( checker: ts.TypeChecker, symbol: ts.Symbol ): ts.Type | undefined
@@ -68,52 +48,6 @@ function getSymbolType( checker: ts.TypeChecker, symbol: ts.Symbol ): ts.Type | 
     if( !decl ){ return undefined }
 
     return checker.getTypeOfSymbolAtLocation( symbol, decl );
-}
-
-/**
- * Extract Minimum / Length / Items-style constraints from a (possibly intersected) type.
- */
-export function extractStaticConstraints( type: ts.Type, checker: ts.TypeChecker ): IStaticConstraint[]
-{
-    const constraints: IStaticConstraint[] = [];
-    const types = type.isIntersection() ? type.types : [type];
-
-    for( const sub of types )
-    {
-        const props = checker.getPropertiesOfType( sub );
-
-        for( const prop of props )
-        {
-            const pName = prop.getName();
-            const mapped = CONSTRAINT_KEYS.get( pName );
-
-            if( !mapped ){ continue }
-
-            const pType = getSymbolType( checker, prop );
-
-            if( !pType ){ continue }
-
-            let val = getLiteralValue( pType );
-
-            if( mapped === 'uniqueItems' ){ val = true }
-
-            if( val === undefined ){ continue }
-
-            const msgProp = props.find( p => p.getName() === `${pName}_message` );
-            let message: string | undefined;
-
-            if( msgProp )
-            {
-                const msgType = getSymbolType( checker, msgProp );
-
-                if( msgType ){ message = getStringLiteralValue( msgType ) }
-            }
-
-            constraints.push({ type : mapped, value : val, message });
-        }
-    }
-
-    return constraints;
 }
 
 type ConstantValue =

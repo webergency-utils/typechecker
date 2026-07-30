@@ -146,7 +146,7 @@ describe( 'Tagged unions', () =>
 
             expect( ctx.success ).toBe( false );
             expect( ctx.errors[0].error ).toBe( 'Type<number>' );
-            expect( ctx.errors[0].path ).toBe( '.r' );
+            expect( ctx.errors[0].path ).toBe( 'r' );
         });
 
         it( 'should fall back to the union for an unknown tag', () =>

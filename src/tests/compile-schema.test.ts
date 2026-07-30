@@ -167,7 +167,7 @@ describe( 'compileSchema', () =>
 
             // Assert
             expect( ctx.success ).toBe( false );
-            expect( ctx.errors.some( e => e.path === '.label' || e.path === 'label' || e.path.endsWith( 'label' ))).toBe( true );
+            expect( ctx.errors.some( e => e.path === 'label' || e.path.endsWith( 'label' ))).toBe( true );
         });
 
         it( 'should allow open objects when additionalProperties is true', () => 

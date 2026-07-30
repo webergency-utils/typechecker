@@ -188,8 +188,8 @@ describe( 'Default tags with optionality', () =>
             const res = mod.run({});
 
             expect( res.success ).toBe( false );
-            expect( res.errors.some(( e: any ) => e.path === '.id' )).toBe( true );
-            expect( res.errors.some(( e: any ) => e.path === '.retries' )).toBe( true );
+            expect( res.errors.some(( e: any ) => e.path === 'id' )).toBe( true );
+            expect( res.errors.some(( e: any ) => e.path === 'retries' )).toBe( true );
         });
 
         it( 'should still reject an invalid present value (Default does not rescue it)', async() =>
@@ -203,7 +203,7 @@ describe( 'Default tags with optionality', () =>
             const res = mod.run({ size : 0 });
 
             expect( res.success ).toBe( false );
-            expect( res.errors.some(( e: any ) => e.path === '.size' )).toBe( true );
+            expect( res.errors.some(( e: any ) => e.path === 'size' )).toBe( true );
         });
 
         it( 'should apply constraints to the filled Default value', async() =>
@@ -225,7 +225,7 @@ describe( 'Default tags with optionality', () =>
 
             const failed = mod.bad({});
             expect( failed.success ).toBe( false );
-            expect( failed.errors.some(( e: any ) => e.path === '.n' )).toBe( true );
+            expect( failed.errors.some(( e: any ) => e.path === 'n' )).toBe( true );
         });
 
         it( 'should fill nested Defaults only when the parent object is present', async() =>

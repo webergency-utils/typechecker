@@ -1,5 +1,6 @@
 import ts from 'typescript';
 import { isTagKey } from './tagKeys.js';
+import { resolveFunctionIdentity, type ICustomFunctionScope } from './customFns.js';
 export { isTagKey };
 
 export const BUFFER_LIKE: ReadonlySet<string> = new Set([
@@ -12,6 +13,13 @@ export type ParsedConstraint =
     type     : string
     value?   : any
     message? : string
+};
+
+/** No-op scope for codegen unit tests that never hit Custom tags. */
+export const VERBATIM_CUSTOM_SCOPE: ICustomFunctionScope =
+{
+    bind    : identity => identity.name,
+    imports : []
 };
 
 export type TaggedUnionInfo =
@@ -57,10 +65,28 @@ export function getPropertyType( parentType: ts.Type, prop: ts.Symbol, checker: 
         if( fromDecl && typeof fromDecl.getFlags === 'function' && !( fromDecl.flags & ts.TypeFlags.Any )){ return fromDecl }
     }
 
+    // Mapped / conditional results often have no declaration; re-lookup on the parent can recover Defaults.
+    if( typeof checker.getPropertyOfType === 'function' )
+    {
+        const parentProp = checker.getPropertyOfType( parentType, prop.getName());
+
+        if( parentProp && parentProp !== prop )
+        {
+            const fromParent = ( checker as ts.TypeChecker & { getTypeOfSymbol?: ( s: ts.Symbol ) => ts.Type }).getTypeOfSymbol?.( parentProp );
+
+            if( fromParent && typeof fromParent.getFlags === 'function' && !( fromParent.flags & ts.TypeFlags.Any ))
+            {
+                return fromParent;
+            }
+        }
+    }
+
     if( ( prop as any ).type && typeof ( prop as any ).type.getFlags === 'function' )
     {
         return ( prop as any ).type;
     }
+
+    if( typeof checker.getAnyType === 'function' ){ return checker.getAnyType() }
 
     return { getFlags : () => ts.TypeFlags.Any } as any;
 }
@@ -77,9 +103,14 @@ export function safePropAccess( varName: string, propName: string ): string
 
 export function getTypeProps( type: ts.Type, checker: ts.TypeChecker ): ts.Symbol[]
 {
-    if( typeof type.getProperties === 'function' ){ return type.getProperties() }
+    // Prefer the checker: `type.getProperties()` can omit declaration-backed types on tag phantoms
+    // (e.g. `Message<"…">`), which drops literal values used for fallback messages.
+    if( typeof checker.getPropertiesOfType === 'function' )
+    {
+        return checker.getPropertiesOfType( type );
+    }
 
-    if( typeof checker.getPropertiesOfType === 'function' ){ return checker.getPropertiesOfType( type ) }
+    if( typeof type.getProperties === 'function' ){ return type.getProperties() }
 
     return [];
 }
@@ -101,6 +132,24 @@ export function typeHasDefaultTag( type: ts.Type, checker: ts.TypeChecker ): boo
     }
 
     return getTypeProps( type, checker ).some( p => p.getName() === '__default' );
+}
+
+export function mapStructuralProps( type: ts.Type, checker: ts.TypeChecker ): MergedPropInfo[]
+{
+    return getTypeProps( type, checker )
+        .filter( p => !isTagKey( p.getName()))
+        .map( prop =>
+        {
+            const propType = getPropertyType( type, prop, checker );
+
+            return {
+                name       : prop.getName(),
+                symbol     : prop,
+                type       : propType,
+                isOptional : Boolean( prop.flags & ts.SymbolFlags.Optional ),
+                hasDefault : typeHasDefaultTag( propType, checker )
+            };
+        });
 }
 
 export function isNativeEnumType( type: ts.Type ): boolean
@@ -150,14 +199,19 @@ export function isConstraintOnlyType( type: ts.Type, checker: ts.TypeChecker ): 
     return props.length > 0 && props.every( p => isTagKey( p.getName()));
 }
 
-/** Phantom brand object arms — props exist but none are real tags or meaningful data for runtime. */
+/** Phantom brand object arms — typically `{ __brand: 'X' }`, not arbitrary `__*` data like `__typename`. */
 export function isBrandOnlyType( type: ts.Type, checker: ts.TypeChecker ): boolean
 {
     const props = getTypeProps( type, checker );
 
     if( props.length === 0 ){ return false }
 
-    return props.every( p => !isTagKey( p.getName()) && p.getName().startsWith( '__' ));
+    return props.every( p =>
+    {
+        const name = p.getName();
+
+        return !isTagKey( name ) && ( name === '__brand' || name.startsWith( '__brand' ));
+    });
 }
 
 export function isDiscriminableObject( type: ts.Type, checker: ts.TypeChecker ): boolean
@@ -289,9 +343,9 @@ export function tryMergeObjectTypes( types: readonly ts.Type[], checker: ts.Type
     return { props : [ ...propMap.values() ], indexType };
 }
 
-function stripUndefinedFromType( type: ts.Type ): ts.Type
+export function stripUndefinedFromType( type: ts.Type ): ts.Type
 {
-    if( !type.isUnion()){ return type }
+    if( typeof type.isUnion !== 'function' || !type.isUnion()){ return type }
 
     const nonUndefined = type.types.filter( t => !( t.getFlags() & ts.TypeFlags.Undefined ));
 
@@ -300,7 +354,7 @@ function stripUndefinedFromType( type: ts.Type ): ts.Type
     return type;
 }
 
-function getTagPropertyValue( type: ts.Type ): any
+export function getTagPropertyValue( type: ts.Type ): any
 {
     const actual = stripUndefinedFromType( type );
     let val = ( actual as any ).value;
@@ -318,11 +372,11 @@ function getTagPropertyValue( type: ts.Type ): any
     return val;
 }
 
-function getStringLiteralValue( type: ts.Type ): string | undefined
+export function getStringLiteralValue( type: ts.Type ): string | undefined
 {
-    if( type.isStringLiteral()){ return type.value }
+    if( typeof type.isStringLiteral === 'function' && type.isStringLiteral()){ return type.value }
 
-    if( type.isUnion())
+    if( typeof type.isUnion === 'function' && type.isUnion())
     {
         const literalType = type.types.find( t => t.isStringLiteral());
 
@@ -332,7 +386,11 @@ function getStringLiteralValue( type: ts.Type ): string | undefined
     return undefined;
 }
 
-function collectConstraintsFromProps( props: ts.Symbol[], checker: ts.TypeChecker ): ParsedConstraint[]
+export function collectConstraintsFromProps(
+    props   : ts.Symbol[],
+    checker : ts.TypeChecker,
+    scope   : ICustomFunctionScope = VERBATIM_CUSTOM_SCOPE
+): ParsedConstraint[]
 {
     const constraints: ParsedConstraint[] = [];
 
@@ -342,7 +400,8 @@ function collectConstraintsFromProps( props: ts.Symbol[], checker: ts.TypeChecke
 
         if( !isTagKey( pName )){ continue }
 
-        if( pName.endsWith( '_message' )){ continue }
+        // Per-constraint siblings are `__minLength_message`, etc. — not the fallback `__message` tag.
+        if( pName.endsWith( '_message' ) && pName !== '__message' ){ continue }
 
         const declaration = prop.valueDeclaration || prop.declarations?.[0];
         const pType = declaration ? checker.getTypeOfSymbolAtLocation( prop, declaration ) : ( prop as any ).type;
@@ -377,8 +436,31 @@ function collectConstraintsFromProps( props: ts.Symbol[], checker: ts.TypeChecke
 
         if( pName === '__transform_todate' ){ constraints.push({ type : 'transform', value : 'todate' }); continue }
 
-        // custom / transform_custom skipped in parse (require function identity binding)
-        if( pName === '__transform_custom' || pName === '__custom' ){ continue }
+        if( pName === '__transform_custom' )
+        {
+            const identity = resolveFunctionIdentity( actualType, checker, pType );
+
+            if( !identity )
+            {
+                throw new Error( '[Webergency] Custom transform must reference a named function via typeof (e.g. transform.Custom<typeof myFunc>).' );
+            }
+
+            constraints.push({ type : 'transform_custom', value : scope.bind( identity ) });
+            continue;
+        }
+
+        if( pName === '__custom' )
+        {
+            const identity = resolveFunctionIdentity( actualType, checker, pType );
+
+            if( !identity )
+            {
+                throw new Error( '[Webergency] Custom validator must reference a named function via typeof (e.g. constraint.Custom<typeof myFunc>).' );
+            }
+
+            constraints.push({ type : 'custom', value : scope.bind( identity ), message : constraintMsg });
+            continue;
+        }
 
         if( pName === '__uniqueItems' ){ constraints.push({ type : 'uniqueItems', value : true, message : constraintMsg }); continue }
 
@@ -433,7 +515,11 @@ function collectConstraintsFromProps( props: ts.Symbol[], checker: ts.TypeChecke
  * Peel tag / brand phantoms from an intersection. Returns base runtime type + constraints.
  * Brand-only arms are dropped. Constraint-only arms contribute tags only.
  */
-export function peelTaggedIntersection( type: ts.Type, checker: ts.TypeChecker ): PeelResult | undefined
+export function peelTaggedIntersection(
+    type    : ts.Type,
+    checker : ts.TypeChecker,
+    scope   : ICustomFunctionScope = VERBATIM_CUSTOM_SCOPE
+): PeelResult | undefined
 {
     if( !( typeof type.isIntersection === 'function' && type.isIntersection())){ return undefined }
 
@@ -444,7 +530,7 @@ export function peelTaggedIntersection( type: ts.Type, checker: ts.TypeChecker )
     for( const sub of arms )
     {
         const props = getTypeProps( sub, checker );
-        const tags = collectConstraintsFromProps( props, checker );
+        const tags = collectConstraintsFromProps( props, checker, scope );
         constraints.push( ...tags );
 
         if( isConstraintOnlyType( sub, checker ) || isBrandOnlyType( sub, checker )){ continue }
@@ -486,7 +572,7 @@ export function peelTaggedIntersection( type: ts.Type, checker: ts.TypeChecker )
 
     if( baseCandidates.length === 0 )
     {
-        // tags only — fall back to string-like any stub
+        // tags only — fall through toward any
         base = { getFlags : () => ts.TypeFlags.Any } as any;
     }
     else if( baseCandidates.length === 1 )
@@ -495,8 +581,7 @@ export function peelTaggedIntersection( type: ts.Type, checker: ts.TypeChecker )
     }
     else
     {
-        const merged = tryMergeObjectTypes( baseCandidates, checker );
-        base = merged ? baseCandidates[0] : baseCandidates[0];
+        base = baseCandidates[0];
     }
 
     return { base, constraints, hasTags : constraints.length > 0 };

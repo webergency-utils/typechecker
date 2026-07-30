@@ -504,7 +504,7 @@ describe( 'Error capture matrix', () =>
             // Assert
             expect( result.success ).toBe( false );
             expect( result.errors.length ).toBeGreaterThanOrEqual( 3 );
-            expect( result.errors.map( e => e.path ).sort()).toEqual(['.a', '.b', '.c'].sort());
+            expect( result.errors.map( e => e.path ).sort()).toEqual(['a', 'b', 'c'].sort());
         });
 
         it( 'array element failures keep index paths', () =>

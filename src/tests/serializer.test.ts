@@ -41,7 +41,7 @@ describe( 'Serializer & Stringify', () =>
             it( 'throws SerializationError with path for non-strings', () =>
             {
                 expect( () => serializeString( 123 as any, 'user.name' )).toThrow( SerializationError );
-                expect( () => serializeString( 123 as any, 'user.name' )).toThrow( 'Serialization error at "user.name": Expected string' );
+                expect( () => serializeString( 123 as any, 'user.name' )).toThrow( 'Serialization error at "user.name": Type<string>' );
             });
         });
 
@@ -59,7 +59,7 @@ describe( 'Serializer & Stringify', () =>
 
             it( 'throws for invalid Date values', () =>
             {
-                expect( () => serializeDate( new Date( NaN ), 'createdAt' )).toThrow( 'Serialization error at "createdAt": Expected valid Date' );
+                expect( () => serializeDate( new Date( NaN ), 'createdAt' )).toThrow( 'Serialization error at "createdAt": Type<Date>' );
                 expect( () => serializeDate( 'invalid-date' )).toThrow( SerializationError );
                 expect( () => serializeDate( {} as any )).toThrow( SerializationError );
             });
@@ -89,7 +89,7 @@ describe( 'Serializer & Stringify', () =>
 
             it( 'throws for non-array input', () =>
             {
-                expect( () => serializeArray( 'nope' as any, v => v, 'items' )).toThrow( 'Serialization error at "items": Expected array' );
+                expect( () => serializeArray( 'nope' as any, v => v, 'items' )).toThrow( 'Serialization error at "items": Type<Array>' );
             });
         });
 
@@ -101,9 +101,9 @@ describe( 'Serializer & Stringify', () =>
                 expect( withPath.path ).toBe( 'user.email' );
                 expect( withPath.message ).toBe( 'Serialization error at "user.email": Invalid format' );
 
-                const root = new SerializationError( '', 'Expected object' );
+                const root = new SerializationError( '', 'Type<Object>' );
                 expect( root.path ).toBe( '' );
-                expect( root.message ).toBe( 'Expected object' );
+                expect( root.message ).toBe( 'Type<Object>' );
             });
         });
     });
@@ -151,7 +151,7 @@ describe( 'Serializer & Stringify', () =>
             const { dummyType, checker } = createDummyTypeChecker( ts.TypeFlags.Object, false, false, true );
 
             expect( generateSerializerCode( dummyType, checker, { mode : 'strict' }))
-                .toContain( 'Unexpected extra property in strict mode' );
+                .toContain( 'PropertyNotAllowed<' );
             expect( generateSerializerCode( dummyType, checker, { mode : 'relaxed' }))
                 .toContain( 'JSON.stringify( obj[k] )' );
         });
@@ -181,7 +181,7 @@ describe( 'Serializer & Stringify', () =>
             expect( code ).toContain( '@webergency-utils/typechecker/runtime' );
             expect( code ).toContain( '__ser_' );
             expect( code ).toContain( '__tcRuntime.serializeString' );
-            expect( code ).toContain( 'Missing required property' );
+            expect( code ).toContain( 'Type<Object>' );
         });
 
         it( 'compiles strict / strip / relaxed JSON modes', () =>
@@ -191,14 +191,14 @@ describe( 'Serializer & Stringify', () =>
                 interface Target { key: string }
                 export function run( val: Target ) { return stringify<Target>( val, { mode: 'strict' } ); }
             ` );
-            expect( strict ).toContain( 'Unexpected extra property in strict mode' );
+            expect( strict ).toContain( 'PropertyNotAllowed<' );
 
             const strip = compile( `
                 import { stringify } from './src/index.js';
                 interface Target { key: string }
                 export function run( val: Target ) { return stringify<Target>( val, 'strip' ); }
             ` );
-            expect( strip ).not.toContain( 'Unexpected extra property' );
+            expect( strip ).not.toContain( 'PropertyNotAllowed<' );
 
             const relaxed = compile( `
                 import { stringify } from './src/index.js';
@@ -206,7 +206,7 @@ describe( 'Serializer & Stringify', () =>
                 export function run( val: Target ) { return stringify<Target>( val, { mode: 'relaxed' } ); }
             ` );
             expect( relaxed ).toContain( 'JSON.stringify' );
-            expect( relaxed ).toContain( 'indexOf(k) === -1' );
+            expect( relaxed ).toContain( '__keys.has' );
         });
 
         it( 'compiles nested arrays, unions, Buffer, and Date', () =>
@@ -226,7 +226,8 @@ describe( 'Serializer & Stringify', () =>
                 type Value = string | number;
                 export function run( v: Value ) { return stringify<Value>( v ); }
             ` );
-            expect( union ).toContain( 'Value does not match union type' );
+            expect( union ).toContain( 'serializeUnion' );
+            expect( union ).toMatch( /Type<(Value|Union)>/ );
         });
 
         it( 'compiles query serializers for format/to aliases and modes', () =>
@@ -244,7 +245,7 @@ describe( 'Serializer & Stringify', () =>
                 interface QueryData { id: number }
                 export const ser = serializer<QueryData>({ to: 'query', mode: 'strict' });
             ` );
-            expect( toAlias ).toContain( 'Unexpected extra property in strict mode' );
+            expect( toAlias ).toContain( 'PropertyNotAllowed<' );
 
             const relaxed = compile( `
                 import { stringify } from './src/index.js';
@@ -252,7 +253,7 @@ describe( 'Serializer & Stringify', () =>
                 export function run( q: BaseQuery ) { return stringify<BaseQuery>( q, { format: 'query', mode: 'relaxed' } ); }
             ` );
             expect( relaxed ).toContain( 'encodeURIComponent' );
-            expect( relaxed ).toContain( 'indexOf(k) === -1' );
+            expect( relaxed ).toContain( '__keys.has' );
         });
         it( 'compiles namespace imports and bare mode string options', () =>
         {
@@ -263,7 +264,7 @@ describe( 'Serializer & Stringify', () =>
                 export function run( v: Row ) { return tc.stringify<Row>( v, 'strict' ); }
             ` );
             expect( ns ).toContain( '__ser_' );
-            expect( ns ).toContain( 'Unexpected extra property in strict mode' );
+            expect( ns ).toContain( 'PropertyNotAllowed<' );
 
             const both = compile( `
                 import { stringify } from './src/index.js';
@@ -300,7 +301,7 @@ describe( 'Serializer & Stringify', () =>
             expect( mod.dump({ id : '1', age : 30, active : true, email : undefined } as any )).not.toContain( 'email' );
 
             expect( () => mod.dumpStrict({ id : '1', age : 30, active : true, rogue : true } as any ))
-                .toThrow( /Unexpected extra property/ );
+                .toThrow( /PropertyNotAllowed<rogue>/ );
 
             const relaxed = JSON.parse( mod.dumpRelaxed({ id : '1', age : 30, active : true, extra : 9 } as any ));
             expect( relaxed.extra ).toBe( 9 );
@@ -332,9 +333,9 @@ describe( 'Serializer & Stringify', () =>
 
             expect( mod.dumpUnion( 'hi' )).toBe( '"hi"' );
             expect( mod.dumpUnion( 42 )).toBe( '42' );
-            expect( () => mod.dumpUnion( true as any )).toThrow( /union/ );
+            expect( () => mod.dumpUnion( true as any )).toThrow( /Type<(Value|Union)>/ );
             expect( () => mod.dumpPayload({ blob : Buffer.from( 'x' ), label : 'y' } as any ))
-                .toThrow( /Missing required property/ );
+                .toThrow( /Type<Date>/ );
         });
 
         it( 'serializes query strings with arrays, nested keys, and Date ISO', async() =>
@@ -370,7 +371,7 @@ describe( 'Serializer & Stringify', () =>
             expect( params.get( 'since' )).toBe( '2026-06-01T00:00:00.000Z' );
 
             expect( () => mod.ser({ q : 'x', page : 1, tags : [], rogue : 1 } as any ))
-                .toThrow( /Unexpected extra property/ );
+                .toThrow( /PropertyNotAllowed<rogue>/ );
         });
 
         it( 'reuses serializer factory from serializer<T>()', async() =>
@@ -405,11 +406,11 @@ describe( 'Serializer & Stringify', () =>
             `, 'temp_ser_e2e_parity' );
 
             expect( mod.dumpLit( 'on' )).toBe( '"on"' );
-            expect( () => mod.dumpLit( 'maybe' as any )).toThrow( /union|Expected/ );
+            expect( () => mod.dumpLit( 'maybe' as any )).toThrow( /Type<(Status|Union|'on'|'off'|Literal)/ );
             expect( mod.dumpTup([ 'a', 1 ])).toBe( '["a",1]' );
-            expect( () => mod.dumpTup([ 'a' ] as any )).toThrow( /tuple/ );
+            expect( () => mod.dumpTup([ 'a' ] as any )).toThrow( /Tuple<2>/ );
             expect( JSON.parse( mod.dumpTag({ kind : 'circle', r : 2 }))).toEqual({ kind : 'circle', r : 2 });
-            expect( () => mod.dumpTag({ kind : 'triangle', r : 1 } as any )).toThrow( /tagged union|union/ );
+            expect( () => mod.dumpTag({ kind : 'triangle', r : 1 } as any )).toThrow( /Type<(Shape|Union)>/ );
         });
 
         it( 'serializes Record and branded strings', async() =>
@@ -446,7 +447,7 @@ describe( 'Serializer & Stringify', () =>
             expect( qs ).toContain( 'name' );
             expect( qs ).toContain( 'qty' );
             expect( mod.dumpNum( Infinity )).toBe( 'Infinity' );
-            expect( () => mod.dumpNum( NaN )).toThrow( /Expected number/ );
+            expect( () => mod.dumpNum( NaN )).toThrow( /Type<number>/ );
         });
     });
 });

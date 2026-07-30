@@ -1,3 +1,6 @@
+import { childPath, indexPath } from './path.js';
+import { createSafeRegex, isRegexSafe, testRegex } from './regex.js';
+
 /** Controls unknown object keys only — not coercion. Use `from` for conversion. */
 export type ValidationMode = 'strict' | 'relaxed' | 'strip';
 
@@ -175,110 +178,6 @@ function commitContainer( target: any, source: any ): boolean
     }
 
     return false;
-}
-
-const regexSafetyCache = new WeakMap<RegExp, boolean>();
-
-function isSafeRegexSource( source: string ): boolean
-{
-    if( source.length > 1024 || /\\[1-9]/.test( source )){ return false }
-
-    const groups: { hasRepeat : boolean, hasAlternation : boolean }[] = [];
-    let inClass = false;
-    let escaped = false;
-
-    for( let i = 0; i < source.length; i++ )
-    {
-        const ch = source[i];
-
-        if( escaped )
-        {
-            escaped = false;
-            continue;
-        }
-
-        if( ch === '\\' )
-        {
-            escaped = true;
-            continue;
-        }
-
-        if( ch === '[' )
-        {
-            inClass = true;
-            continue;
-        }
-
-        if( ch === ']' && inClass )
-        {
-            inClass = false;
-            continue;
-        }
-
-        if( inClass ){ continue }
-
-        if( ch === '(' )
-        {
-            groups.push({ hasRepeat : false, hasAlternation : false });
-            continue;
-        }
-
-        if( ch === '|' && groups.length > 0 )
-        {
-            groups[groups.length - 1].hasAlternation = true;
-            continue;
-        }
-
-        if( ch === '*' || ch === '+' || ch === '{' )
-        {
-            if( groups.length > 0 ){ groups[groups.length - 1].hasRepeat = true }
-            continue;
-        }
-
-        if( ch === ')' && groups.length > 0 )
-        {
-            const group = groups.pop()!;
-            const next = source[i + 1];
-            const isRepeated = next === '*' || next === '+' || next === '{';
-
-            if( isRepeated && ( group.hasRepeat || group.hasAlternation )){ return false }
-
-            if( isRepeated && groups.length > 0 ){ groups[groups.length - 1].hasRepeat = true }
-        }
-    }
-
-    return true;
-}
-
-function isRegexSafe( regex: RegExp ): boolean
-{
-    const cached = regexSafetyCache.get( regex );
-
-    if( cached !== undefined ){ return cached }
-
-    const safe = isSafeRegexSource( regex.source );
-    regexSafetyCache.set( regex, safe );
-
-    return safe;
-}
-
-function createSafeRegex( source: string, flags?: string ): RegExp
-{
-    if( !isSafeRegexSource( source )){ throw new Error( `Unsafe regular expression: ${source}` ) }
-
-    const regex = flags === undefined ? new RegExp( source ) : new RegExp( source, flags );
-    regexSafetyCache.set( regex, true );
-
-    return regex;
-}
-
-function testRegex( regex: RegExp, value: string ): boolean 
-{
-    if( !regex.global && !regex.sticky ) { return regex.test( value ) }
-
-    const copy = new RegExp( regex.source, regex.flags );
-
-    return copy.test( value );
 }
 
 function isMultipleOfNumber( v: number, n: number ): boolean 
@@ -1170,7 +1069,7 @@ export const validators = {
         {
             for( let i = 0; i < v.length; i++ )
             {
-                v[i] = childValidator( v[i], path + '[' + i + ']', ctx );
+                v[i] = childValidator( v[i], indexPath( path, i ), ctx );
             }
 
             return v;
@@ -1180,7 +1079,7 @@ export const validators = {
 
         for( let i = 0; i < v.length; i++ )
         {
-            data[i] = childValidator( v[i], path + '[' + i + ']', ctx );
+            data[i] = childValidator( v[i], indexPath( path, i ), ctx );
         }
 
         return data;
@@ -1198,7 +1097,7 @@ export const validators = {
             // must stick (there is no silent rollback here).
             if( isOptional && val === undefined && !hasDefault ){ continue }
 
-            const result = validator( val, path + '.' + key, ctx );
+            const result = validator( val, childPath( path, key ), ctx );
 
             if( ctx.success )
             {
@@ -1242,7 +1141,7 @@ export const validators = {
         {
             if( keySetHas( knownKeys, key )){ continue }
 
-            setOwnProperty( data, key, childValidator( v[key], path + '.' + key, ctx ));
+            setOwnProperty( data, key, childValidator( v[key], childPath( path, key ), ctx ));
         }
     },
 
@@ -1825,7 +1724,7 @@ export const validators = {
         {
             for( let i = 0; i < checks.length; i++ )
             {
-                v[i] = checks[i]( v[i], path + '[' + i + ']', ctx );
+                v[i] = checks[i]( v[i], indexPath( path, i ), ctx );
             }
 
             return v;
@@ -1835,7 +1734,7 @@ export const validators = {
 
         for( let i = 0; i < checks.length; i++ )
         {
-            data[i] = checks[i]( v[i], path + '[' + i + ']', ctx );
+            data[i] = checks[i]( v[i], indexPath( path, i ), ctx );
         }
 
         return data;
@@ -1935,7 +1834,7 @@ export const validators = {
 
         for( const key of Object.keys( v )) 
         {
-            setOwnProperty( data, key, childValidator( v[key], path + '.' + key, ctx ));
+            setOwnProperty( data, key, childValidator( v[key], childPath( path, key ), ctx ));
         }
 
         return data;

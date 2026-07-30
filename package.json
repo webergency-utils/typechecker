@@ -1,6 +1,6 @@
 {
   "name": "@webergency-utils/typechecker",
-  "version": "0.4.5",
+  "version": "0.5.0",
 
   "type": "module",
   "description": "TypeScript compiler plugin for runtime validation",
@@ -20,6 +20,42 @@
       "import": "./dist/runtime/index.js",
       "require": "./dist/runtime/index.js",
       "default": "./dist/runtime/index.js"
+    },
+    "./runtime/validators": {
+      "types": "./dist/runtime/validators.d.ts",
+      "import": "./dist/runtime/validators.js",
+      "require": "./dist/runtime/validators.js",
+      "default": "./dist/runtime/validators.js"
+    },
+    "./runtime/parse": {
+      "types": "./dist/runtime/parse-runtime.d.ts",
+      "import": "./dist/runtime/parse-runtime.js",
+      "require": "./dist/runtime/parse-runtime.js",
+      "default": "./dist/runtime/parse-runtime.js"
+    },
+    "./runtime/serialize": {
+      "types": "./dist/runtime/serializer-runtime.d.ts",
+      "import": "./dist/runtime/serializer-runtime.js",
+      "require": "./dist/runtime/serializer-runtime.js",
+      "default": "./dist/runtime/serializer-runtime.js"
+    },
+    "./runtime/casing": {
+      "types": "./dist/runtime/casing.d.ts",
+      "import": "./dist/runtime/casing.js",
+      "require": "./dist/runtime/casing.js",
+      "default": "./dist/runtime/casing.js"
+    },
+    "./runtime/path": {
+      "types": "./dist/runtime/path.d.ts",
+      "import": "./dist/runtime/path.js",
+      "require": "./dist/runtime/path.js",
+      "default": "./dist/runtime/path.js"
+    },
+    "./runtime/regex": {
+      "types": "./dist/runtime/regex.d.ts",
+      "import": "./dist/runtime/regex.js",
+      "require": "./dist/runtime/regex.js",
+      "default": "./dist/runtime/regex.js"
     },
     "./transformer": {
       "types": "./dist/transformer.d.ts",

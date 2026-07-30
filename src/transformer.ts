@@ -2,12 +2,13 @@ import ts from 'typescript';
 import { buildValidator, generateHash, buildJsonSchema, objectToAst } from './engine/resolver.js';
 export { buildValidator, generateHash, buildJsonSchema } from './engine/resolver.js';
 import { hoistEmitLocals, resolveEmitNames } from './engine/hoister.js';
-import { createCustomFunctionScope } from './engine/customFns.js';
+import { createCustomFunctionScope, type ICustomFunctionScope } from './engine/customFns.js';
 import { installStaticConstraintDiagnostics } from './engine/staticAsserts.js';
 import { generateSerializerCode, SerializerGeneratorOptions, SerializeFormat } from './engine/serializer-generator.js';
 import { generateParseCode, ParseGeneratorOptions, ParseSource } from './engine/parse-generator.js';
 import { templateToAst } from './engine/generators.js';
 import { ValidationMode } from './runtime/validators.js';
+import { VERBATIM_CUSTOM_SCOPE } from './engine/type-helpers.js';
 
 export function buildSerializer(
     type    : ts.Type,
@@ -39,7 +40,8 @@ export function buildParser(
     checker : ts.TypeChecker,
     map     : Map<string, ts.Expression>,
     hash?   : string,
-    options : ParseGeneratorOptions = {}
+    options : ParseGeneratorOptions = {},
+    scope   : ICustomFunctionScope = VERBATIM_CUSTOM_SCOPE
 ): ts.Expression
 {
     const mode = options.mode || 'strip';
@@ -48,7 +50,7 @@ export function buildParser(
 
     if( !map.has( resolvedHash ))
     {
-        const codeStr = generateParseCode( type, checker, { mode, from });
+        const codeStr = generateParseCode( type, checker, { mode, from }, scope );
         const ast = templateToAst( codeStr );
         map.set( resolvedHash, ast );
     }
@@ -257,7 +259,7 @@ export default function transformer( program: ts.Program )
                             if( fnName === 'parse' )
                             {
                                 const options = parseParseOptions( node.arguments[1]);
-                                const parseRef = buildParser( type, checker, parserCache, hash, options );
+                                const parseRef = buildParser( type, checker, parserCache, hash, options, customFns );
                                 const inputArg = node.arguments[0];
 
                                 if( inputArg )

@@ -21,119 +21,29 @@ import {
     createMapCheck,
     createInstanceOfCheck
 } from './generators.js';
-import { isTagKey } from './tagKeys.js';
 import {
     ICustomFunctionScope,
     declarationSite,
-    resolveFunctionIdentity,
-    resolveClassIdentity
+    resolveClassIdentity,
+    resolveFunctionIdentity
 } from './customFns.js';
+import {
+    BUFFER_LIKE,
+    collectConstraintsFromProps,
+    enumMemberTypes,
+    getPropertyType,
+    getTypeProps,
+    isConstraintOnlyType,
+    isNativeEnumType,
+    peelTaggedIntersection,
+    tryMergeObjectTypes,
+    tryTaggedUnionTypes,
+    typeHasDefaultTag,
+    typeSymbolName,
+    VERBATIM_CUSTOM_SCOPE,
+    type ParsedConstraint
+} from './type-helpers.js';
 import { createHash } from 'crypto';
-
-/** Used when a caller builds a validator outside a source-file context; emits names verbatim. */
-const VERBATIM_SCOPE: ICustomFunctionScope = { bind : identity => identity.name, imports : []};
-
-function getStringLiteralValue( type: ts.Type ): string | undefined 
-{
-    if( type.isStringLiteral()) 
-    {
-        return type.value;
-    }
-
-    if( type.isUnion()) 
-    {
-        const literalType = type.types.find( t => t.isStringLiteral());
-
-        if( literalType && literalType.isStringLiteral()) 
-        {
-            return literalType.value;
-        }
-    }
-
-    return undefined;
-}
-
-/** Optional tag phantoms are `V | undefined` — strip undefined before reading literals/symbols. */
-function stripUndefinedFromType( type: ts.Type ): ts.Type
-{
-    if( !type.isUnion()){ return type }
-
-    const nonUndefined = type.types.filter( t => !( t.getFlags() & ts.TypeFlags.Undefined ));
-
-    if( nonUndefined.length === 1 ){ return nonUndefined[0] }
-
-    if( nonUndefined.length > 1 )
-    {
-        // Keep union of remaining members (e.g. string literal | other)
-        return type;
-    }
-
-    return type;
-}
-
-function getTagPropertyValue( type: ts.Type ): any
-{
-    const actual = stripUndefinedFromType( type );
-    let val = ( actual as any ).value;
-
-    if( val === undefined && ( actual.getFlags() & ts.TypeFlags.BooleanLiteral ))
-    {
-        val = ( actual as any ).intrinsicName === 'true';
-    }
-
-    if( val === undefined && ( actual.getFlags() & ts.TypeFlags.Null ))
-    {
-        val = null;
-    }
-
-    return val;
-}
-
-/**
- * Property types on mapped / conditional results (e.g. `ResolveDefaults`, `ConvertPropertyCasing`)
- * often have no declaration. Falling back to `any` would drop Defaults and constraints, so prefer
- * `getTypeOfSymbol` (and the parent lookup) over `getTypeOfSymbolAtLocation`.
- */
-function typeOfProperty( parentType: ts.Type, prop: ts.Symbol, checker: ts.TypeChecker ): ts.Type
-{
-    const fromSymbol = ( checker as ts.TypeChecker & { getTypeOfSymbol?: ( s: ts.Symbol ) => ts.Type }).getTypeOfSymbol?.( prop );
-
-    if( fromSymbol && !( fromSymbol.flags & ts.TypeFlags.Any )){ return fromSymbol }
-
-    const declaration = prop.valueDeclaration || prop.declarations?.[0];
-
-    if( declaration )
-    {
-        const fromDecl = checker.getTypeOfSymbolAtLocation( prop, declaration );
-
-        if( !( fromDecl.flags & ts.TypeFlags.Any )){ return fromDecl }
-    }
-
-    const parentProp = checker.getPropertyOfType( parentType, prop.getName());
-
-    if( parentProp && parentProp !== prop )
-    {
-        const fromParent = ( checker as ts.TypeChecker & { getTypeOfSymbol?: ( s: ts.Symbol ) => ts.Type }).getTypeOfSymbol?.( parentProp );
-
-        if( fromParent && !( fromParent.flags & ts.TypeFlags.Any )){ return fromParent }
-    }
-
-    return checker.getAnyType();
-}
-
-/**
- * A `Default` tag makes an absent optional property meaningful — the validator supplies the value —
- * so it must not be skipped. Looks through `| undefined` and intersection members alike.
- */
-function typeHasDefaultTag( type: ts.Type, checker: ts.TypeChecker ): boolean
-{
-    if( type.isUnionOrIntersection())
-    {
-        return type.types.some( t => typeHasDefaultTag( t, checker ));
-    }
-
-    return checker.getPropertiesOfType( type ).some( p => p.getName() === '__default' );
-}
 
 function minifyTypeString( str: string ): string 
 {
@@ -146,17 +56,25 @@ function minifyTypeString( str: string ): string
         .replace( /\s+\|\s+/g, '|' );
 }
 
-function isNativeEnumType( type: ts.Type ): boolean
+/** Map peeled tag constraints onto JSON Schema / x-extension fields. */
+function applyConstraintsToJsonSchema( target: Record<string, any>, constraints: ParsedConstraint[]): void
 {
-    const flags = type.getFlags();
-
-    if( flags & ts.TypeFlags.Enum ){ return true }
-
-    const symbol = type.getSymbol();
-
-    if( !symbol ){ return false }
-
-    return ( symbol.flags & ( ts.SymbolFlags.RegularEnum | ts.SymbolFlags.ConstEnum )) !== 0;
+    for( const c of constraints )
+    {
+        if( c.type === 'default' ){ target.default = c.value }
+        else if( c.type === 'requires' ){ target.requires = c.value }
+        else if(
+            c.type === 'minLength' || c.type === 'maxLength' ||
+            c.type === 'minimum' || c.type === 'maximum' ||
+            c.type === 'exclusiveMinimum' || c.type === 'exclusiveMaximum' ||
+            c.type === 'multipleOf' || c.type === 'pattern' || c.type === 'format' ||
+            c.type === 'minItems' || c.type === 'maxItems'
+        )
+        {
+            if( c.value !== undefined ){ target[c.type] = c.value }
+        }
+        else if( c.type === 'uniqueItems' ){ target.uniqueItems = true }
+    }
 }
 
 function buildEnumValidator(
@@ -166,23 +84,8 @@ function buildEnumValidator(
     scope: ICustomFunctionScope
 ): ts.Expression
 {
-    const symbol = type.getSymbol();
-    const checks: ts.Expression[] = [];
-
-    if( symbol?.exports )
-    {
-        symbol.exports.forEach( member =>
-        {
-            if( !( member.flags & ts.SymbolFlags.EnumMember )){ return }
-
-            const declaration = member.valueDeclaration || member.declarations?.[0];
-
-            if( !declaration ){ return }
-
-            const memberType = checker.getTypeOfSymbolAtLocation( member, declaration );
-            checks.push( buildValidatorScoped( memberType, checker, validatorsMap, scope ));
-        });
-    }
+    const members = enumMemberTypes( type, checker );
+    const checks = members.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ));
 
     if( checks.length === 0 && type.isUnion())
     {
@@ -201,13 +104,6 @@ function buildEnumValidator(
     return createUnionCheck( checks, `Type<${minifyTypeString( checker.typeToString( type ))}>` );
 }
 
-function isConstraintOnlyType( type: ts.Type, checker: ts.TypeChecker ): boolean
-{
-    const props = checker.getPropertiesOfType( type );
-
-    return props.length > 0 && props.every( p => isTagKey( p.getName()));
-}
-
 function tryMergeObjectIntersection(
     types: readonly ts.Type[],
     checker: ts.TypeChecker,
@@ -216,51 +112,21 @@ function tryMergeObjectIntersection(
     scope: ICustomFunctionScope
 ): ts.Expression | undefined
 {
-    const objectTypes = types.filter( t => 
-    {
-        if( isConstraintOnlyType( t, checker )){ return false }
+    const merged = tryMergeObjectTypes( types, checker );
 
-        const flags = t.getFlags();
+    if( !merged ){ return undefined }
 
-        return (( flags & ts.TypeFlags.Object ) !== 0 ) || t.isClassOrInterface();
-    });
+    const props = merged.props.map( prop => ({
+        name       : prop.name,
+        isOptional : prop.isOptional,
+        validator  : buildValidatorScoped( prop.type, checker, validatorsMap, scope ),
+        hasDefault : prop.hasDefault
+    }));
+    const indexValidator = merged.indexType
+        ? buildValidatorScoped( merged.indexType, checker, validatorsMap, scope )
+        : undefined;
 
-    if( objectTypes.length < 2 ){ return undefined }
-
-    const others = types.filter( t => !isConstraintOnlyType( t, checker ) && !objectTypes.includes( t ));
-
-    if( others.length > 0 ){ return undefined }
-
-    const propMap = new Map<string, { name : string, isOptional : boolean, validator : ts.Expression, hasDefault : boolean }>();
-    let indexValidator: ts.Expression | undefined;
-
-    for( const t of objectTypes ) 
-    {
-        const stringIndexInfo = checker.getIndexInfoOfType( t, ts.IndexKind.String );
-
-        if( stringIndexInfo ) 
-        {
-            indexValidator = buildValidatorScoped( stringIndexInfo.type, checker, validatorsMap, scope );
-        }
-
-        for( const prop of checker.getPropertiesOfType( t )) 
-        {
-            const name = prop.getName();
-
-            if( isTagKey( name )){ continue }
-
-            const propType = typeOfProperty( t, prop, checker );
-
-            propMap.set( name, {
-                name,
-                isOptional : ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0,
-                validator  : buildValidatorScoped( propType, checker, validatorsMap, scope ),
-                hasDefault : typeHasDefaultTag( propType, checker )
-            });
-        }
-    }
-
-    return createObjectCheck([ ...propMap.values() ], expected, indexValidator );
+    return createObjectCheck( props, expected, indexValidator );
 }
 
 /**
@@ -297,28 +163,6 @@ function tryNullableUnion(
     return createNullableCheck( kind, buildValidatorScoped( rest[0], checker, validatorsMap, scope ));
 }
 
-/** Object-like enough to hold a discriminant: excludes arrays, tuples, callables and the built-ins. */
-function isDiscriminableObject( type: ts.Type, checker: ts.TypeChecker ): boolean
-{
-    if( !( type.getFlags() & ts.TypeFlags.Object )){ return false }
-
-    if( checker.isArrayType( type ) || checker.isTupleType( type )){ return false }
-
-    if( type.getCallSignatures().length > 0 ){ return false }
-
-    const name = type.getSymbol()?.name;
-
-    return name !== 'Date' && name !== 'Set' && name !== 'Map' && name !== 'RegExp';
-}
-
-/** The value of a type that is exactly one string or number literal — a usable discriminant. */
-function singleLiteralValue( type: ts.Type ): string | number | undefined
-{
-    if( type.isStringLiteral() || type.isNumberLiteral()){ return type.value }
-
-    return undefined;
-}
-
 /**
  * When every arm is an object and some shared property holds a distinct literal in each, that property
  * selects the arm in one lookup instead of the arms being tried in sequence.
@@ -330,48 +174,42 @@ function tryTaggedUnion(
     expected: string
 ): ts.Expression | undefined
 {
-    if( members.length < 2 ){ return undefined }
+    const tagged = tryTaggedUnionTypes( members, checker );
 
-    const literalsByMember: Map<string, string | number>[] = [];
+    if( !tagged ){ return undefined }
 
-    for( const member of members )
+    const byTag: [string | number, ts.Expression][] = tagged.arms.map(( arm, i ) => [arm.tag, checks[i]]);
+
+    return createTaggedUnionCheck( tagged.key, byTag, expected );
+}
+
+/** Classify a peeled base for constrained-primitive emit. */
+function constrainedBaseKind( type: ts.Type, checker: ts.TypeChecker ): { baseName: string, baseType?: ts.Type } | undefined
+{
+    const flags = typeof type.getFlags === 'function' ? type.getFlags() : 0;
+
+    if( flags & ts.TypeFlags.String || flags & ts.TypeFlags.TemplateLiteral )
     {
-        if( !isDiscriminableObject( member, checker )){ return undefined }
-
-        const literals = new Map<string, string | number>();
-
-        for( const prop of checker.getPropertiesOfType( member ))
-        {
-            const declaration = prop.valueDeclaration || prop.declarations?.[0];
-
-            if( !declaration ){ continue }
-
-            const value = singleLiteralValue( checker.getTypeOfSymbolAtLocation( prop, declaration ));
-
-            if( value !== undefined ){ literals.set( prop.getName(), value ) }
-        }
-
-        if( literals.size === 0 ){ return undefined }
-
-        literalsByMember.push( literals );
+        return { baseName : 'string', baseType : type };
     }
 
-    for( const key of literalsByMember[0].keys())
+    if( flags & ts.TypeFlags.Number ){ return { baseName : 'number' } }
+
+    if( flags & ts.TypeFlags.BigInt ){ return { baseName : 'bigint' } }
+
+    if( flags & ts.TypeFlags.Boolean || ( type as any ).intrinsicName === 'boolean' )
     {
-        const byTag: [string | number, ts.Expression][] = [];
-        const seen = new Set<string | number>();
+        return { baseName : 'boolean', baseType : type };
+    }
 
-        for( let i = 0; i < literalsByMember.length; i++ )
-        {
-            const value = literalsByMember[i].get( key );
+    if( typeSymbolName( type ) === 'Date' )
+    {
+        return { baseName : 'date', baseType : type };
+    }
 
-            if( value === undefined || seen.has( value )){ break }
-
-            seen.add( value );
-            byTag.push([value, checks[i]]);
-        }
-
-        if( byTag.length === members.length ){ return createTaggedUnionCheck( key, byTag, expected ) }
+    if( typeof checker.isArrayType === 'function' && checker.isArrayType( type ))
+    {
+        return { baseName : 'array', baseType : type };
     }
 
     return undefined;
@@ -382,7 +220,7 @@ export function buildValidator(
     checker: ts.TypeChecker,
     validatorsMap: Map<string, ts.Expression>,
     hash?: string,
-    scope: ICustomFunctionScope = VERBATIM_SCOPE
+    scope: ICustomFunctionScope = VERBATIM_CUSTOM_SCOPE
 ): ts.Expression
 {
     return buildValidatorScoped( type, checker, validatorsMap, scope, hash );
@@ -441,219 +279,61 @@ function buildValidatorScoped(
             }
         }
     }
-    else if( isIntersection ) 
+    else if( isIntersection )
     {
         const types = ( type as ts.IntersectionType ).types;
-        let baseName = '';
-        let baseType: ts.Type | undefined;
-        const constraints: any[] = [];
+        const peeled = peelTaggedIntersection( type, checker, scope );
+        const expected = minifyTypeString( checker.typeToString( type ));
 
-        for( const sub of types ) 
+        if( peeled?.hasTags )
         {
-            const sFlags = sub.getFlags();
+            const constraints = peeled.constraints;
+            let walkBase = peeled.base;
+            let kind = constrainedBaseKind( walkBase, checker );
 
-            if( sFlags & ts.TypeFlags.String || sFlags & ts.TypeFlags.TemplateLiteral ) 
+            if( !kind && typeof walkBase.isIntersection === 'function' && walkBase.isIntersection())
             {
-                baseName = 'string';
-                baseType = sub;
-            }
-            else if( sFlags & ts.TypeFlags.Number ) { baseName = 'number' }
-            else if( sFlags & ts.TypeFlags.BigInt ) { baseName = 'bigint' }
-            else if( sFlags & ts.TypeFlags.Boolean || ( sub as any ).intrinsicName === 'boolean' ) 
-            {
-                baseName = 'boolean';
-                baseType = sub;
-            }
-            else if( sub.getSymbol()?.name === 'Date' ) 
-            {
-                baseName = 'date';
-                baseType = sub;
-            }
-            else if( checker.isArrayType( sub )) 
-            {
-                baseName = 'array';
-                baseType = sub;
-            }
-
-            const props = checker.getPropertiesOfType( sub );
-
-            for( const prop of props ) 
-            {
-                const pName = prop.getName();
-
-                if( isTagKey( pName )) 
+                for( const sub of walkBase.types )
                 {
-                    const pType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0]);
-                    const actualType = stripUndefinedFromType( pType );
-                    const val = getTagPropertyValue( pType );
+                    kind = constrainedBaseKind( sub, checker );
 
-                    if( pName === '__default' ) 
-                    {
-                        constraints.push({ type : 'default', value : val });
-                    }
-                    else if( pName === '__message' ) 
-                    {
-                        constraints.push({ type : 'message', value : val });
-                    }
-                    else if( pName === '__transform_lowercase' ) 
-                    {
-                        constraints.push({ type : 'transform', value : 'lowercase' });
-                    }
-                    else if( pName === '__transform_uppercase' ) 
-                    {
-                        constraints.push({ type : 'transform', value : 'uppercase' });
-                    }
-                    else if( pName === '__transform_trim' ) 
-                    {
-                        constraints.push({ type : 'transform', value : 'trim' });
-                    }
-                    else if( pName === '__transform_capitalize' ) 
-                    {
-                        constraints.push({ type : 'transform', value : 'capitalize' });
-                    }
-                    else if( pName === '__transform_tonumber' ) 
-                    {
-                        constraints.push({ type : 'transform', value : 'tonumber' });
-                    }
-                    else if( pName === '__transform_toboolean' ) 
-                    {
-                        constraints.push({ type : 'transform', value : 'toboolean' });
-                    }
-                    else if( pName === '__transform_todate' ) 
-                    {
-                        constraints.push({ type : 'transform', value : 'todate' });
-                    }
-                    else if( pName === '__transform_custom' ) 
-                    {
-                        const identity = resolveFunctionIdentity( actualType, checker, pType );
-
-                        if( !identity ) 
-                        {
-                            throw new Error( '[Webergency] Custom transform must reference a named function via typeof (e.g. transform.Custom<typeof myFunc>).' );
-                        }
-
-                        constraints.push({ type : 'transform_custom', value : scope.bind( identity ) });
-                    }
-                    else if( pName === '__custom' ) 
-                    {
-                        const identity = resolveFunctionIdentity( actualType, checker, pType );
-
-                        if( !identity ) 
-                        {
-                            throw new Error( '[Webergency] Custom validator must reference a named function via typeof (e.g. constraint.Custom<typeof myFunc>).' );
-                        }
-
-                        const msgProp = props.find( p => p.getName() === `${pName}_message` );
-                        let constraintMsg: string | undefined;
-
-                        if( msgProp ) 
-                        {
-                            const msgType = checker.getTypeOfSymbolAtLocation( msgProp, msgProp.valueDeclaration || ( msgProp as any ).declarations?.[0]);
-                            constraintMsg = getStringLiteralValue( msgType );
-                        }
-                        constraints.push({ type : 'custom', value : scope.bind( identity ), message : constraintMsg });
-                    }
-                    else if( val !== undefined ) 
-                    {
-                        const msgProp = props.find( p => p.getName() === `${pName}_message` );
-                        let constraintMsg: string | undefined;
-
-                        if( msgProp ) 
-                        {
-                            const msgType = checker.getTypeOfSymbolAtLocation( msgProp, msgProp.valueDeclaration || ( msgProp as any ).declarations?.[0]);
-                            constraintMsg = getStringLiteralValue( msgType );
-                        }
-
-                        if( pName === '__minLength' ) { constraints.push({ type : 'minLength', value : val, message : constraintMsg }) }
-                        else if( pName === '__maxLength' ) { constraints.push({ type : 'maxLength', value : val, message : constraintMsg }) }
-                        else if( pName === '__minimum' ) { constraints.push({ type : 'minimum', value : val, message : constraintMsg }) }
-                        else if( pName === '__maximum' ) { constraints.push({ type : 'maximum', value : val, message : constraintMsg }) }
-                        else if( pName === '__exclusiveMinimum' ) { constraints.push({ type : 'exclusiveMinimum', value : val, message : constraintMsg }) }
-                        else if( pName === '__exclusiveMaximum' ) { constraints.push({ type : 'exclusiveMaximum', value : val, message : constraintMsg }) }
-                        else if( pName === '__multipleOf' ) { constraints.push({ type : 'multipleOf', value : val, message : constraintMsg }) }
-                        else if( pName === '__pattern' ) { constraints.push({ type : 'pattern', value : val, message : constraintMsg }) }
-                        else if( pName === '__format' ) { constraints.push({ type : 'format', value : val, message : constraintMsg }) }
-                        else if( pName === '__minItems' ) { constraints.push({ type : 'minItems', value : val, message : constraintMsg }) }
-                        else if( pName === '__maxItems' ) { constraints.push({ type : 'maxItems', value : val, message : constraintMsg }) }
-                        else if( pName === '__uniqueItems' ) { constraints.push({ type : 'uniqueItems', value : true, message : constraintMsg }) }
-                    }
-                    else if( pName === '__requires' ) 
-                    {
-                        let reqVal: string | string[];
-
-                        if( actualType.isStringLiteral()) 
-                        {
-                            reqVal = actualType.value;
-                        }
-                        else 
-                        {
-                            const typeArgs = ( actualType as ts.TypeReference ).typeArguments || [];
-                            const items: string[] = [];
-
-                            for( const arg of typeArgs ) 
-                            {
-                                if( arg.isStringLiteral()) 
-                                {
-                                    items.push( arg.value );
-                                }
-                            }
-                            reqVal = items;
-                        }
-                        const msgProp = props.find( p => p.getName() === `${pName}_message` );
-                        let constraintMsg: string | undefined;
-
-                        if( msgProp ) 
-                        {
-                            const msgType = checker.getTypeOfSymbolAtLocation( msgProp, msgProp.valueDeclaration || ( msgProp as any ).declarations?.[0]);
-                            constraintMsg = getStringLiteralValue( msgType );
-                        }
-                        constraints.push({ type : 'requires', value : reqVal, message : constraintMsg });
-                    }
+                    if( kind ){ break }
                 }
             }
-        }
 
-        if( constraints.length > 0 ) 
-        {
-            if( baseName ) 
+            if( kind )
             {
-                if( baseName === 'array' && baseType ) 
+                if( kind.baseName === 'array' && kind.baseType )
                 {
-                    const baseValidator = buildValidatorScoped( baseType, checker, validatorsMap, scope );
-                    result = createConstrainedPrimitiveCheck( baseName, constraints, baseValidator );
+                    const baseValidator = buildValidatorScoped( kind.baseType, checker, validatorsMap, scope );
+                    result = createConstrainedPrimitiveCheck( kind.baseName, constraints, baseValidator );
                 }
-                else if( baseType && ( baseType.getFlags() & ts.TypeFlags.TemplateLiteral )) 
+                else if( kind.baseType && ( kind.baseType.getFlags() & ts.TypeFlags.TemplateLiteral ))
                 {
-                    const baseValidator = buildValidatorScoped( baseType, checker, validatorsMap, scope );
-                    result = createConstrainedPrimitiveCheck( baseName, constraints, baseValidator );
+                    const baseValidator = buildValidatorScoped( kind.baseType, checker, validatorsMap, scope );
+                    result = createConstrainedPrimitiveCheck( kind.baseName, constraints, baseValidator );
                 }
-                else 
+                else
                 {
-                    result = createConstrainedPrimitiveCheck( baseName, constraints );
+                    result = createConstrainedPrimitiveCheck( kind.baseName, constraints );
                 }
             }
-            else 
+            else
             {
-                const nonConstraintTypes = types.filter( t => 
-                {
-                    const props = checker.getPropertiesOfType( t );
-
-                    return !props.some( p => isTagKey( p.getName()));
-                });
-
+                const nonConstraintTypes = types.filter( t => !isConstraintOnlyType( t, checker ));
                 let baseValidator: ts.Expression | undefined;
 
-                if( nonConstraintTypes.length === 1 ) 
+                if( nonConstraintTypes.length === 1 )
                 {
                     baseValidator = buildValidatorScoped( nonConstraintTypes[0], checker, validatorsMap, scope );
                 }
-                else if( nonConstraintTypes.length > 1 ) 
+                else if( nonConstraintTypes.length > 1 )
                 {
                     const merged = tryMergeObjectIntersection(
                         nonConstraintTypes,
                         checker,
                         validatorsMap,
-                        minifyTypeString( checker.typeToString( type )),
+                        expected,
                         scope
                     );
                     baseValidator = merged || createIntersectionCheck(
@@ -661,42 +341,35 @@ function buildValidatorScoped(
                     );
                 }
 
-                if( baseValidator ) 
+                if( baseValidator )
                 {
                     result = createConstrainedPrimitiveCheck( 'any', constraints, baseValidator );
                 }
-                else 
+                else
                 {
-                    const merged = tryMergeObjectIntersection(
-                        types,
-                        checker,
-                        validatorsMap,
-                        minifyTypeString( checker.typeToString( type )),
-                        scope
-                    );
+                    const merged = tryMergeObjectIntersection( types, checker, validatorsMap, expected, scope );
                     result = merged || createIntersectionCheck(
-                        ( type as ts.IntersectionType ).types.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ))
+                        types.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ))
                     );
                 }
             }
         }
-        else 
+        else if( peeled )
         {
-            const merged = tryMergeObjectIntersection(
-                types,
-                checker,
-                validatorsMap,
-                minifyTypeString( checker.typeToString( type )),
-                scope
-            );
+            // Brand-only (or other tagless) peels — walk the effective base, not the full intersection.
+            result = buildValidatorScoped( peeled.base, checker, validatorsMap, scope );
+        }
+        else
+        {
+            const merged = tryMergeObjectIntersection( types, checker, validatorsMap, expected, scope );
 
-            if( merged ) 
+            if( merged )
             {
                 result = merged;
             }
-            else 
+            else
             {
-                const checks = ( type as ts.IntersectionType ).types.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ));
+                const checks = types.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ));
                 result = createIntersectionCheck( checks );
             }
         }
@@ -727,10 +400,7 @@ function buildValidatorScoped(
     {
         result = createInstanceOfCheck( 'Promise' );
     }
-    else if( type.getSymbol()?.name && [
-        'Uint8Array', 'Uint16Array', 'Uint32Array', 'Int8Array', 'Int16Array', 'Int32Array',
-        'Float32Array', 'Float64Array', 'ArrayBuffer', 'SharedArrayBuffer', 'DataView', 'Buffer'
-    ].includes( type.getSymbol()!.name )) 
+    else if( type.getSymbol()?.name && BUFFER_LIKE.has( type.getSymbol()!.name )) 
     {
         result = createInstanceOfCheck( type.getSymbol()!.name );
     }
@@ -851,7 +521,7 @@ function buildValidatorScoped(
             const stringIndexInfo = checker.getIndexInfoOfType( type, ts.IndexKind.String );
             const props = checker.getPropertiesOfType( type ).map( prop =>
             {
-                const propType = typeOfProperty( type, prop, checker );
+                const propType = getPropertyType( type, prop, checker );
 
                 return {
                     name       : prop.getName(),
@@ -1036,10 +706,7 @@ function signatureOf( type: ts.Type, checker: ts.TypeChecker, visited: Set<numbe
         return `Map<${buildStructuralSignature( keyType, checker, visited )},${buildStructuralSignature( valueType, checker, visited )}>`;
     }
 
-    if( typeSymbolName && [
-        'Uint8Array', 'Uint16Array', 'Uint32Array', 'Int8Array', 'Int16Array', 'Int32Array',
-        'Float32Array', 'Float64Array', 'ArrayBuffer', 'SharedArrayBuffer', 'DataView', 'Buffer'
-    ].includes( typeSymbolName )) 
+    if( typeSymbolName && BUFFER_LIKE.has( typeSymbolName )) 
     {
         return typeSymbolName;
     }
@@ -1063,7 +730,7 @@ function signatureOf( type: ts.Type, checker: ts.TypeChecker, visited: Set<numbe
         }
         const propSigs = props.map( prop =>
         {
-            const propType = typeOfProperty( type, prop, checker );
+            const propType = getPropertyType( type, prop, checker );
             const isOptional = ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0;
 
             return `${prop.getName()}${isOptional ? '?' : ''}:${buildStructuralSignature( propType, checker, visited )}`;
@@ -1207,7 +874,7 @@ function complexityOf( type: ts.Type, checker: ts.TypeChecker, walk: IComplexity
 
                 for( const prop of props ) 
                 {
-                    const propType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0]);
+                    const propType = getPropertyType( type, prop, checker );
                     complexity += complexityOf( propType, checker, walk );
                 }
             }
@@ -1290,7 +957,7 @@ export function preScanType(
 
             for( const prop of props ) 
             {
-                const propType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0]);
+                const propType = getPropertyType( type, prop, checker );
                 preScanType( propType, checker, counts, circularHashes, visited );
             }
         }
@@ -1381,56 +1048,13 @@ function buildJsonSchemaInternal(
         for( const sub of types ) 
         {
             const sFlags = sub.getFlags();
-            const subProps = checker.getPropertiesOfType( sub );
-            const isConstraintPhantom = subProps.length > 0 && subProps.every( p => isTagKey( p.getName()));
 
-            if( isConstraintPhantom ) 
+            if( isConstraintOnlyType( sub, checker )) 
             {
-                for( const prop of subProps ) 
-                {
-                    const pName = prop.getName();
-                    const pType = checker.getTypeOfSymbolAtLocation( prop, prop.valueDeclaration || ( prop as any ).declarations?.[0]);
-                    const actualType = stripUndefinedFromType( pType );
-                    const val = getTagPropertyValue( pType );
-
-                    if( pName === '__default' ) { constraints.default = val }
-                    else if( pName === '__minLength' ) { constraints.minLength = val }
-                    else if( pName === '__maxLength' ) { constraints.maxLength = val }
-                    else if( pName === '__minimum' ) { constraints.minimum = val }
-                    else if( pName === '__maximum' ) { constraints.maximum = val }
-                    else if( pName === '__exclusiveMinimum' ) { constraints.exclusiveMinimum = val }
-                    else if( pName === '__exclusiveMaximum' ) { constraints.exclusiveMaximum = val }
-                    else if( pName === '__multipleOf' ) { constraints.multipleOf = val }
-                    else if( pName === '__pattern' ) { constraints.pattern = val }
-                    else if( pName === '__format' ) { constraints.format = val }
-                    else if( pName === '__minItems' ) { constraints.minItems = val }
-                    else if( pName === '__maxItems' ) { constraints.maxItems = val }
-                    else if( pName === '__uniqueItems' ) { constraints.uniqueItems = true }
-                    else if( pName === '__requires' ) 
-                    {
-                        let reqVal: string | string[];
-
-                        if( actualType.isStringLiteral()) 
-                        {
-                            reqVal = actualType.value;
-                        }
-                        else 
-                        {
-                            const typeArgs = ( actualType as ts.TypeReference ).typeArguments || [];
-                            const items: string[] = [];
-
-                            for( const arg of typeArgs ) 
-                            {
-                                if( arg.isStringLiteral()) 
-                                {
-                                    items.push( arg.value );
-                                }
-                            }
-                            reqVal = items;
-                        }
-                        constraints.requires = reqVal;
-                    }
-                }
+                applyConstraintsToJsonSchema(
+                    constraints,
+                    collectConstraintsFromProps( getTypeProps( sub, checker ), checker )
+                );
                 continue;
             }
 
@@ -1518,10 +1142,7 @@ function buildJsonSchemaInternal(
     {
         const typedName = type.getSymbol()?.name;
 
-        if( typedName && [
-            'Uint8Array', 'Uint16Array', 'Uint32Array', 'Int8Array', 'Int16Array', 'Int32Array',
-            'Float32Array', 'Float64Array', 'ArrayBuffer', 'SharedArrayBuffer', 'DataView', 'Buffer'
-        ].includes( typedName )) 
+        if( typedName && BUFFER_LIKE.has( typedName )) 
         {
             return { 'x-typescript-type' : typedName };
         }
@@ -1650,7 +1271,7 @@ function buildJsonSchemaInternal(
         {
             const pName = prop.getName();
             const isOptional = ( prop.flags & ts.SymbolFlags.Optional ) !== 0;
-            const propType = typeOfProperty( type, prop, checker );
+            const propType = getPropertyType( type, prop, checker );
 
             properties[pName] = buildJsonSchemaInternal( propType, checker, defs, visited, counts, circularHashes );
 

@@ -388,7 +388,7 @@ describe( 'validators coverage edges', () =>
             // Assert
             expect( ctx.success ).toBe( true );
 
-            // Arrange — path starting with '.' is normalized by tokenizePath
+            // Arrange — path starting with '.' is still normalized by tokenizePath (relative-path syntax)
             ctx = { success : true, errors : [], mode : 'strict', root : { items : [1] } };
             const probe = vi.fn(() => true );
 

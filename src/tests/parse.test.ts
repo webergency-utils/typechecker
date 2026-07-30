@@ -115,6 +115,13 @@ describe( 'Parse', () =>
             });
         });
 
+        it( 'tolerates malformed percent-encoding without throwing', () =>
+        {
+            expect( parseQueryString( '%E0%A4%A' )).toEqual({ '%E0%A4%A' : true });
+            expect( parseQueryString( 'a=%ZZ&b=ok' )).toEqual({ a : '%ZZ', b : 'ok' });
+            expect( parseQueryString( 'jpUllytbmQ=' )).toBeDefined();
+        });
+
         it( 'blocks prototype pollution patterns', () =>
         {
             const polluted = parseQueryString( '__proto__[polluted]=true&constructor[prototype][bad]=true&prototype[danger]=true&safe=ok' );
@@ -142,9 +149,9 @@ describe( 'Parse', () =>
         it( 'coerceNumber throws with path for invalid input', () =>
         {
             expect( () => coerceNumber( 'not-a-number', 'user.age' ))
-                .toThrow( 'Parse error at "user.age": Expected number, got "not-a-number"' );
+                .toThrow( 'Parse error at "user.age": Type<number>' );
             expect( () => coerceNumber( NaN, 'user.age' )).toThrow( ParseError );
-            expect( () => coerceNumber( {}, 'user.age' )).toThrow( /Expected number/ );
+            expect( () => coerceNumber( {}, 'user.age' )).toThrow( /Type<number>/ );
             expect( () => coerceNumber( '', 'user.age' )).toThrow( ParseError );
         });
 
@@ -160,7 +167,7 @@ describe( 'Parse', () =>
             expect( coerceBoolean( 0, 'flag' )).toBe( false );
 
             expect( () => coerceBoolean( 'yes', 'user.active' ))
-                .toThrow( 'Parse error at "user.active": Expected boolean, got "yes"' );
+                .toThrow( 'Parse error at "user.active": Type<boolean>' );
             expect( () => coerceBoolean( 'no', 'user.active' )).toThrow( ParseError );
             expect( () => coerceBoolean( 2, 'user.active' )).toThrow( ParseError );
             expect( () => coerceBoolean( {}, 'active' )).toThrow( ParseError );
@@ -173,7 +180,7 @@ describe( 'Parse', () =>
             expect( coerceDate( d, 'createdAt' )).toEqual( d );
             expect( coerceDate( '2026-06-15T12:34:56.789Z', 'createdAt' )).toEqual( d );
             expect( coerceDate( d.getTime(), 'createdAt' )).toEqual( d );
-            expect( () => coerceDate( 'invalid-date-string', 'event.date' )).toThrow( /Expected valid Date/ );
+            expect( () => coerceDate( 'invalid-date-string', 'event.date' )).toThrow( /Type<Date>/ );
             expect( () => coerceDate( new Date( NaN ), 'event.date' )).toThrow( ParseError );
             expect( () => coerceDate( {}, 'date' )).toThrow( ParseError );
         });
@@ -215,19 +222,19 @@ describe( 'Parse', () =>
             ])).toBe( 'hi' );
             expect( applyParseConstraints( 'HI', 'n', [{ type : 'transform', value : 'uppercase' }])).toBe( 'HI' );
             expect( applyParseConstraints( 'hello', 'n', [{ type : 'transform', value : 'capitalize' }])).toBe( 'Hello' );
-            expect( () => applyParseConstraints( 'x', 'n', [{ type : 'minLength', value : 2 }])).toThrow( /minLength/ );
-            expect( () => applyParseConstraints( 'abcdef', 'n', [{ type : 'maxLength', value : 3 }])).toThrow( /maxLength/ );
-            expect( () => applyParseConstraints( 5, 'n', [{ type : 'minimum', value : 10 }])).toThrow( /minimum/ );
-            expect( () => applyParseConstraints( 50, 'n', [{ type : 'maximum', value : 10 }])).toThrow( /maximum/ );
-            expect( () => applyParseConstraints( 10, 'n', [{ type : 'exclusiveMinimum', value : 10 }])).toThrow( /exclusiveMinimum/ );
-            expect( () => applyParseConstraints( 10, 'n', [{ type : 'exclusiveMaximum', value : 10 }])).toThrow( /exclusiveMaximum/ );
-            expect( () => applyParseConstraints( 7, 'n', [{ type : 'multipleOf', value : 3 }])).toThrow( /multipleOf/ );
-            expect( () => applyParseConstraints( 'abc', 'n', [{ type : 'pattern', value : '^[0-9]+$' }])).toThrow( /pattern/ );
-            expect( () => applyParseConstraints([ 1 ], 'n', [{ type : 'minItems', value : 2 }])).toThrow( /minItems/ );
-            expect( () => applyParseConstraints([ 1, 2, 3 ], 'n', [{ type : 'maxItems', value : 2 }])).toThrow( /maxItems/ );
-            expect( () => applyParseConstraints([ 1, 1 ], 'n', [{ type : 'uniqueItems', value : true }])).toThrow( /uniqueItems/ );
+            expect( () => applyParseConstraints( 'x', 'n', [{ type : 'minLength', value : 2 }])).toThrow( /MinLength/ );
+            expect( () => applyParseConstraints( 'abcdef', 'n', [{ type : 'maxLength', value : 3 }])).toThrow( /MaxLength/ );
+            expect( () => applyParseConstraints( 5, 'n', [{ type : 'minimum', value : 10 }])).toThrow( /Minimum/ );
+            expect( () => applyParseConstraints( 50, 'n', [{ type : 'maximum', value : 10 }])).toThrow( /Maximum/ );
+            expect( () => applyParseConstraints( 10, 'n', [{ type : 'exclusiveMinimum', value : 10 }])).toThrow( /ExclusiveMinimum/ );
+            expect( () => applyParseConstraints( 10, 'n', [{ type : 'exclusiveMaximum', value : 10 }])).toThrow( /ExclusiveMaximum/ );
+            expect( () => applyParseConstraints( 7, 'n', [{ type : 'multipleOf', value : 3 }])).toThrow( /MultipleOf/ );
+            expect( () => applyParseConstraints( 'abc', 'n', [{ type : 'pattern', value : '^[0-9]+$' }])).toThrow( /Pattern/ );
+            expect( () => applyParseConstraints([ 1 ], 'n', [{ type : 'minItems', value : 2 }])).toThrow( /MinItems/ );
+            expect( () => applyParseConstraints([ 1, 2, 3 ], 'n', [{ type : 'maxItems', value : 2 }])).toThrow( /MaxItems/ );
+            expect( () => applyParseConstraints([ 1, 1 ], 'n', [{ type : 'uniqueItems', value : true }])).toThrow( /UniqueItems/ );
             expect( applyParseConstraints([ 1, 2 ], 'n', [{ type : 'uniqueItems', value : true }])).toEqual([ 1, 2 ]);
-            expect( () => applyParseConstraints({ a : 1 }, 'n', [{ type : 'requires', value : 'b' }])).toThrow( /requires/ );
+            expect( () => applyParseConstraints({ a : 1 }, 'n', [{ type : 'requires', value : 'b' }])).toThrow( /Requires/ );
             expect( applyParseConstraints({ a : 1, b : 2 }, 'n', [{ type : 'requires', value : [ 'a', 'b' ] }])).toEqual({ a : 1, b : 2 });
             expect( () => applyParseConstraints( 'not-an-email', 'n', [{ type : 'format', value : 'email' }])).toThrow();
             expect( applyParseConstraints( 'a@b.co', 'n', [{ type : 'format', value : 'email' }])).toBe( 'a@b.co' );
@@ -246,7 +253,7 @@ describe( 'Parse', () =>
             const dummyType: any = { getFlags : () => ts.TypeFlags.String };
             const code = generateParseCode( dummyType, {} as any, { from : 'json' });
 
-            expect( code ).toContain( 'Expected string' );
+            expect( code ).toContain( 'expectString' );
             expect( code ).toContain( 'JSON.parse' );
         });
 
@@ -274,7 +281,25 @@ describe( 'Parse', () =>
             expect( code ).toContain( '@webergency-utils/typechecker/runtime' );
             expect( code ).toContain( '__parse_' );
             expect( code ).toContain( 'JSON.parse' );
-            expect( code ).toContain( 'Missing required property' );
+            expect( code ).toContain( 'expectString' );
+        });
+
+        it( 'emits Custom transform and constraint calls for parse', () =>
+        {
+            const code = compile( `
+                import { parse, constraint, transform } from './src/index.js';
+                function addPrefix( val: string ) { return 'web_' + val; }
+                function startsWithWeb( val: string ) { return val.startsWith( 'web_' ); }
+                interface Row {
+                    code: string & transform.Custom<typeof addPrefix>;
+                    key: string & constraint.Custom<typeof startsWithWeb>;
+                }
+                export function run( json: string ) { return parse<Row>( json ); }
+            ` );
+
+            expect( code ).toContain( 'addPrefix' );
+            expect( code ).toContain( 'startsWithWeb' );
+            expect( code ).toContain( '__tcRuntime.validators.custom' );
         });
 
         it( 'compiles JSON modes and nested arrays', () =>
@@ -283,14 +308,14 @@ describe( 'Parse', () =>
                 import { parse } from './src/index.js';
                 interface Config { port: number }
                 export function run( json: string ) { return parse<Config>( json, { from: 'json', mode: 'strict' } ); }
-            ` )).toContain( 'Unexpected extra property' );
+            ` )).toContain( 'PropertyNotAllowed<' );
 
             const strip = compile( `
                 import { parse } from './src/index.js';
                 interface Data { name: string }
                 export function run( json: string ) { return parse<Data>( json, { from: 'json', mode: 'strip' } ); }
             ` );
-            expect( strip ).not.toContain( 'Unexpected extra property' );
+            expect( strip ).not.toContain( 'PropertyNotAllowed<' );
 
             expect( compile( `
                 import { parse } from './src/index.js';
@@ -303,7 +328,7 @@ describe( 'Parse', () =>
                 interface Item { id: number }
                 interface Order { id: string; items: Item[] }
                 export function run( json: string ) { return parse<Order>( json ); }
-            ` )).toContain( 'Expected array' );
+            ` )).toContain( 'expectArray' );
         });
 
         it( 'compiles query parsers with coercions and URLSearchParams branch', () =>
@@ -328,7 +353,7 @@ describe( 'Parse', () =>
                 import { parse } from './src/index.js';
                 interface User { id: string }
                 export function run( json: string ) { return parse<User>( json, 'strict' ); }
-            ` )).toContain( 'Unexpected extra property' );
+            ` )).toContain( 'PropertyNotAllowed<' );
         });
 
         it( 'compiles Buffer / Date parse branches', () =>
@@ -366,13 +391,13 @@ describe( 'Parse', () =>
             expect( mod.parseUser({ id : '1', age : 30, email : 'a@b.c', drop : true })).toEqual({
                 id : '1', age : 30, email : 'a@b.c'
             });
-            expect( () => mod.parseStrict({ id : '1', age : 30, drop : true })).toThrow( /Unexpected extra property/ );
+            expect( () => mod.parseStrict({ id : '1', age : 30, drop : true })).toThrow( /PropertyNotAllowed<drop>/ );
             expect( mod.parseRelaxed({ id : '1', age : 30, drop : true }).drop ).toBe( true );
             expect( mod.parseOrder( '{"id":"o1","items":[{"id":1},{"id":2}]}' )).toEqual({
                 id : 'o1', items : [{ id : 1 }, { id : 2 }]
             });
             expect( () => mod.parseUser( '{bad' )).toThrow( /Invalid JSON/ );
-            expect( () => mod.parseUser({ age : 30 })).toThrow( /Missing required property/ );
+            expect( () => mod.parseUser({ age : 30 })).toThrow( /Type<string>/ );
         });
 
         it( 'parses Date and Buffer from JSON', async() =>
@@ -411,7 +436,7 @@ describe( 'Parse', () =>
             expect( mod.parseQs( 'page=1&active=0&tags[]=a&tags[]=b' )).toEqual({
                 page : 1, active : false, tags : [ 'a', 'b' ]
             });
-            expect( () => mod.parseQs( 'page=1&active=true&rogue=1' )).toThrow( /Unexpected extra property/ );
+            expect( () => mod.parseQs( 'page=1&active=true&rogue=1' )).toThrow( /PropertyNotAllowed<rogue>/ );
 
             const usp = new URLSearchParams({ page : '3', active : '1' });
             expect( mod.parseUsp( usp )).toEqual({ page : 3, active : true });
@@ -470,7 +495,7 @@ describe( 'Parse', () =>
             expect( mod.parseLit( '"on"' )).toBe( 'on' );
             expect( () => mod.parseLit( '"maybe"' )).toThrow();
             expect( mod.parseTup( '["a",1]' )).toEqual([ 'a', 1 ]);
-            expect( () => mod.parseTup( '["a"]' )).toThrow( /tuple/ );
+            expect( () => mod.parseTup( '["a"]' )).toThrow( /Tuple<2>/ );
             expect( mod.parseTag({ kind : 'square', s : 4 })).toEqual({ kind : 'square', s : 4 });
             expect( () => mod.parseTag({ kind : 'triangle' })).toThrow();
             expect( mod.parseRec({ x : 1, y : 2 })).toEqual({ x : 1, y : 2 });
@@ -498,6 +523,27 @@ describe( 'Parse', () =>
             });
             expect( () => mod.parseUser({ name : 'x', age : 20 })).toThrow( /minLength/i );
             expect( () => mod.parseUser({ name : 'ab', age : 10 })).toThrow( /minimum/i );
+        });
+
+        it( 'applies transform.Custom and constraint.Custom like assert', async() =>
+        {
+            const mod = await emitAndImport<{
+                parseRow : ( v: unknown ) => any
+            }>( `
+                import { parse, constraint, transform } from '../src/index.js';
+                function addPrefix( val: string ) { return 'web_' + val; }
+                function startsWithWeb( val: string ) { return val.startsWith( 'web_' ); }
+                interface Row {
+                    code: string & transform.Custom<typeof addPrefix>;
+                    key: string & constraint.Custom<typeof startsWithWeb>;
+                }
+                export const parseRow = ( v: unknown ) => parse<Row>( v );
+            `, 'temp_parse_e2e_custom' );
+
+            expect( mod.parseRow({ code : 'abc', key : 'web_ok' })).toEqual({
+                code : 'web_abc', key : 'web_ok'
+            });
+            expect( () => mod.parseRow({ code : 'abc', key : 'bad' })).toThrow( /Custom/ );
         });
 
         it( 'rejects Infinity from query numbers and accepts JSON Infinity', async() =>

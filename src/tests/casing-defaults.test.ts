@@ -358,7 +358,7 @@ describe( 'Casing + Defaults + original optionality', () =>
             const res = mod.run({ name : 'x', pageSize : 0 });
 
             expect( res.success ).toBe( false );
-            expect( res.errors.some(( e: any ) => e.path === '.pageSize' )).toBe( true );
+            expect( res.errors.some(( e: any ) => e.path === 'pageSize' )).toBe( true );
         });
 
         it( 'should leave a plain original optional absent after casing + runtime convert', async() =>

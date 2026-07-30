@@ -1,4 +1,5 @@
 import { validators } from './validators.js';
+import { getCachedPattern } from './regex.js';
 
 export class ParseError extends Error
 {
@@ -12,6 +13,85 @@ export class ParseError extends Error
     }
 }
 
+function parseErrorCode( err: ParseError ): string
+{
+    const prefix = err.path ? `Parse error at "${err.path}": ` : 'Parse error: ';
+
+    if( err.message.startsWith( prefix )){ return err.message.slice( prefix.length ) }
+
+    return err.message;
+}
+
+export function expectString( v: any, path: string ): string
+{
+    if( typeof v !== 'string' ){ throw new ParseError( path, 'Type<string>' ) }
+
+    return v;
+}
+
+export function expectNumber( v: any, path: string ): number
+{
+    if( typeof v !== 'number' || Number.isNaN( v )){ throw new ParseError( path, 'Type<number>' ) }
+
+    return v;
+}
+
+export function expectBoolean( v: any, path: string ): boolean
+{
+    if( typeof v !== 'boolean' ){ throw new ParseError( path, 'Type<boolean>' ) }
+
+    return v;
+}
+
+export function expectObject( v: any, path: string ): object
+{
+    if( typeof v !== 'object' || v === null || Array.isArray( v ))
+    {
+        throw new ParseError( path, 'Type<Object>' );
+    }
+
+    return v;
+}
+
+export function expectArray( v: any, path: string ): any[]
+{
+    if( !Array.isArray( v )){ throw new ParseError( path, 'Type<Array>' ) }
+
+    return v;
+}
+
+export function parseUnion(
+    v        : any,
+    path     : string,
+    expected : string,
+    arms     : Array<( v: any, p: string ) => any>
+): any
+{
+    let last: ParseError | undefined;
+
+    for( const arm of arms )
+    {
+        try
+        {
+            return arm( v, path );
+        }
+        catch( e )
+        {
+            if( e instanceof ParseError )
+            {
+                last = e;
+                continue;
+            }
+
+            throw e;
+        }
+    }
+
+    if( last && parseErrorCode( last ) === expected ){ throw last }
+
+    throw new ParseError( path, expected );
+}
+
 const intRE = /^[0-9]+$/;
 
 function isUnsafeKey( key: string | number ): boolean
@@ -22,6 +102,19 @@ function isUnsafeKey( key: string | number ): boolean
 function createPlainObject(): Record<string | number, any>
 {
     return {};
+}
+
+/** decodeURIComponent throws URIError on lone `%` / bad hex; keep the raw segment instead. */
+function safeDecodeURIComponent( value: string ): string
+{
+    try
+    {
+        return decodeURIComponent( value );
+    }
+    catch
+    {
+        return value;
+    }
 }
 
 /**
@@ -114,13 +207,13 @@ export function parseQueryString( querystring: string ): Record<string, any>
             if( ~( value = querystring.indexOf( eq, last_pair )) && value < pair )
             {
                 assign(
-                    decodeURIComponent( querystring.substring( last_pair, value ).replace( /\+/g, ' ' )),
-                    decodeURIComponent( querystring.substring( value + 1, pair ).replace( /\+/g, ' ' ))
+                    safeDecodeURIComponent( querystring.substring( last_pair, value ).replace( /\+/g, ' ' )),
+                    safeDecodeURIComponent( querystring.substring( value + 1, pair ).replace( /\+/g, ' ' ))
                 );
             }
             else
             {
-                assign( decodeURIComponent( querystring.substring( last_pair, pair ).replace( /\+/g, ' ' )), true );
+                assign( safeDecodeURIComponent( querystring.substring( last_pair, pair ).replace( /\+/g, ' ' )), true );
             }
         }
 
@@ -142,7 +235,7 @@ export function coerceNumber( val: any, path: string ): number
         if( !Number.isNaN( num ) && Number.isFinite( num )){ return num }
     }
 
-    throw new ParseError( path, `Expected number, got ${typeof val === 'string' ? `"${val}"` : String( val )}` );
+    throw new ParseError( path, 'Type<number>' );
 }
 
 export function coerceBoolean( val: any, path: string ): boolean
@@ -151,7 +244,7 @@ export function coerceBoolean( val: any, path: string ): boolean
     if( val === 'true' || val === '1' || val === 1 || val === true ){ return true }
     if( val === 'false' || val === '0' || val === 0 || val === false ){ return false }
 
-    throw new ParseError( path, `Expected boolean, got ${typeof val === 'string' ? `"${val}"` : String( val )}` );
+    throw new ParseError( path, 'Type<boolean>' );
 }
 
 export function coerceDate( val: any, path: string ): Date
@@ -165,7 +258,7 @@ export function coerceDate( val: any, path: string ): Date
         if( !isNaN( d.getTime())){ return d }
     }
 
-    throw new ParseError( path, `Expected valid Date, got ${String( val )}` );
+    throw new ParseError( path, 'Type<Date>' );
 }
 
 export function coerceArray<T>( val: any, path: string, mapper: ( item: any, itemPath: string ) => T ): T[]
@@ -190,7 +283,7 @@ export function coerceBuffer( val: any, path: string ): Buffer
         return Buffer.from( val, 'base64' );
     }
 
-    throw new ParseError( path, `Expected Buffer or base64 string, got ${String( val )}` );
+    throw new ParseError( path, 'Type<Buffer>' );
 }
 
 export function coerceBigInt( val: any, path: string ): bigint
@@ -205,7 +298,7 @@ export function coerceBigInt( val: any, path: string ): bigint
         }
         catch
         {
-            throw new ParseError( path, `Expected bigint, got "${val}"` );
+            throw new ParseError( path, 'Type<bigint>' );
         }
     }
 
@@ -214,7 +307,7 @@ export function coerceBigInt( val: any, path: string ): bigint
         return BigInt( val );
     }
 
-    throw new ParseError( path, `Expected bigint, got ${String( val )}` );
+    throw new ParseError( path, 'Type<bigint>' );
 }
 
 export type ParseConstraint =
@@ -235,14 +328,20 @@ export function applyParseConstraints(
 ): any
 {
     let v = val;
-    const defaultC = constraints.find( c => c.type === 'default' );
-    const transforms = constraints.filter( c => c.type === 'transform' );
-    const messageC = constraints.find( c => c.type === 'message' );
-    const remaining = constraints.filter( c =>
-        c.type !== 'default' && c.type !== 'transform' && c.type !== 'message'
-    );
+    const defaultC: ParseConstraint[] = [];
+    const transforms: ParseConstraint[] = [];
+    const messageC: ParseConstraint[] = [];
+    const remaining: ParseConstraint[] = [];
 
-    if( v === undefined && defaultC ){ v = defaultC.value }
+    for( const c of constraints )
+    {
+        if( c.type === 'default' ){ defaultC.push( c ) }
+        else if( c.type === 'transform' ){ transforms.push( c ) }
+        else if( c.type === 'message' ){ messageC.push( c ) }
+        else { remaining.push( c ) }
+    }
+
+    if( v === undefined && defaultC.length > 0 ){ v = defaultC[0].value }
 
     if( v !== undefined && v !== null )
     {
@@ -267,76 +366,83 @@ export function applyParseConstraints(
     // Here we implement the common checks directly to avoid circular imports.
     for( const c of remaining )
     {
-        const msg = c.message || messageC?.value;
+        const msg = c.message || messageC[0]?.value;
 
         if( c.type === 'minLength' )
         {
             if( typeof v === 'string' && v.length < c.value )
             {
-                throw new ParseError( path, msg || `minLength ${c.value}` );
+                throw new ParseError( path, msg || `MinLength<${c.value}>` );
             }
         }
         else if( c.type === 'maxLength' )
         {
             if( typeof v === 'string' && v.length > c.value )
             {
-                throw new ParseError( path, msg || `maxLength ${c.value}` );
+                throw new ParseError( path, msg || `MaxLength<${c.value}>` );
             }
         }
         else if( c.type === 'minimum' )
         {
             if( typeof v === 'number' && v < c.value )
             {
-                throw new ParseError( path, msg || `minimum ${c.value}` );
+                throw new ParseError( path, msg || `Minimum<${c.value}>` );
             }
         }
         else if( c.type === 'maximum' )
         {
             if( typeof v === 'number' && v > c.value )
             {
-                throw new ParseError( path, msg || `maximum ${c.value}` );
+                throw new ParseError( path, msg || `Maximum<${c.value}>` );
             }
         }
         else if( c.type === 'exclusiveMinimum' )
         {
             if( typeof v === 'number' && v <= c.value )
             {
-                throw new ParseError( path, msg || `exclusiveMinimum ${c.value}` );
+                throw new ParseError( path, msg || `ExclusiveMinimum<${c.value}>` );
             }
         }
         else if( c.type === 'exclusiveMaximum' )
         {
             if( typeof v === 'number' && v >= c.value )
             {
-                throw new ParseError( path, msg || `exclusiveMaximum ${c.value}` );
+                throw new ParseError( path, msg || `ExclusiveMaximum<${c.value}>` );
             }
         }
         else if( c.type === 'multipleOf' )
         {
             if( typeof v === 'number' && c.value !== 0 && v % c.value !== 0 )
             {
-                throw new ParseError( path, msg || `multipleOf ${c.value}` );
+                throw new ParseError( path, msg || `MultipleOf<${c.value}>` );
             }
         }
         else if( c.type === 'pattern' )
         {
-            if( typeof v === 'string' && !( new RegExp( c.value )).test( v ))
+            if( typeof v === 'string' )
             {
-                throw new ParseError( path, msg || `pattern ${c.value}` );
+                const regex = getCachedPattern( c.value );
+
+                if( !regex ){ throw new ParseError( path, msg || 'UnsafePattern' ) }
+
+                if( !regex.test( v ))
+                {
+                    throw new ParseError( path, msg || `Pattern<'${c.value}'>` );
+                }
             }
         }
         else if( c.type === 'minItems' )
         {
             if( Array.isArray( v ) && v.length < c.value )
             {
-                throw new ParseError( path, msg || `minItems ${c.value}` );
+                throw new ParseError( path, msg || `MinItems<${c.value}>` );
             }
         }
         else if( c.type === 'maxItems' )
         {
             if( Array.isArray( v ) && v.length > c.value )
             {
-                throw new ParseError( path, msg || `maxItems ${c.value}` );
+                throw new ParseError( path, msg || `MaxItems<${c.value}>` );
             }
         }
         else if( c.type === 'format' )
@@ -353,7 +459,7 @@ export function applyParseConstraints(
 
             if( !ctx.success )
             {
-                throw new ParseError( path, ctx.errors[0]?.error || msg || `format ${c.value}` );
+                throw new ParseError( path, ctx.errors[0]?.error || msg || `Format<${c.value}>` );
             }
         }
         else if( c.type === 'requires' )
@@ -364,7 +470,7 @@ export function applyParseConstraints(
             {
                 if( v == null || v[key] === undefined )
                 {
-                    throw new ParseError( path, msg || `requires ${key}` );
+                    throw new ParseError( path, msg || `Requires<${key}>` );
                 }
             }
         }
@@ -380,7 +486,7 @@ export function applyParseConstraints(
 
                     if( seen.has( key ))
                     {
-                        throw new ParseError( path, msg || 'uniqueItems' );
+                        throw new ParseError( path, msg || 'UniqueItems' );
                     }
 
                     seen.add( key );

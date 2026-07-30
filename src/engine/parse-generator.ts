@@ -1,13 +1,14 @@
 import ts from 'typescript';
 import { ValidationMode } from '../runtime/validators.js';
+import { type ICustomFunctionScope } from './customFns.js';
 import
 {
     BUFFER_LIKE,
     enumMemberTypes,
-    getPropertyType,
     getTypeProps,
     isNativeEnumType,
     isTagKey,
+    mapStructuralProps,
     ParsedConstraint,
     peelTaggedIntersection,
     safePropAccess,
@@ -15,7 +16,8 @@ import
     tryMergeObjectTypes,
     tryTaggedUnionTypes,
     typeHasDefaultTag,
-    typeSymbolName
+    typeSymbolName,
+    VERBATIM_CUSTOM_SCOPE
 }
 from './type-helpers.js';
 
@@ -27,10 +29,55 @@ export interface ParseGeneratorOptions
     from? : ParseSource;
 }
 
+function minifyTypeString( str: string ): string
+{
+    return str
+        .replace( /\{\s+/g, '{' )
+        .replace( /\s+\}/g, '}' )
+        .replace( /;\s*\}/g, '}' )
+        .replace( /;\s+/g, ',' )
+        .replace( /:\s+/g, ':' )
+        .replace( /\s+\|\s+/g, '|' );
+}
+
+function unionExpectedLabel( type: ts.Type, checker: ts.TypeChecker ): string
+{
+    const aliasName = type.aliasSymbol && typeof type.aliasSymbol.getName === 'function'
+        ? type.aliasSymbol.getName()
+        : undefined;
+    const name = aliasName || typeSymbolName( type );
+
+    if( name && !name.startsWith( '__' ) && /^[A-Za-z_][A-Za-z0-9_]*$/.test( name ))
+    {
+        return `Type<${name}>`;
+    }
+
+    try
+    {
+        return `Type<${minifyTypeString( checker.typeToString( type ))}>`;
+    }
+    catch
+    {
+        return 'Type<Union>';
+    }
+}
+
+/** Parenthesize path expressions so nested ternaries do not steal the appended segment. */
+function joinPath( pathExpr: string, segment: string ): string
+{
+    if( !pathExpr || pathExpr === '""' )
+    {
+        return JSON.stringify( segment );
+    }
+
+    return `( ${pathExpr} ) ? ( ${pathExpr} ) + "." + ${JSON.stringify( segment )} : ${JSON.stringify( segment )}`;
+}
+
 export function generateParseCode(
     type    : ts.Type,
     checker : ts.TypeChecker,
-    options : ParseGeneratorOptions = {}
+    options : ParseGeneratorOptions = {},
+    scope   : ICustomFunctionScope = VERBATIM_CUSTOM_SCOPE
 ): string
 {
     const mode = options.mode || 'strip';
@@ -38,12 +85,12 @@ export function generateParseCode(
 
     if( from === 'query' )
     {
-        const body = buildValidation( type, checker, mode, 'query', 'rawQuery', '""' );
+        const body = buildValidation( type, checker, mode, 'query', 'rawQuery', '""', 'rawQuery', scope );
 
         return `( function( input, path = "" ){ const rawQuery = ( typeof input === "string" ? __tcRuntime.parseQueryString( input ) : ( input && typeof input === "object" && typeof input.entries === "function" ? __tcRuntime.parseQueryString( input.toString() ) : input || {} ) ); return ${body}; })`;
     }
 
-    const body = buildValidation( type, checker, mode, 'json', 'obj', '""' );
+    const body = buildValidation( type, checker, mode, 'json', 'obj', '""', 'obj', scope );
 
     return `( function( input, path = "" ){ let obj; try { obj = typeof input === "string" ? JSON.parse( input ) : input; } catch( e ){ throw new __tcRuntime.ParseError( path, "Invalid JSON: " + e.message ); } return ${body}; })`;
 }
@@ -53,7 +100,8 @@ function wrapConstraints(
     constraints  : ParsedConstraint[],
     varName      : string,
     pathExpr     : string,
-    from         : ParseSource
+    from         : ParseSource,
+    rootExpr     : string
 ): string
 {
     if( constraints.length === 0 )
@@ -62,10 +110,40 @@ function wrapConstraints(
     }
 
     const early = constraints.filter( c => c.type === 'default' || c.type === 'transform' || c.type === 'message' );
-    const late = constraints.filter( c => c.type !== 'default' && c.type !== 'transform' && c.type !== 'message' );
+    const customTransforms = constraints.filter( c => c.type === 'transform_custom' );
+    const late = constraints.filter( c =>
+        c.type !== 'default' &&
+        c.type !== 'transform' &&
+        c.type !== 'transform_custom' &&
+        c.type !== 'message' &&
+        c.type !== 'custom'
+    );
+    const customConstraints = constraints.filter( c => c.type === 'custom' );
     const inner = innerFactory( '__v', 'p' );
 
-    return `( function( raw, p ){ let __v = __tcRuntime.applyParseConstraints( raw, p, ${JSON.stringify( early )}, ${JSON.stringify( from )} ); __v = ${inner}; return __tcRuntime.applyParseConstraints( __v, p, ${JSON.stringify( late )}, ${JSON.stringify( from )} ); })( ${varName}, ${pathExpr || '""'} )`;
+    let customTransformCode = '';
+
+    if( customTransforms.length > 0 )
+    {
+        const stmts = customTransforms.map( c => `__v = ${c.value}(__v);` ).join( ' ' );
+        customTransformCode = `if( __v !== undefined && __v !== null ){ ${stmts} } `;
+    }
+
+    let customConstraintCode = '';
+
+    if( customConstraints.length > 0 )
+    {
+        const stmts = customConstraints.map( c =>
+        {
+            const msgArg = c.message !== undefined ? `, ${JSON.stringify( c.message )}` : '';
+            const fallback = c.message !== undefined ? JSON.stringify( c.message ) : '"Custom"';
+
+            return `{ const _ctx = { success: true, errors: [], mode: "strict", from: ${JSON.stringify( from )}, root: root }; __tcRuntime.validators.custom(__v, p, _ctx, ${c.value}${msgArg}); if( !_ctx.success ){ throw new __tcRuntime.ParseError( p, (_ctx.errors[0] && _ctx.errors[0].error) || ${fallback} ); } }`;
+        }).join( ' ' );
+        customConstraintCode = `if( __v !== undefined && __v !== null ){ ${stmts} } `;
+    }
+
+    return `( function( raw, p, root ){ let __v = __tcRuntime.applyParseConstraints( raw, p, ${JSON.stringify( early )}, ${JSON.stringify( from )} ); ${customTransformCode}__v = ${inner}; __v = __tcRuntime.applyParseConstraints( __v, p, ${JSON.stringify( late )}, ${JSON.stringify( from )} ); ${customConstraintCode}return __v; })( ${varName}, ${pathExpr || '""'}, ${rootExpr} )`;
 }
 
 function buildValidation(
@@ -74,7 +152,9 @@ function buildValidation(
     mode     : ValidationMode,
     from     : ParseSource,
     varName  : string,
-    pathExpr : string
+    pathExpr : string,
+    rootExpr : string,
+    scope    : ICustomFunctionScope
 ): string
 {
     let constraints: ParsedConstraint[] = [];
@@ -82,7 +162,7 @@ function buildValidation(
 
     if( typeof type.isIntersection === 'function' && type.isIntersection())
     {
-        const peeled = peelTaggedIntersection( type, checker );
+        const peeled = peelTaggedIntersection( type, checker, scope );
         const merged = tryMergeObjectTypes(
             type.types.filter( t =>
             {
@@ -105,18 +185,19 @@ function buildValidation(
                 if( inner )
                 {
                     return wrapConstraints(
-                        ( vn, pe ) => buildObjectValidation( inner.props, inner.indexType, checker, mode, from, vn, pe ),
+                        ( vn, pe ) => buildObjectValidation( inner.props, inner.indexType, checker, mode, from, vn, pe, rootExpr, scope ),
                         constraints,
                         varName,
                         pathExpr,
-                        from
+                        from,
+                        rootExpr
                     );
                 }
             }
         }
         else if( merged )
         {
-            return buildObjectValidation( merged.props, merged.indexType, checker, mode, from, varName, pathExpr );
+            return buildObjectValidation( merged.props, merged.indexType, checker, mode, from, varName, pathExpr, rootExpr, scope );
         }
         else if( peeled )
         {
@@ -126,11 +207,12 @@ function buildValidation(
     }
 
     return wrapConstraints(
-        ( vn, pe ) => buildValidationCore( walkType, checker, mode, from, vn, pe ),
+        ( vn, pe ) => buildValidationCore( walkType, checker, mode, from, vn, pe, rootExpr, scope ),
         constraints,
         varName,
         pathExpr,
-        from
+        from,
+        rootExpr
     );
 }
 
@@ -140,7 +222,9 @@ function buildValidationCore(
     mode     : ValidationMode,
     from     : ParseSource,
     varName  : string,
-    pathExpr : string
+    pathExpr : string,
+    rootExpr : string,
+    scope    : ICustomFunctionScope
 ): string
 {
     const flags = typeof type.getFlags === 'function' ? type.getFlags() : ts.TypeFlags.Any;
@@ -149,42 +233,45 @@ function buildValidationCore(
     if( typeof type.isStringLiteral === 'function' && type.isStringLiteral())
     {
         const expected = JSON.stringify( type.value );
+        const litCode = `Literal<'${String( type.value ).replace( /\\/g, '\\\\' ).replace( /'/g, "\\'" )}'>`;
 
         if( from === 'query' )
         {
-            return `( function( v, path ){ if( typeof v !== "string" ){ throw new __tcRuntime.ParseError( path, "Expected string literal " + ${expected} ); } if( v !== ${expected} ){ throw new __tcRuntime.ParseError( path, "Expected " + ${expected} ); } return v; })( ${varName}, ${p} )`;
+            return `( function( v, path ){ if( typeof v !== "string" ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( litCode )} ); } if( v !== ${expected} ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( litCode )} ); } return v; })( ${varName}, ${p} )`;
         }
 
-        return `( function( v, path ){ if( v !== ${expected} ){ throw new __tcRuntime.ParseError( path, "Expected " + ${expected} ); } return v; })( ${varName}, ${p} )`;
+        return `( function( v, path ){ if( v !== ${expected} ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( litCode )} ); } return v; })( ${varName}, ${p} )`;
     }
 
     if( typeof type.isNumberLiteral === 'function' && type.isNumberLiteral())
     {
         const expected = type.value;
+        const litCode = `Literal<${expected}>`;
 
         if( from === 'query' )
         {
-            return `( function( v, path ){ const n = __tcRuntime.coerceNumber( v, path ); if( n !== ${expected} ){ throw new __tcRuntime.ParseError( path, "Expected ${expected}" ); } return n; })( ${varName}, ${p} )`;
+            return `( function( v, path ){ const n = __tcRuntime.coerceNumber( v, path ); if( n !== ${expected} ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( litCode )} ); } return n; })( ${varName}, ${p} )`;
         }
 
-        return `( function( v, path ){ if( v !== ${expected} ){ throw new __tcRuntime.ParseError( path, "Expected ${expected}" ); } return v; })( ${varName}, ${p} )`;
+        return `( function( v, path ){ if( v !== ${expected} ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( litCode )} ); } return v; })( ${varName}, ${p} )`;
     }
 
     if( flags & ts.TypeFlags.BooleanLiteral )
     {
         const expected = ( type as any ).intrinsicName === 'true';
+        const litCode = `Literal<${expected}>`;
 
         if( from === 'query' )
         {
-            return `( function( v, path ){ const b = __tcRuntime.coerceBoolean( v, path ); if( b !== ${expected} ){ throw new __tcRuntime.ParseError( path, "Expected ${expected}" ); } return b; })( ${varName}, ${p} )`;
+            return `( function( v, path ){ const b = __tcRuntime.coerceBoolean( v, path ); if( b !== ${expected} ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( litCode )} ); } return b; })( ${varName}, ${p} )`;
         }
 
-        return `( function( v, path ){ if( v !== ${expected} ){ throw new __tcRuntime.ParseError( path, "Expected ${expected}" ); } return v; })( ${varName}, ${p} )`;
+        return `( function( v, path ){ if( v !== ${expected} ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( litCode )} ); } return v; })( ${varName}, ${p} )`;
     }
 
     if( flags & ts.TypeFlags.String )
     {
-        return `( function( v, path ){ if( typeof v !== "string" ){ throw new __tcRuntime.ParseError( path, "Expected string" ); } return v; })( ${varName}, ${p} )`;
+        return `__tcRuntime.expectString( ${varName}, ${p} )`;
     }
 
     if( flags & ts.TypeFlags.Number )
@@ -194,7 +281,7 @@ function buildValidationCore(
             return `__tcRuntime.coerceNumber( ${varName}, ${p} )`;
         }
 
-        return `( function( v, path ){ if( typeof v !== "number" || Number.isNaN( v ) ){ throw new __tcRuntime.ParseError( path, "Expected number" ); } return v; })( ${varName}, ${p} )`;
+        return `__tcRuntime.expectNumber( ${varName}, ${p} )`;
     }
 
     if( flags & ts.TypeFlags.Boolean )
@@ -204,7 +291,7 @@ function buildValidationCore(
             return `__tcRuntime.coerceBoolean( ${varName}, ${p} )`;
         }
 
-        return `( function( v, path ){ if( typeof v !== "boolean" ){ throw new __tcRuntime.ParseError( path, "Expected boolean" ); } return v; })( ${varName}, ${p} )`;
+        return `__tcRuntime.expectBoolean( ${varName}, ${p} )`;
     }
 
     if( flags & ts.TypeFlags.BigInt || flags & ts.TypeFlags.BigIntLiteral )
@@ -224,7 +311,9 @@ function buildValidationCore(
                 mode,
                 from,
                 varName,
-                pathExpr
+                pathExpr,
+                rootExpr,
+                scope
             );
         }
     }
@@ -245,23 +334,23 @@ function buildValidationCore(
     {
         const typeArgs = ( type as ts.TupleTypeReference ).typeArguments || [];
         const slots = typeArgs.map(( elem, i ) =>
-            buildValidation( elem, checker, mode, from, `arr[${i}]`, `p + "[${i}]"` )
+            buildValidation( elem, checker, mode, from, `arr[${i}]`, `p + "[${i}]"`, rootExpr, scope )
         ).join( ', ' );
 
-        return `( function( arr, p ){ if( !Array.isArray( arr ) || arr.length !== ${typeArgs.length} ){ throw new __tcRuntime.ParseError( p, "Expected tuple of length ${typeArgs.length}" ); } return [${slots}]; })( ${varName}, ${p} )`;
+        return `( function( arr, p ){ if( !Array.isArray( arr ) || arr.length !== ${typeArgs.length} ){ throw new __tcRuntime.ParseError( p, "Tuple<${typeArgs.length}>" ); } return [${slots}]; })( ${varName}, ${p} )`;
     }
 
     if( typeof checker.isArrayType === 'function' && checker.isArrayType( type ))
     {
         const elemType = ( checker as any ).getTypeArguments?.( type as ts.TypeReference )?.[0] || { getFlags : () => ts.TypeFlags.Any };
-        const elemCode = buildValidation( elemType, checker, mode, from, 'item', 'itemP' );
+        const elemCode = buildValidation( elemType, checker, mode, from, 'item', 'itemP', rootExpr, scope );
 
         if( from === 'query' )
         {
             return `__tcRuntime.coerceArray( ${varName}, ${p}, ( item, itemP ) => ${elemCode} )`;
         }
 
-        return `( function( arr, p ){ if( !Array.isArray( arr )){ throw new __tcRuntime.ParseError( p, "Expected array" ); } return arr.map( ( item, i ) => { const itemP = ( p ? p + "[" + i + "]" : "[" + i + "]" ); return ${elemCode}; } ); })( ${varName}, ${p} )`;
+        return `( function( arr, p ){ __tcRuntime.expectArray( arr, p ); return arr.map( ( item, i ) => { const itemP = ( p ? p + "[" + i + "]" : "[" + i + "]" ); return ${elemCode}; } ); })( ${varName}, ${p} )`;
     }
 
     if( typeof type.isUnion === 'function' && type.isUnion())
@@ -274,34 +363,29 @@ function buildValidationCore(
             arms = arms.filter( m => !( m.getFlags() & ts.TypeFlags.Undefined ));
         }
 
+        const label = unionExpectedLabel( type, checker );
         const tagged = tryTaggedUnionTypes( arms, checker );
 
         if( tagged )
         {
             const cases = tagged.arms.map( arm =>
-                `case ${JSON.stringify( arm.tag )}: return ${buildValidation( arm.type, checker, mode, from, 'v', 'p' )};`
+                `case ${JSON.stringify( arm.tag )}: return ${buildValidation( arm.type, checker, mode, from, 'v', 'p', rootExpr, scope )};`
             ).join( ' ' );
 
-            return `( function( v, p ){ switch( v && v[${JSON.stringify( tagged.key )}] ){ ${cases} default: throw new __tcRuntime.ParseError( p, "Value does not match tagged union" ); } })( ${varName}, ${p} )`;
+            return `( function( v, p ){ switch( v && v[${JSON.stringify( tagged.key )}] ){ ${cases} default: throw new __tcRuntime.ParseError( p, ${JSON.stringify( label )} ); } })( ${varName}, ${p} )`;
         }
 
-        const armCodes = arms.map( arm => buildValidation( arm, checker, mode, from, 'v', 'p' ));
+        const armFns = arms.map( arm =>
+            `( v, p ) => ${buildValidation( arm, checker, mode, from, 'v', 'p', rootExpr, scope )}`
+        ).join( ', ' );
 
-        return `( function( v, p ){ ${armCodes.map(( code, i ) => `try { return ${code}; } catch( _e${i} ) {}`).join( ' ' )} throw new __tcRuntime.ParseError( p, "Value does not match union type" ); })( ${varName}, ${p} )`;
+        return `__tcRuntime.parseUnion( ${varName}, ${p}, ${JSON.stringify( label )}, [ ${armFns} ] )`;
     }
 
     const indexType = stringIndexType( type, checker );
-    const props = getTypeProps( type, checker )
-        .filter( p => !isTagKey( p.getName()))
-        .map( prop => ({
-            name       : prop.getName(),
-            symbol     : prop,
-            type       : getPropertyType( type, prop, checker ),
-            isOptional : Boolean( prop.flags & ts.SymbolFlags.Optional ),
-            hasDefault : typeHasDefaultTag( getPropertyType( type, prop, checker ), checker )
-        }));
+    const props = mapStructuralProps( type, checker );
 
-    return buildObjectValidation( props, indexType, checker, mode, from, varName, pathExpr );
+    return buildObjectValidation( props, indexType, checker, mode, from, varName, pathExpr, rootExpr, scope );
 }
 
 function buildObjectValidation(
@@ -311,7 +395,9 @@ function buildObjectValidation(
     mode      : ValidationMode,
     from      : ParseSource,
     varName   : string,
-    pathExpr  : string
+    pathExpr  : string,
+    rootExpr  : string,
+    scope     : ICustomFunctionScope
 ): string
 {
     const propNames = props.map( p => p.name );
@@ -320,10 +406,8 @@ function buildObjectValidation(
     for( const prop of props )
     {
         const valAccess = safePropAccess( 'o', prop.name );
-        const subPathExpr = pathExpr
-            ? `${pathExpr} ? ${pathExpr} + "." + ${JSON.stringify( prop.name )} : ${JSON.stringify( prop.name )}`
-            : JSON.stringify( prop.name );
-        const subValCode = buildValidation( prop.type, checker, mode, from, valAccess, subPathExpr );
+        const subPathExpr = joinPath( pathExpr, prop.name );
+        const subValCode = buildValidation( prop.type, checker, mode, from, valAccess, subPathExpr, rootExpr, scope );
 
         if( prop.hasDefault )
         {
@@ -336,25 +420,32 @@ function buildObjectValidation(
         }
         else
         {
-            propAssignments.push( `${JSON.stringify( prop.name )}: ( function(){ if( ${valAccess} === undefined ){ throw new __tcRuntime.ParseError( ${subPathExpr}, "Missing required property " + ${JSON.stringify( prop.name )} ); } return ${subValCode}; })()` );
+            // Required: same as assert — run the field validator on undefined (Type<*>), not a Missing shorthand.
+            propAssignments.push( `${JSON.stringify( prop.name )}: ${subValCode}` );
         }
     }
 
     let extraHandling = '';
+    let keysInit = '';
 
-    if( indexType )
+    if( indexType || mode === 'strict' || mode === 'relaxed' )
     {
-        const idxCode = buildValidation( indexType, checker, mode, from, 'o[k]', '( p ? p + "." + k : k )' );
-        extraHandling = `for( const k in o ){ if( ${JSON.stringify( propNames )}.indexOf( k ) === -1 ){ res[k] = ${idxCode}; } }`;
-    }
-    else if( mode === 'strict' )
-    {
-        extraHandling = `for( const k in o ){ if( ${JSON.stringify( propNames )}.indexOf( k ) === -1 ){ throw new __tcRuntime.ParseError( ( p ? p + "." + k : k ), "Unexpected extra property " + k + " in strict mode" ); } }`;
-    }
-    else if( mode === 'relaxed' )
-    {
-        extraHandling = `for( const k in o ){ if( ${JSON.stringify( propNames )}.indexOf( k ) === -1 ){ res[k] = o[k]; } }`;
+        keysInit = `const __keys = new Set( ${JSON.stringify( propNames )} ); `;
+
+        if( indexType )
+        {
+            const idxCode = buildValidation( indexType, checker, mode, from, 'o[k]', '( p ? p + "." + k : k )', rootExpr, scope );
+            extraHandling = `for( const k in o ){ if( !__keys.has( k ) ){ res[k] = ${idxCode}; } }`;
+        }
+        else if( mode === 'strict' )
+        {
+            extraHandling = `for( const k in o ){ if( !__keys.has( k ) ){ throw new __tcRuntime.ParseError( p, "PropertyNotAllowed<" + k + ">" ); } }`;
+        }
+        else
+        {
+            extraHandling = `for( const k in o ){ if( !__keys.has( k ) ){ res[k] = o[k]; } }`;
+        }
     }
 
-    return `( function( o, p ){ if( typeof o !== "object" || o === null || Array.isArray( o )){ throw new __tcRuntime.ParseError( p, "Expected object" ); } const res = { ${propAssignments.join( ', ' )} }; ${extraHandling} return res; })( ${varName}, ${pathExpr || '""'} )`;
+    return `( function( o, p ){ o = __tcRuntime.expectObject( o, p ); ${keysInit}const res = { ${propAssignments.join( ', ' )} }; ${extraHandling} return res; })( ${varName}, ${pathExpr || '""'} )`;
 }
