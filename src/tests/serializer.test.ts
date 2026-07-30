@@ -9,10 +9,20 @@ import
 } from '../runtime/serializer-runtime.js';
 import { generateSerializerCode } from '../engine/serializer-generator.js';
 import { compileAndTransform } from './helpers/compile.js';
+import { serializer, stringify } from '../index.js';
 import ts from 'typescript';
 
 describe( 'Serializer Runtime & Generator', () =>
 {
+    describe( 'Untransformed stubs in index.ts', () =>
+    {
+        it( 'should throw transformer missing error when called untransformed', () =>
+        {
+            expect( () => serializer() ).toThrow( 'Typechecker transformer was not applied' );
+            expect( () => stringify( {} ) ).toThrow( 'Typechecker transformer was not applied' );
+        });
+    });
+
     describe( 'Runtime primitives', () =>
     {
         it( 'should serialize strings with quotes and escaping', () =>
@@ -26,16 +36,19 @@ describe( 'Serializer Runtime & Generator', () =>
             expect( () => serializeString( 123 as any )).toThrow( SerializationError );
         });
 
-        it( 'should serialize Date objects to ISO strings', () =>
+        it( 'should serialize Date objects, string dates, and numeric timestamps', () =>
         {
             const d = new Date( '2026-01-01T00:00:00.000Z' );
 
             expect( serializeDate( d )).toBe( '"2026-01-01T00:00:00.000Z"' );
+            expect( serializeDate( '2026-01-01T00:00:00.000Z' )).toBe( '"2026-01-01T00:00:00.000Z"' );
+            expect( serializeDate( d.getTime() )).toBe( '"2026-01-01T00:00:00.000Z"' );
         });
 
         it( 'should throw SerializationError for invalid dates', () =>
         {
             expect( () => serializeDate( 'invalid-date' )).toThrow( SerializationError );
+            expect( () => serializeDate( {} as any )).toThrow( SerializationError );
         });
 
         it( 'should serialize Uint8Array / Buffer to base64 JSON string', () =>
@@ -45,11 +58,21 @@ describe( 'Serializer Runtime & Generator', () =>
             expect( serializeBuffer( buf )).toBe( '"aGVsbG8="' );
         });
 
+        it( 'should throw SerializationError when serializeBuffer is given invalid input', () =>
+        {
+            expect( () => serializeBuffer( 'not-a-buffer' as any )).toThrow( SerializationError );
+        });
+
         it( 'should serialize arrays with item serializer', () =>
         {
             const res = serializeArray( [1, 2, 3], item => String( item ));
 
             expect( res ).toBe( '[1,2,3]' );
+        });
+
+        it( 'should throw SerializationError when serializeArray is given invalid input', () =>
+        {
+            expect( () => serializeArray( 'not-an-array' as any, item => item )).toThrow( SerializationError );
         });
     });
 
@@ -131,6 +154,17 @@ describe( 'Serializer Runtime & Generator', () =>
             expect( res ).toContain( 'serializeString(obj.name)' );
         });
 
+        it( 'should transform serializer<T>({ mode: "strict" }) into strict serializer function', () =>
+        {
+            const res = compile( `
+                import { serializer } from './src/index.js';
+                interface User { id: string; name: string }
+                const ser = serializer<User>({ mode: "strict" });
+            ` );
+
+            expect( res ).toContain( 'Unexpected extra property in strict mode' );
+        });
+
         it( 'should transform stringify<T>(val, "strict") into strict serializer invocation', () =>
         {
             const res = compile( `
@@ -141,6 +175,18 @@ describe( 'Serializer Runtime & Generator', () =>
             ` );
 
             expect( res ).toContain( 'Unexpected extra property in strict mode' );
+        });
+
+        it( 'should transform stringify<T>(val, { mode: "relaxed" }) into relaxed serializer invocation', () =>
+        {
+            const res = compile( `
+                import { stringify } from './src/index.js';
+                interface User { id: string; name: string }
+                const u = { id: "1", name: "Alice" };
+                const json = stringify<User>( u, { mode: "relaxed" } );
+            ` );
+
+            expect( res ).toContain( 'JSON.stringify(obj[k])' );
         });
     });
 });

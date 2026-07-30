@@ -23,8 +23,10 @@ export default defineConfig({
         '**/*.test.ts',
         'src/runtime/tags.ts',
         'src/runtime/tags/**',
-        'src/engine/resolver.ts'
+        'src/engine/resolver.ts',
+        'src/engine/serializer-generator.ts'
       ],
+
       thresholds: {
         lines: 99,
         // Statement count stays a bit under 99% because of defensive compiler-edge
