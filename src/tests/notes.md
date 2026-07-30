@@ -6,7 +6,9 @@
 - Keep tests clean and well-structured following the AAA (Arrange, Act, Assert) pattern.
 - `number` accepts Infinity/-Infinity but rejects NaN (`Number.isNaN`).
 - `is` / `assertGuard` always mutate. `from` is allowed for in-place nested coercion; root replacement (`res !== input`, e.g. primitive `"42"`→`42`) fails the guard (`false` / normal type error). Use `assert` / `validate` when you need a new root value.
-- Object/record validators require plain objects (reject Date/Map/Set/RegExp/typed arrays/class instances).
+- Object/record validators accept **record-like** values: anything with `typeof === 'object'` that is not an exotic (`Date`, `Map`, `Set`, `RegExp`, arrays, `Buffer`, typed arrays). That includes plain objects, null-proto objects, `process.env`, and class instances used as property bags. Unknown own keys (including function-valued ones) still follow `strict` / `strip` / `relaxed`. Default `mutate: false` copies into a new shell, so validating `process.env` does not write onto it.
+- Plain-object guards reject `Buffer`, `ArrayBuffer`, and typed-array views; null-prototype objects are accepted.
+- A real `class` used as a type is **nominal**: emit `instanceof` against a reachable constructor (same module-scope / re-import rules as `Custom<typeof fn>`). Interfaces and type literals stay structural. Built-in globals (`Date`, `Promise`, typed arrays, …) keep their existing dedicated validators.
 - `mutate` on `validate` / `assert` defaults to false (always new containers). `mutate: true` writes in place while validating (same as `is` / `assertGuard`); half-changed input on failure is allowed. Union arms always use a side tree and commit only the winning arm. `allOf` members still validate without mutating the shared input.
 - Default validation is strict (no conversion). `mode` is unknown-key policy only: `strict` reject extras, `relaxed` keep extras (no coerce), `strip` drop extras. Coercion is only via `from` (`'json'` / `'query'` / custom) — never via `mode` / `relaxed`.
 - Use `from: 'json'` for wire revivals (Date/RegExp/bigint/Set/Map), `from: 'query'` for querystring coercions (including scalar→`[scalar]` for arrays and scalar→`Set`), or a custom `from` function on type mismatch only.
@@ -15,7 +17,7 @@
 - `validators.object` returns the (possibly converted) object, or `false` when the value is not a plain object.
 - `transform.ToNumber` / `ToBoolean` / `ToDate` use the same helpers as `from: 'query'` (`coerceQueryNumber` / `Boolean` / `Date`). Number coercion requires a complete finite decimal/scientific string.
 - Register `@webergency-utils/typechecker/transformer` (not the package root) in tsconfig plugins. Optional IDE plugin: `@webergency-utils/typechecker/plugin`.
-- Object shapes require plain objects. Named props + string index signatures validate both required fields and additional keys.
+- Object shapes are record-like. Named props + string index signatures validate both required fields and additional keys.
 - `jsonSchema` uses `x-typescript-type` for Set/Map/bigint/undefined/Date/etc.; object intersections emit `allOf` (or a merged object).
 - Failed unions report **one** top-level error with per-arm failures in `error.issues`. `toZodIssues` / `groupErrorsByPath` flatten nested `issues`.
 - `T | undefined` / `T | null` / `T | null | undefined` compile to `validators.optional` / `nullable` / `nullish`, not `union`: the single arm runs against the caller's own context, so a failure reports the inner type (`Type<number>`) rather than a union summary with `issues`. `boolean | undefined` arrives as `true | false | undefined` and keeps the generic union.
@@ -33,7 +35,6 @@
 - Closed-object AOT/schema key lists are `Set`s; `validators.safeRegExp` marks patterns as vetted so `pattern()` skips repeated safety scans.
 - `allOf` validates members without mutating, then applies `strict` / `strip` to the combined object-key set and commits only on success.
 - Microbench: `node scripts/perf-microbench.mjs` (after `npm run build`).
-- Plain-object guards reject `Buffer`, `ArrayBuffer`, and typed-array views; null-prototype objects are accepted.
 - Custom `from` is `(val, { key, path, parent, root, index?, kind: CoercionKind }) => any` on type mismatch. `kind` is a dispatch tag, not `typeof`. `key` is the nearest named path segment (array index leaves use the closest named key above). Same `PathContext` fields as `constraint.Custom`.
 - `constraint.Custom` receives `(val, PathContext)` including `key`.
 - Place branch-focused suites at `src/tests/{unit}.test.ts` (e.g. `compile-schema.test.ts`, `validators-branches.test.ts`), never next to source.

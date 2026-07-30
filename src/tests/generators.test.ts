@@ -132,6 +132,10 @@ describe( 'generators', () =>
             expect( printExpr( createTupleCheck([key, child] ))).toContain( 'validators.tuple' );
             expect( printExpr( createInstanceOfCheck( 'Date' ))).toContain( 'validators.instanceOf' );
             expect( printExpr( createInstanceOfCheck( 'Date' ))).toContain( '"Date"' );
+
+            const ctorExpr = printExpr( createInstanceOfCheck( ts.factory.createIdentifier( 'Mailer' )));
+            expect( ctorExpr ).toContain( 'validators.instanceOf(v, path, ctx, Mailer)' );
+            expect( ctorExpr ).not.toContain( '"Mailer"' );
         });
 
         it( 'should emit union templateLiteral and intersection checks', () => 

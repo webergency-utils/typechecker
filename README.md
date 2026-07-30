@@ -439,7 +439,7 @@ Standard formats for string primitives.
 - `format.UriTemplate`: RFC 6570 URI template.
 - Unknown `Format<'...'>` strings fail validation at runtime.
 
-Object and record shapes require **plain objects** (`Object.prototype` or `null` prototype). Class instances, `Date`, `Map`, `Set`, typed arrays, etc. are rejected unless the type is a dedicated instance type (`Date`, `Map`, …).
+Object and record shapes accept **record-like** values (plain objects, null-prototype objects, `process.env`, class instances used as bags). Exotics (`Date`, `Map`, `Set`, arrays, typed arrays, `Buffer`, …) are rejected unless the type is a dedicated instance type. A real `class` used as a type is checked with `instanceof` (nominal); interfaces and type literals stay structural.
 
 #### `transform` Namespace
 

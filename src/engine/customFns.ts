@@ -30,6 +30,8 @@ function isNamedValueBinding( declaration: ts.Declaration ): boolean
 
     if( ts.isFunctionDeclaration( declaration )){ return declaration.name !== undefined }
 
+    if( ts.isClassDeclaration( declaration )){ return declaration.name !== undefined }
+
     return false;
 }
 
@@ -89,7 +91,10 @@ export function declarationSite( declaration?: ts.Declaration ): string
 /** Generated validators are hoisted to module scope, so only module-scope bindings are reachable. */
 function isModuleScoped( declaration: ts.Declaration ): boolean
 {
-    if( ts.isFunctionDeclaration( declaration )){ return ts.isSourceFile( declaration.parent ) }
+    if( ts.isFunctionDeclaration( declaration ) || ts.isClassDeclaration( declaration ))
+    {
+        return ts.isSourceFile( declaration.parent );
+    }
 
     const statement = declaration.parent?.parent;
 
@@ -146,11 +151,12 @@ function findImportOf(
 }
 
 /**
- * Decides how a generated validator refers to a `constraint.Custom` / `transform.Custom` function.
+ * Decides how a generated validator refers to a `constraint.Custom` / `transform.Custom` function
+ * or a user class used as a nominal type.
  *
- * A function declared in the file being transformed is referenced by its own name. One that is
+ * A binding declared in the file being transformed is referenced by its own name. One that is
  * imported must be re-imported under a generated name: TypeScript elides an import whose only use is
- * inside a `typeof` query, which would leave the hoisted validator calling an undefined binding.
+ * in a type position, which would leave the hoisted validator calling an undefined binding.
  */
 export function createCustomFunctionScope( sourceFile: ts.SourceFile, checker: ts.TypeChecker ): ICustomFunctionScope
 {
@@ -161,6 +167,7 @@ export function createCustomFunctionScope( sourceFile: ts.SourceFile, checker: t
     const bind = ( identity: IFunctionIdentity ): string =>
     {
         const declaration = identity.declaration;
+        const kind = declaration && ts.isClassDeclaration( declaration ) ? 'class' : 'function';
 
         // No declaration means the name came from the type's text; emit it and let tsc judge.
         if( !declaration ){ return identity.name }
@@ -171,7 +178,7 @@ export function createCustomFunctionScope( sourceFile: ts.SourceFile, checker: t
 
         if( !isModuleScoped( declaration ))
         {
-            throw new Error( `[Webergency] Custom function '${identity.name}' must be declared at module scope — generated validators are hoisted to the top of the file and cannot reach a nested binding.` );
+            throw new Error( `[Webergency] Custom ${kind} '${identity.name}' must be declared at module scope — generated validators are hoisted to the top of the file and cannot reach a nested binding.` );
         }
 
         if( declaration.getSourceFile() === sourceFile )
@@ -185,7 +192,7 @@ export function createCustomFunctionScope( sourceFile: ts.SourceFile, checker: t
 
         if( !source )
         {
-            throw new Error( `[Webergency] Custom function '${identity.name}' must be imported directly into this file (a namespace or re-exported binding cannot be re-imported for the generated validator).` );
+            throw new Error( `[Webergency] Custom ${kind} '${identity.name}' must be imported directly into this file (a namespace or re-exported binding cannot be re-imported for the generated validator).` );
         }
 
         let localName = `__tc_fn_${identity.name}`;
@@ -201,4 +208,26 @@ export function createCustomFunctionScope( sourceFile: ts.SourceFile, checker: t
     };
 
     return { bind, imports };
+}
+
+/**
+ * A real `class` declaration used as a type — not an interface or type-literal shape. Those stay
+ * structural; classes are nominal (`instanceof`) at runtime.
+ */
+export function resolveClassIdentity( type: ts.Type ): IFunctionIdentity | undefined
+{
+    const symbol = type.getSymbol() || type.aliasSymbol;
+
+    if( !symbol ){ return undefined }
+
+    // Prefer the value side: an interface merged with a class still has a ClassDeclaration there.
+    const declaration = symbol.valueDeclaration
+        || symbol.declarations?.find( d => ts.isClassDeclaration( d ))
+        || symbol.declarations?.[0];
+
+    if( !declaration || !ts.isClassDeclaration( declaration ) || !declaration.name ){ return undefined }
+
+    // Built-ins handled earlier in the resolver (Date, Promise, typed arrays) also look like classes
+    // in lib.d.ts in some targets; callers must check those first.
+    return { name : declaration.name.text, declaration };
 }

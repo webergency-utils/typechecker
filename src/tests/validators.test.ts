@@ -374,7 +374,7 @@ describe( 'Validators', () =>
             expect( ctx.errors.some( e => e.path === 'obj.a' )).toBe( true );
         });
 
-        it( 'should reject non-plain objects for object and record', () => 
+        it( 'should reject exotic objects for object and record', () => 
         {
             expect( validators.object( new Date(), 'obj', ctx )).toBe( false );
             expect( ctx.success ).toBe( false );
@@ -387,11 +387,97 @@ describe( 'Validators', () =>
             ctx.errors = [];
             validators.record( new Set(), 'rec', ctx, validators.number );
             expect( ctx.success ).toBe( false );
+        });
+
+        it( 'should accept class instances as record-like object inputs', () =>
+        {
+            class Foo { x = 1 }
+
+            const input = new Foo();
+            const result = validators.object( input, 'obj', ctx );
+
+            expect( result ).toBe( input );
+            expect( ctx.success ).toBe( true );
+        });
+
+        it( 'should accept process.env as an object input', () =>
+        {
+            process.env.__TC_PLAIN_OBJECT_PROBE = '1';
+            ctx.mode = 'strip';
+
+            try
+            {
+                const result = validators.object( process.env, 'env', ctx );
+
+                expect( result ).toBe( process.env );
+                expect( ctx.success ).toBe( true );
+
+                const data: any = {};
+                validators.props( process.env, data, 'env', ctx, [
+                    ['__TC_PLAIN_OBJECT_PROBE', false, validators.string]
+                ]);
+
+                expect( data.__TC_PLAIN_OBJECT_PROBE ).toBe( '1' );
+            }
+            finally
+            {
+                delete process.env.__TC_PLAIN_OBJECT_PROBE;
+            }
+        });
+
+        it( 'should strip own function properties under mode strip', () =>
+        {
+            ctx.mode = 'strip';
+            const input = {
+                id   : 1,
+                save : () => 'nope'
+            };
+            const data: any = validators.objectShell( input, ctx, true );
+
+            validators.props( input, data, 'o', ctx, [['id', false, validators.number]]);
+            validators.stripExtras( data, ctx, ['id']);
+
+            expect( ctx.success ).toBe( true );
+            expect( data ).toEqual({ id : 1 });
+            expect( 'save' in data ).toBe( false );
+        });
+
+        it( 'should reject own function properties under mode strict', () =>
+        {
+            ctx.mode = 'strict';
+            const input = {
+                id   : 1,
+                save : () => 'nope'
+            };
+
+            validators.object( input, 'o', ctx, ['id']);
+
+            expect( ctx.success ).toBe( false );
+            expect( ctx.errors.some( e => e.error === 'PropertyNotAllowed<save>' )).toBe( true );
+        });
+
+        it( 'should accept constructor functions in instanceOf', () =>
+        {
+            class Mailer {}
+            const mailer = new Mailer();
+
+            expect( validators.instanceOf( mailer, 'm', ctx, Mailer )).toBe( mailer );
+            expect( ctx.success ).toBe( true );
 
             ctx.success = true;
             ctx.errors = [];
-            class Foo { x = 1 }
-            expect( validators.object( new Foo(), 'obj', ctx )).toBe( false );
+            validators.instanceOf({}, 'm', ctx, Mailer );
+            expect( ctx.success ).toBe( false );
+            expect( ctx.errors[0]?.error ).toBe( 'Type<Mailer>' );
+        });
+
+        it( 'should accept subclasses via instanceOf against the base constructor', () =>
+        {
+            class Mailer {}
+            class SmtpMailer extends Mailer {}
+
+            expect( validators.instanceOf( new SmtpMailer(), 'm', ctx, Mailer )).toBeInstanceOf( SmtpMailer );
+            expect( ctx.success ).toBe( true );
         });
 
         it( 'should validate props (relaxed mode)', () => 

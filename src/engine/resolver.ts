@@ -25,7 +25,8 @@ import { isTagKey } from './tagKeys.js';
 import {
     ICustomFunctionScope,
     declarationSite,
-    resolveFunctionIdentity
+    resolveFunctionIdentity,
+    resolveClassIdentity
 } from './customFns.js';
 import { createHash } from 'crypto';
 
@@ -823,36 +824,59 @@ function buildValidatorScoped(
     {
         result = buildEnumValidator( type, checker, validatorsMap, scope );
     }
-    else 
+    else
     {
-        const stringIndexInfo = checker.getIndexInfoOfType( type, ts.IndexKind.String );
-        const props = checker.getPropertiesOfType( type ).map( prop =>
-        {
-            const propType = typeOfProperty( type, prop, checker );
+        const classIdentity = resolveClassIdentity( type );
 
-            return {
-                name       : prop.getName(),
-                isOptional : ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0,
-                validator  : buildValidatorScoped( propType, checker, validatorsMap, scope ),
-                hasDefault : typeHasDefaultTag( propType, checker )
-            };
-        });
+        if( classIdentity )
+        {
+            const declaration = classIdentity.declaration;
+            const fromAmbientGlobal = declaration !== undefined
+                && declaration.getSourceFile().isDeclarationFile
+                && !ts.isExternalModule( declaration.getSourceFile());
 
-        if( stringIndexInfo && props.length === 0 ) 
-        {
-            result = createRecordCheck( buildValidatorScoped( stringIndexInfo.type, checker, validatorsMap, scope ) );
+            if( fromAmbientGlobal || !declaration )
+            {
+                result = createInstanceOfCheck( classIdentity.name );
+            }
+            else
+            {
+                const localName = scope.bind( classIdentity );
+
+                result = createInstanceOfCheck( ts.factory.createIdentifier( localName ));
+            }
         }
-        else if( flags & ts.TypeFlags.Object || type.isClassOrInterface() || type.isTypeParameter() || stringIndexInfo ) 
+        else
         {
-            const typeName = checker.typeToString( type );
-            const indexValidator = stringIndexInfo
-                ? buildValidatorScoped( stringIndexInfo.type, checker, validatorsMap, scope )
-                : undefined;
-            result = createObjectCheck( props, typeName, indexValidator );
-        }
-        else 
-        {
-            result = createPrimitiveCheck( 'any' );
+            const stringIndexInfo = checker.getIndexInfoOfType( type, ts.IndexKind.String );
+            const props = checker.getPropertiesOfType( type ).map( prop =>
+            {
+                const propType = typeOfProperty( type, prop, checker );
+
+                return {
+                    name       : prop.getName(),
+                    isOptional : ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0,
+                    validator  : buildValidatorScoped( propType, checker, validatorsMap, scope ),
+                    hasDefault : typeHasDefaultTag( propType, checker )
+                };
+            });
+
+            if( stringIndexInfo && props.length === 0 )
+            {
+                result = createRecordCheck( buildValidatorScoped( stringIndexInfo.type, checker, validatorsMap, scope ) );
+            }
+            else if( flags & ts.TypeFlags.Object || type.isClassOrInterface() || type.isTypeParameter() || stringIndexInfo )
+            {
+                const typeName = checker.typeToString( type );
+                const indexValidator = stringIndexInfo
+                    ? buildValidatorScoped( stringIndexInfo.type, checker, validatorsMap, scope )
+                    : undefined;
+                result = createObjectCheck( props, typeName, indexValidator );
+            }
+            else
+            {
+                result = createPrimitiveCheck( 'any' );
+            }
         }
     }
 
@@ -1018,6 +1042,13 @@ function signatureOf( type: ts.Type, checker: ts.TypeChecker, visited: Set<numbe
     ].includes( typeSymbolName )) 
     {
         return typeSymbolName;
+    }
+
+    const classIdentity = resolveClassIdentity( type );
+
+    if( classIdentity )
+    {
+        return `Class<${classIdentity.name}${declarationSite( classIdentity.declaration )}>`;
     }
 
     if( flags & ts.TypeFlags.Object || type.isClassOrInterface()) 

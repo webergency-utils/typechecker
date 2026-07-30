@@ -77,6 +77,11 @@ const report = ( ctx: ValidationContext, path: string, expected: string, value: 
     ctx.errors.push({ path, value, error : message || expected });
 };
 
+/**
+ * A value that object/record validators can treat as a property bag: anything we can read string
+ * keys from. Prototype identity is irrelevant — `process.env`, class instances, and null-proto
+ * objects are all fine. Known exotics (Date, Map, arrays, …) have dedicated validators instead.
+ */
 function isPlainObject( v: any ): boolean 
 {
     if( v === null || typeof v !== 'object' || Array.isArray( v )) { return false }
@@ -87,9 +92,7 @@ function isPlainObject( v: any ): boolean
 
     if( ArrayBuffer.isView( v ) || v instanceof ArrayBuffer ) { return false }
 
-    const proto = Object.getPrototypeOf( v );
-
-    return proto === Object.prototype || proto === null;
+    return true;
 }
 
 function setOwnProperty( target: any, key: PropertyKey, value: any ): void
@@ -1868,20 +1871,21 @@ export const validators = {
         return v;
     },
 
-    instanceOf : ( v: any, path: string, ctx: ValidationContext, typeName: string ) => 
+    instanceOf : ( v: any, path: string, ctx: ValidationContext, ctorOrName: Function | string ) => 
     {
-        const ctor = ( globalThis as any )[typeName];
+        const ctor = typeof ctorOrName === 'string' ? ( globalThis as any )[ctorOrName] : ctorOrName;
+        const label = typeof ctorOrName === 'string' ? ctorOrName : ( ctorOrName.name || 'Object' );
 
-        if( ctor && v instanceof ctor ){ return v }
+        if( typeof ctor === 'function' && v instanceof ctor ){ return v }
 
         if( typeof ctx.from === 'function' )
         {
             const converted = fromCustom( ctx, path, v, 'instance' );
 
-            if( ctor && converted instanceof ctor ){ return converted }
+            if( typeof ctor === 'function' && converted instanceof ctor ){ return converted }
         }
 
-        report( ctx, path, `Type<${typeName}>`, v );
+        report( ctx, path, `Type<${label}>`, v );
 
         return v;
     },

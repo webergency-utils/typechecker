@@ -450,9 +450,17 @@ export function createMapCheck( keyValidator: ts.Expression, valueValidator: ts.
     return injectNodes( templateToAst( tpl ), { '__KEY__' : keyValidator, '__VALUE__' : valueValidator });
 }
 
-export function createInstanceOfCheck( typeName: string ): ts.Expression 
+export function createInstanceOfCheck( ctorOrName: string | ts.Expression ): ts.Expression
 {
-    const tpl = `(v, path, ctx) => validators.instanceOf(v, path, ctx, ${JSON.stringify( typeName )})`;
+    if( typeof ctorOrName === 'string' )
+    {
+        const tpl = `(v, path, ctx) => validators.instanceOf(v, path, ctx, ${JSON.stringify( ctorOrName )})`;
 
-    return templateToAst( tpl );
+        return templateToAst( tpl );
+    }
+
+    return injectNodes(
+        templateToAst( '(v, path, ctx) => validators.instanceOf(v, path, ctx, __CTOR__)' ),
+        { '__CTOR__' : ctorOrName }
+    );
 }
