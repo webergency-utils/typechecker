@@ -5,6 +5,7 @@ import
     serializeDate,
     serializeBuffer,
     serializeArray,
+    serializeUnion,
     SerializationError
 }
 from '../runtime/serializer-runtime.js';
@@ -90,6 +91,55 @@ describe( 'Serializer & Stringify', () =>
             it( 'throws for non-array input', () =>
             {
                 expect( () => serializeArray( 'nope' as any, v => v, 'items' )).toThrow( 'Serialization error at "items": Type<Array>' );
+            });
+        });
+
+        describe( 'serializeUnion', () =>
+        {
+            it( 'returns the first successful arm', () =>
+            {
+                expect( serializeUnion( 'hi', '', 'Type<Union>', [
+                    ( v ) => serializeString( v ),
+                    () => { throw new SerializationError( '', 'Type<number>' ) }
+                ])).toBe( '"hi"' );
+            });
+
+            it( 'rethrows the last SerializationError when its code matches expected', () =>
+            {
+                expect( () => serializeUnion( 1, 'v', 'Type<string>', [
+                    () => { throw new SerializationError( 'v', 'Type<string>' ) }
+                ])).toThrow( 'Serialization error at "v": Type<string>' );
+            });
+
+            it( 'throws expected when arms fail with other codes', () =>
+            {
+                expect( () => serializeUnion( true, 'v', 'Type<Union>', [
+                    () => { throw new SerializationError( 'v', 'Type<string>' ) },
+                    () => { throw new SerializationError( 'v', 'Type<number>' ) }
+                ])).toThrow( 'Serialization error at "v": Type<Union>' );
+            });
+
+            it( 'rethrows non-SerializationError failures', () =>
+            {
+                expect( () => serializeUnion( 1, 'v', 'Type<Union>', [
+                    () => { throw new RangeError( 'nope' ) }
+                ])).toThrow( RangeError );
+            });
+
+            it( 'covers root-path and rewritten-message code extraction', () =>
+            {
+                expect( () => serializeUnion( 1, '', 'Type<Union>', [
+                    () => { throw new SerializationError( '', 'Type<string>' ) }
+                ])).toThrow( 'Type<Union>' );
+
+                expect( () => serializeUnion( 1, 'v', 'Type<Union>', [
+                    () =>
+                    {
+                        const err = new SerializationError( 'v', 'Type<string>' );
+                        Object.defineProperty( err, 'message', { value : 'rewritten' });
+                        throw err;
+                    }
+                ])).toThrow( 'Serialization error at "v": Type<Union>' );
             });
         });
 

@@ -33,14 +33,14 @@ export default defineConfig({
 
 
       thresholds: {
-        lines: 99,
-        // Statement count stays a bit under 99% because of defensive compiler-edge
-        // arms that share covered lines; line coverage is the gate.
-        statements: 98,
-        functions: 99,
-        // parse-runtime constraint matrix + transformer option edges leave a thin
-        // residual of untaken defensive branches after serialize/parse parity.
-        branches: 95
+        lines: 99.5,
+        // Statement count stays a bit under lines because of defensive compiler-edge
+        // arms that share covered lines; line coverage is the primary gate.
+        statements: 98.5,
+        functions: 100,
+        // transformer / customFns / staticAsserts leave a thin residual of untaken
+        // defensive branches (compiler-option and unreachable template edges).
+        branches: 95.5
       }
     }
   }

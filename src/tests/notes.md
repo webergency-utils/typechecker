@@ -58,7 +58,7 @@
 
 ## Coverage Scope
 - Vitest coverage includes `src/runtime/**`, `src/engine/**` (except `resolver.ts`), `src/transformer.ts`, `src/plugin.ts`, and `src/index.ts` (tags type-only modules excluded).
-- Thresholds: lines/functions ≥ 99%, statements ≥ 98%, branches ≥ 96%.
+- Thresholds: lines ≥ 99.5%, functions 100%, statements ≥ 98.5%, branches ≥ 95.5%.
 - `resolver.ts` is excluded from coverage totals: it is a TypeScript checker/AST walker with many compiler-type edge branches. Cover observable paths via transformer / `resolver-coverage` / `objectToAst` tests instead of forcing private-hook coverage.
 - Engine units: print AST via a local `stripPositions` helper before `ts.createPrinter` — nodes keep source positions from `templateToAst` and otherwise print empty literals.
 - Prefer unit-testing `generators` / `hoister` / `objectToAst` at their exports; use the transformer compile harness for resolver/jsonSchema integration paths.

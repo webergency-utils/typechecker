@@ -112,6 +112,18 @@ describe( 'Nullable unions', () =>
             expect( ctx.success ).toBe( true );
         });
 
+        it( 'should run the inner validator for present nullish values', () =>
+        {
+            const ctx = context();
+
+            expect( validators.nullish( 7, 'x', ctx, validators.number )).toBe( 7 );
+            expect( ctx.success ).toBe( true );
+
+            const failing = context();
+            validators.nullish( 'nope', 'x', failing, validators.number );
+            expect( failing.success ).toBe( false );
+        });
+
         it( 'should still coerce through the inner validator when from is set', () =>
         {
             const result = validate(

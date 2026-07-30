@@ -9,9 +9,17 @@ import
     coerceBuffer,
     coerceBigInt,
     applyParseConstraints,
+    expectString,
+    expectNumber,
+    expectBoolean,
+    expectObject,
+    expectArray,
+    parseUnion,
     ParseError
 }
 from '../runtime/parse-runtime.js';
+import { getCachedPattern, createSafeRegex, testRegex, isRegexSafe } from '../runtime/regex.js';
+import { childPath, indexPath } from '../runtime/path.js';
 import { generateParseCode } from '../engine/parse-generator.js';
 import { compileAndTransform, emitAndImport } from './helpers/compile.js';
 import { parse, serializer, stringify } from '../index.js';
@@ -21,6 +29,91 @@ import ts from 'typescript';
 describe( 'Parse', () =>
 {
     const compile = ( code: string ) => compileAndTransform( code, 'temp_parse_test' );
+
+    describe( 'expect helpers & parseUnion', () =>
+    {
+        it( 'accepts matching primitives and rejects mismatches', () =>
+        {
+            expect( expectString( 'x', 'n' )).toBe( 'x' );
+            expect( () => expectString( 1, 'n' )).toThrow( /Type<string>/ );
+            expect( expectNumber( 3, 'n' )).toBe( 3 );
+            expect( () => expectNumber( NaN, 'n' )).toThrow( /Type<number>/ );
+            expect( () => expectNumber( '1', 'n' )).toThrow( /Type<number>/ );
+            expect( expectBoolean( false, 'n' )).toBe( false );
+            expect( () => expectBoolean( 'false', 'n' )).toThrow( /Type<boolean>/ );
+            expect( expectObject({ a : 1 }, 'n' )).toEqual({ a : 1 });
+            expect( () => expectObject( null, 'n' )).toThrow( /Type<Object>/ );
+            expect( () => expectObject([], 'n' )).toThrow( /Type<Object>/ );
+            expect( expectArray([ 1 ], 'n' )).toEqual([ 1 ]);
+            expect( () => expectArray( {}, 'n' )).toThrow( /Type<Array>/ );
+        });
+
+        it( 'parseUnion returns the first matching arm', () =>
+        {
+            expect( parseUnion( 'a', 'u', 'Type<Union>', [
+                ( v ) => expectString( v, 'u' ),
+                () => { throw new ParseError( 'u', 'Type<number>' ) }
+            ])).toBe( 'a' );
+        });
+
+        it( 'parseUnion rethrows the last ParseError when its code matches expected', () =>
+        {
+            expect( () => parseUnion( true, 'u', 'Type<string>', [
+                () => { throw new ParseError( 'u', 'Type<string>' ) }
+            ])).toThrow( 'Parse error at "u": Type<string>' );
+        });
+
+        it( 'parseUnion throws expected when no arm matches with that code', () =>
+        {
+            expect( () => parseUnion( true, 'u', 'Type<Union>', [
+                () => { throw new ParseError( 'u', 'Type<string>' ) },
+                () => { throw new ParseError( 'u', 'Type<number>' ) }
+            ])).toThrow( 'Parse error at "u": Type<Union>' );
+        });
+
+        it( 'parseUnion rethrows non-ParseError failures', () =>
+        {
+            expect( () => parseUnion( 1, 'u', 'Type<Union>', [
+                () => { throw new TypeError( 'boom' ) }
+            ])).toThrow( TypeError );
+        });
+
+        it( 'parseUnion falls through when ParseError message is rewritten', () =>
+        {
+            expect( () => parseUnion( 1, 'u', 'Type<Union>', [
+                () =>
+                {
+                    const err = new ParseError( 'u', 'Type<string>' );
+                    Object.defineProperty( err, 'message', { value : 'rewritten' });
+                    throw err;
+                }
+            ])).toThrow( 'Parse error at "u": Type<Union>' );
+        });
+    });
+
+    describe( 'path & regex helpers', () =>
+    {
+        it( 'joins child and index paths without a leading dot', () =>
+        {
+            expect( childPath( '', 'name' )).toBe( 'name' );
+            expect( childPath( 'user', 'name' )).toBe( 'user.name' );
+            expect( indexPath( 'items', 0 )).toBe( 'items[0]' );
+            expect( indexPath( '', 2 )).toBe( '[2]' );
+        });
+
+        it( 'caches safe patterns and rejects unsafe sources', () =>
+        {
+            const a = getCachedPattern( '^abc$' );
+            const b = getCachedPattern( '^abc$' );
+            expect( a ).toBeInstanceOf( RegExp );
+            expect( b ).toBe( a );
+            expect( getCachedPattern( 'a'.repeat( 1025 ))).toBeUndefined();
+            expect( createSafeRegex( 'ok', 'i' ).flags ).toContain( 'i' );
+            expect( () => createSafeRegex( 'a'.repeat( 1025 ))).toThrow( /Unsafe regular expression/ );
+            expect( testRegex( /x/g, 'x' )).toBe( true );
+            expect( isRegexSafe( /ok/ )).toBe( true );
+        });
+    });
 
     describe( 'Untransformed stubs', () =>
     {
@@ -105,6 +198,10 @@ describe( 'Parse', () =>
             expect( parseQueryString( '&&user[0]=a&user[foo]=b' )).toBeDefined();
             expect( parseQueryString( 'user[name]=Alice&user=Bob' )).toBeDefined();
             expect( parseQueryString( 'user[a]=1&user[b]=2' )).toEqual({ user : { a : '1', b : '2' } });
+            // Empty brackets on an existing object hit the numeric-key scan over Object.keys.
+            expect( parseQueryString( 'user[name]=Alice&user[]=extra' )).toEqual({
+                user : { name : 'Alice', 0 : 'extra' }
+            });
         });
 
         it( 'decodes percent-encoding and plus spaces', () =>
@@ -230,6 +327,7 @@ describe( 'Parse', () =>
             expect( () => applyParseConstraints( 10, 'n', [{ type : 'exclusiveMaximum', value : 10 }])).toThrow( /ExclusiveMaximum/ );
             expect( () => applyParseConstraints( 7, 'n', [{ type : 'multipleOf', value : 3 }])).toThrow( /MultipleOf/ );
             expect( () => applyParseConstraints( 'abc', 'n', [{ type : 'pattern', value : '^[0-9]+$' }])).toThrow( /Pattern/ );
+            expect( () => applyParseConstraints( 'abc', 'n', [{ type : 'pattern', value : 'a'.repeat( 1025 ) }])).toThrow( /UnsafePattern/ );
             expect( () => applyParseConstraints([ 1 ], 'n', [{ type : 'minItems', value : 2 }])).toThrow( /MinItems/ );
             expect( () => applyParseConstraints([ 1, 2, 3 ], 'n', [{ type : 'maxItems', value : 2 }])).toThrow( /MaxItems/ );
             expect( () => applyParseConstraints([ 1, 1 ], 'n', [{ type : 'uniqueItems', value : true }])).toThrow( /UniqueItems/ );
@@ -243,6 +341,10 @@ describe( 'Parse', () =>
             expect( applyParseConstraints( '2026-01-01T00:00:00.000Z', 'n', [{ type : 'transform', value : 'todate' }])).toBeInstanceOf( Date );
             expect( applyParseConstraints( 'x', 'n', [{ type : 'minLength', value : 1, message : 'too short' }], 'json' )).toBe( 'x' );
             expect( () => applyParseConstraints( '', 'n', [{ type : 'minLength', value : 1, message : 'too short' }])).toThrow( /too short/ );
+            expect( () => applyParseConstraints( 'z', 'n', [
+                { type : 'message', value : 'custom-msg' },
+                { type : 'minLength', value : 2 }
+            ])).toThrow( /custom-msg/ );
         });
     });
 
