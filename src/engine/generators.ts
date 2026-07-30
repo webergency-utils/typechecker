@@ -13,7 +13,7 @@ export function templateToAst( template: string ): ts.Expression
 
     if( ts.isExpressionStatement( expressionStatement ))
     {
-        return expressionStatement.expression;
+        return stripPositions( expressionStatement.expression );
     }
 
     const asVariable = ts.createSourceFile(
@@ -27,11 +27,12 @@ export function templateToAst( template: string ): ts.Expression
 
     if( ts.isVariableStatement( variableStatement ))
     {
-        return variableStatement.declarationList.declarations[0].initializer!;
+        return stripPositions( variableStatement.declarationList.declarations[0].initializer! );
     }
 
     throw new Error( 'Template must be an expression or variable declaration' );
 }
+
 
 function stripPositions<T extends ts.Node>( node: T ): T 
 {

@@ -4,8 +4,12 @@ export { buildValidator, generateHash, buildJsonSchema } from './engine/resolver
 import { hoistEmitLocals, resolveEmitNames } from './engine/hoister.js';
 import { createCustomFunctionScope } from './engine/customFns.js';
 import { installStaticConstraintDiagnostics } from './engine/staticAsserts.js';
+import { generateSerializerCode } from './engine/serializer-generator.js';
+import { templateToAst } from './engine/generators.js';
+import { ValidationMode } from './runtime/validators.js';
 
-const TYPE_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate', 'jsonSchema'];
+
+const TYPE_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate', 'jsonSchema', 'serializer', 'stringify'];
 const VALIDATION_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate'];
 
 function runtimeCall( runtimeNs: string, method: string, args: ts.Expression[]): ts.CallExpression
@@ -122,6 +126,47 @@ export default function transformer( program: ts.Program )
                             const type = checker.getTypeFromTypeNode( typeArg );
                             const hash = getTypeHash( type );
 
+                            if( fnName === 'serializer' || fnName === 'stringify' )
+                            {
+                                let mode: ValidationMode = 'strip';
+                                const optsArg = fnName === 'serializer' ? node.arguments[0] : node.arguments[1];
+
+                                if( optsArg && ts.isStringLiteral( optsArg ))
+                                {
+                                    mode = optsArg.text as ValidationMode;
+                                }
+                                else if( optsArg && ts.isObjectLiteralExpression( optsArg ))
+                                {
+                                    const modeProp = optsArg.properties.find( p => p.name && ts.isIdentifier( p.name ) && p.name.text === 'mode' );
+
+                                    if( modeProp && ts.isPropertyAssignment( modeProp ) && ts.isStringLiteral( modeProp.initializer ))
+                                    {
+                                        mode = modeProp.initializer.text as ValidationMode;
+                                    }
+                                }
+
+
+                                const codeStr = generateSerializerCode( type, checker, { mode });
+
+                                if( fnName === 'serializer' )
+                                {
+                                    return templateToAst( `( function( input ){ return ${codeStr}; })` );
+                                }
+
+                                const inputArg = node.arguments[0];
+
+                                if( inputArg )
+                                {
+                                    const inputVisitorResult = ts.visitNode( inputArg, visitor ) as ts.Expression;
+
+                                    return ts.factory.createCallExpression(
+                                        templateToAst( `( function( input ){ return ${codeStr}; })` ),
+                                        undefined,
+                                        [inputVisitorResult]
+                                    );
+                                }
+                            }
+
                             if( fnName === 'jsonSchema' )
                             {
                                 if( !schemasCache.has( hash ))
@@ -152,6 +197,7 @@ export default function transformer( program: ts.Program )
 
                 return ts.visitEachChild( node, visitor, context );
             };
+
 
             const transformedFile = ts.visitNode( sourceFile, visitor ) as ts.SourceFile;
 

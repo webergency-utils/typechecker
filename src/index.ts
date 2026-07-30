@@ -102,3 +102,25 @@ export type {
 } from './runtime/validators.js';
 export * from './runtime/tags.js';
 export * from './runtime/casing.js';
+export * from './runtime/serializer-runtime.js';
+
+export type SerializationMode = ValidationMode;
+
+export interface SerializerOptions
+{
+    mode?: SerializationMode
+}
+
+/** AOT Macro: Compiles a fast JSON serializer function for type `T`. */
+export function serializer<T>( _options?: ValidationMode | SerializerOptions ): ( input: T ) => string
+{
+    throw new Error( TRANSFORMER_MISSING );
+}
+
+/** AOT Macro: Validates and serializes `input` as type `T`. */
+export function stringify<T>( _input: T, _options?: ValidationMode | SerializerOptions ): string
+{
+    throw new Error( TRANSFORMER_MISSING );
+}
+
+
