@@ -252,22 +252,25 @@ describe( 'Parse', () =>
             expect( () => coerceNumber( '', 'user.age' )).toThrow( ParseError );
         });
 
-        it( 'coerceBoolean accepts true/false/1/0 forms only', () =>
+        it( 'coerceBoolean accepts query-style truthy/falsy forms', () =>
         {
             expect( coerceBoolean( true, 'flag' )).toBe( true );
             expect( coerceBoolean( 'true', 'flag' )).toBe( true );
             expect( coerceBoolean( '1', 'flag' )).toBe( true );
             expect( coerceBoolean( 1, 'flag' )).toBe( true );
+            expect( coerceBoolean( 'yes', 'flag' )).toBe( true );
+            expect( coerceBoolean( 'on', 'flag' )).toBe( true );
+            expect( coerceBoolean( '', 'flag' )).toBe( true );
             expect( coerceBoolean( false, 'flag' )).toBe( false );
             expect( coerceBoolean( 'false', 'flag' )).toBe( false );
             expect( coerceBoolean( '0', 'flag' )).toBe( false );
             expect( coerceBoolean( 0, 'flag' )).toBe( false );
+            expect( coerceBoolean( 'no', 'flag' )).toBe( false );
+            expect( coerceBoolean( 'off', 'flag' )).toBe( false );
 
-            expect( () => coerceBoolean( 'yes', 'user.active' ))
-                .toThrow( 'Parse error at "user.active": Type<boolean>' );
-            expect( () => coerceBoolean( 'no', 'user.active' )).toThrow( ParseError );
             expect( () => coerceBoolean( 2, 'user.active' )).toThrow( ParseError );
             expect( () => coerceBoolean( {}, 'active' )).toThrow( ParseError );
+            expect( () => coerceBoolean( 'maybe', 'active' )).toThrow( ParseError );
         });
 
         it( 'coerceDate accepts Date, ISO, and epoch', () =>
@@ -449,7 +452,7 @@ describe( 'Parse', () =>
                 interface Params { id: number }
                 export function run( searchParams: URLSearchParams ) { return parse<Params>( searchParams, { from: 'query' } ); }
             ` );
-            expect( usp ).toContain( 'typeof input.entries === "function"' );
+            expect( usp ).toContain( 'instanceof URLSearchParams' );
 
             expect( compile( `
                 import { parse } from './src/index.js';

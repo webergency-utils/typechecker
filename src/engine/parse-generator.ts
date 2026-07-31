@@ -85,14 +85,19 @@ export function generateParseCode(
 
     if( from === 'query' )
     {
-        const body = buildValidation( type, checker, mode, 'query', 'rawQuery', '""', 'rawQuery', scope );
+        const body = buildValidation( type, checker, mode, 'query', 'rawQuery', 'path', 'rawQuery', scope );
 
-        return `( function( input, path = "" ){ const rawQuery = ( typeof input === "string" ? __tcRuntime.parseQueryString( input ) : ( input && typeof input === "object" && typeof input.entries === "function" ? __tcRuntime.parseQueryString( input.toString() ) : input || {} ) ); return ${body}; })`;
+        // Named query/param/cookie values are scalars (or already-parsed objects/arrays). Only
+        // treat encoded query text and URLSearchParams as querystrings — bare values like "42"
+        // or string[] must not go through parseQueryString (arrays also have .entries()).
+        return `( function( input, path = "" ){ const rawQuery = ( typeof input === "string" ? ( /[=%&]/.test( input ) ? __tcRuntime.parseQueryString( input ) : input ) : ( typeof URLSearchParams !== "undefined" && input instanceof URLSearchParams ? __tcRuntime.parseQueryString( input.toString() ) : input ) ); return ${body}; })`;
     }
 
-    const body = buildValidation( type, checker, mode, 'json', 'obj', '""', 'obj', scope );
+    const body = buildValidation( type, checker, mode, 'json', 'obj', 'path', 'obj', scope );
 
-    return `( function( input, path = "" ){ let obj; try { obj = typeof input === "string" ? JSON.parse( input ) : input; } catch( e ){ throw new __tcRuntime.ParseError( path, "Invalid JSON: " + e.message ); } return ${body}; })`;
+    // Body values are often already JSON-parsed by the host. Only JSON.parse strings that
+    // look like JSON text; otherwise keep the string (already-decoded JSON string primitives).
+    return `( function( input, path = "" ){ let obj; if( typeof input === "string" ){ const t = input.trim(); if( t.startsWith( "{" ) || t.startsWith( "[" ) || t.startsWith( "\\"" ) || t === "true" || t === "false" || t === "null" || /^-?\\d+(\\.\\d+)?([eE][+-]?\\d+)?$/.test( t ) ){ try { obj = JSON.parse( input ); } catch( e ){ throw new __tcRuntime.ParseError( path, "Invalid JSON: " + e.message ); } } else { obj = input; } } else { obj = input; } return ${body}; })`;
 }
 
 function wrapConstraints(
@@ -230,6 +235,16 @@ function buildValidationCore(
     const flags = typeof type.getFlags === 'function' ? type.getFlags() : ts.TypeFlags.Any;
     const p = pathExpr || '""';
 
+    if( flags & ts.TypeFlags.Undefined )
+    {
+        return `( function( v, path ){ if( v !== undefined ){ throw new __tcRuntime.ParseError( path, "Type<undefined>" ); } return v; })( ${varName}, ${p} )`;
+    }
+
+    if( flags & ts.TypeFlags.Null )
+    {
+        return `( function( v, path ){ if( v !== null ){ throw new __tcRuntime.ParseError( path, "Type<null>" ); } return v; })( ${varName}, ${p} )`;
+    }
+
     if( typeof type.isStringLiteral === 'function' && type.isStringLiteral())
     {
         const expected = JSON.stringify( type.value );
@@ -323,6 +338,38 @@ function buildValidationCore(
     if( symbolName === 'Date' )
     {
         return `__tcRuntime.coerceDate( ${varName}, ${p} )`;
+    }
+
+    if( symbolName === 'RegExp' )
+    {
+        return `( function( v, path ){ if( v instanceof RegExp ){ return v } if( typeof v === "string" ){ const match = v.match( /^\\/(.*)\\/([gimuy]*)$/ ); if( match ){ try { return new RegExp( match[1], match[2] ); } catch( e ){} } ${from === 'query' ? 'try { return new RegExp( v ); } catch( e ){}' : ''} } if( v && typeof v === "object" && typeof v.source === "string" ){ try { return new RegExp( v.source, typeof v.flags === "string" ? v.flags : "" ); } catch( e ){} } throw new __tcRuntime.ParseError( path, "Type<RegExp>" ); })( ${varName}, ${p} )`;
+    }
+
+    if( flags & ts.TypeFlags.TemplateLiteral )
+    {
+        const templateType = type as ts.TemplateLiteralType;
+        let regexStr = '^';
+
+        for( let i = 0; i < templateType.texts.length; i++ )
+        {
+            regexStr += templateType.texts[i].replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
+
+            if( i < templateType.types.length )
+            {
+                const subType = templateType.types[i];
+                const subFlags = subType.getFlags();
+
+                if( subFlags & ts.TypeFlags.String ){ regexStr += '.*' }
+                else if( subFlags & ts.TypeFlags.Number ){ regexStr += '[0-9]+(\\.[0-9]+)?' }
+                else if( subFlags & ts.TypeFlags.BigInt ){ regexStr += '[0-9]+' }
+                else if( subFlags & ts.TypeFlags.Boolean ){ regexStr += '(true|false)' }
+                else { regexStr += '.*' }
+            }
+        }
+        regexStr += '$';
+        const expected = checker.typeToString( type );
+
+        return `( function( v, path ){ if( typeof v !== "string" || !( new RegExp( ${JSON.stringify( regexStr )} ) ).test( v ) ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( expected )} ); } return v; })( ${varName}, ${p} )`;
     }
 
     if( symbolName && BUFFER_LIKE.has( symbolName ))

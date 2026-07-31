@@ -131,7 +131,7 @@ function buildJsonSerializer(
         return JSON.stringify( lit );
     }
 
-    if( flags & ts.TypeFlags.String )
+    if( flags & ts.TypeFlags.String || flags & ts.TypeFlags.TemplateLiteral )
     {
         return `__tcRuntime.serializeString( ${varName}, ${pathLiteral} )`;
     }
@@ -249,9 +249,8 @@ function buildObjectSerializer(
     const pathLiteral = JSON.stringify( path );
     const declaredPropNames = props.map( p => p.name );
     const statements: string[] = [];
-    statements.push( `if( typeof ${varName} !== 'object' || ${varName} === null || Array.isArray( ${varName} ) ){ throw new __tcRuntime.SerializationError( ${pathLiteral}, "Type<Object>" ); }` );
+    statements.push( `if( typeof obj !== 'object' || obj === null || Array.isArray( obj ) ){ throw new __tcRuntime.SerializationError( ${pathLiteral}, "Type<Object>" ); }` );
     statements.push( `let parts = [];` );
-    statements.push( `const obj = ${varName};` );
 
     if( indexType || mode === 'strict' || mode === 'relaxed' )
     {
@@ -289,7 +288,7 @@ function buildObjectSerializer(
 
     statements.push( `return '{' + parts.join( ',' ) + '}';` );
 
-    return `( function(){ ${statements.join( ' ' )} })()`;
+    return `( function( obj ){ ${statements.join( ' ' )} })( ${varName} )`;
 }
 
 function leafQueryEncode( expr: string ): string

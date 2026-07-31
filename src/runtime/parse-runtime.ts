@@ -241,8 +241,18 @@ export function coerceNumber( val: any, path: string ): number
 export function coerceBoolean( val: any, path: string ): boolean
 {
     if( typeof val === 'boolean' ){ return val }
-    if( val === 'true' || val === '1' || val === 1 || val === true ){ return true }
-    if( val === 'false' || val === '0' || val === 0 || val === false ){ return false }
+
+    if( typeof val === 'string' || typeof val === 'number' )
+    {
+        const s = String( val ).toLowerCase();
+
+        if( s === 'true' || s === '1' || s === 'yes' || s === 'on' ){ return true }
+
+        if( s === 'false' || s === '0' || s === 'no' || s === 'off' ){ return false }
+
+        // Bare query flags (`?active`) often arrive as empty string.
+        if( s === '' ){ return true }
+    }
 
     throw new ParseError( path, 'Type<boolean>' );
 }
