@@ -235,6 +235,12 @@ function buildValidationCore(
     const flags = typeof type.getFlags === 'function' ? type.getFlags() : ts.TypeFlags.Any;
     const p = pathExpr || '""';
 
+    // Match validators.any — accept and return the value as-is (still behind the json/query preamble).
+    if( flags & ts.TypeFlags.Any || flags & ts.TypeFlags.Unknown )
+    {
+        return varName;
+    }
+
     if( flags & ts.TypeFlags.Undefined )
     {
         return `( function( v, path ){ if( v !== undefined ){ throw new __tcRuntime.ParseError( path, "Type<undefined>" ); } return v; })( ${varName}, ${p} )`;

@@ -100,6 +100,12 @@ function buildJsonSerializer(
     const flags = typeof type.getFlags === 'function' ? type.getFlags() : ts.TypeFlags.Any;
     const pathLiteral = JSON.stringify( path );
 
+    // Match validators.any / parse passthrough — emit JSON for whatever value is there.
+    if( flags & ts.TypeFlags.Any || flags & ts.TypeFlags.Unknown )
+    {
+        return `__tcRuntime.serializeAny( ${varName} )`;
+    }
+
     if( typeof type.isStringLiteral === 'function' && type.isStringLiteral())
     {
         const expected = JSON.stringify( type.value );
@@ -318,6 +324,11 @@ function buildQuerySerializer(
     }
 
     const flags = typeof type.getFlags === 'function' ? type.getFlags() : ts.TypeFlags.Any;
+
+    if( flags & ts.TypeFlags.Any || flags & ts.TypeFlags.Unknown )
+    {
+        return `__tcRuntime.appendQueryAny( params, ${varName}, ${prefixExpr} );`;
+    }
 
     if( flags & ts.TypeFlags.Undefined )
     {

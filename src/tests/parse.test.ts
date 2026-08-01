@@ -362,6 +362,21 @@ describe( 'Parse', () =>
             expect( code ).toContain( 'JSON.parse' );
         });
 
+        it( 'emits a passthrough body for any and unknown', () =>
+        {
+            for( const flag of [ ts.TypeFlags.Any, ts.TypeFlags.Unknown ])
+            {
+                const dummyType: any = { getFlags : () => flag };
+                const json = generateParseCode( dummyType, {} as any, { from : 'json' });
+                const query = generateParseCode( dummyType, {} as any, { from : 'query' });
+
+                expect( json ).toContain( 'JSON.parse' );
+                expect( json ).not.toContain( 'expectObject' );
+                expect( query ).toContain( 'parseQueryString' );
+                expect( query ).not.toContain( 'expectObject' );
+            }
+        });
+
         it( 'buildParser caches by type + mode + from', () =>
         {
             const dummyType: any = { getFlags : () => ts.TypeFlags.String };
@@ -665,6 +680,32 @@ describe( 'Parse', () =>
             expect( () => mod.parseQ( 'n=Infinity' )).toThrow( /number/ );
             expect( mod.parseJ({ n : Infinity })).toEqual({ n : Infinity });
             expect( () => mod.parseJ({ n : NaN })).toThrow( /number/ );
+        });
+
+        it( 'passes through any and unknown after json/query decode', async() =>
+        {
+            const mod = await emitAndImport<{
+                parseAnyJson   : ( v: unknown ) => any
+                parseUnknownJson : ( v: unknown ) => any
+                parseAnyQuery  : ( v: unknown ) => any
+            }>( `
+                import { parse } from '../src/index.js';
+                export const parseAnyJson = ( v: unknown ) => parse<any>( v );
+                export const parseUnknownJson = ( v: unknown ) => parse<unknown>( v );
+                export const parseAnyQuery = ( v: unknown ) => parse<any>( v, { from: 'query' } );
+            `, 'temp_parse_e2e_any' );
+
+            expect( mod.parseAnyJson( '{"a":1,"b":"x"}' )).toEqual({ a : 1, b : 'x' });
+            expect( mod.parseAnyJson({ keep : true, nested : { n : 2 } })).toEqual({ keep : true, nested : { n : 2 } });
+            expect( mod.parseAnyJson( 42 )).toBe( 42 );
+            expect( mod.parseAnyJson( 'plain' )).toBe( 'plain' );
+
+            expect( mod.parseUnknownJson( '{"ok":true}' )).toEqual({ ok : true });
+            expect( mod.parseUnknownJson([ 1, 2 ])).toEqual([ 1, 2 ]);
+
+            expect( mod.parseAnyQuery( 'a=1&b=two' )).toEqual({ a : '1', b : 'two' });
+            expect( mod.parseAnyQuery({ already : 'parsed' })).toEqual({ already : 'parsed' });
+            expect( mod.parseAnyQuery( 'bare' )).toBe( 'bare' );
         });
     });
 });

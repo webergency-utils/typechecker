@@ -28,6 +28,68 @@ export function serializeString( val: string, path = '' ): string
     return JSON.stringify( val );
 }
 
+/** Opaque `any` / `unknown` JSON fragment. `undefined` becomes `null` so it embeds safely in object parts. */
+export function serializeAny( val: any ): string
+{
+    if( val === undefined ){ return 'null' }
+
+    return JSON.stringify( val );
+}
+
+function leafQueryValue( expr: any ): string
+{
+    if( expr == null ){ return '' }
+
+    if( expr instanceof Date ){ return expr.toISOString() }
+
+    if( typeof expr === 'bigint' ){ return String( expr ) }
+
+    return String( expr );
+}
+
+/**
+ * Deep-encode an opaque `any` / `unknown` value into `application/x-www-form-urlencoded` pairs
+ * (objects → bracket keys, arrays → `[]`, scalars → one leaf).
+ */
+export function appendQueryAny( params: string[], val: any, prefix: string ): void
+{
+    if( val === undefined ){ return }
+
+    if( val === null || typeof val !== 'object' )
+    {
+        params.push( encodeURIComponent( prefix ) + '=' + encodeURIComponent( leafQueryValue( val ) ) );
+
+        return;
+    }
+
+    if( Array.isArray( val ))
+    {
+        for( const item of val )
+        {
+            appendQueryAny( params, item, prefix + '[]' );
+        }
+
+        return;
+    }
+
+    let wrote = false;
+
+    for( const k in val )
+    {
+        if( val[k] === undefined ){ continue }
+
+        wrote = true;
+        const child = prefix === '' ? k : prefix + '[' + k + ']';
+        appendQueryAny( params, val[k], child );
+    }
+
+    // Empty object still needs a presence marker when nested under a key.
+    if( !wrote && prefix !== '' )
+    {
+        params.push( encodeURIComponent( prefix ) + '=' );
+    }
+}
+
 export function serializeDate( val: Date | string | number, path = '' ): string
 {
     if( val instanceof Date )

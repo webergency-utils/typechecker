@@ -6,6 +6,8 @@ import
     serializeBuffer,
     serializeArray,
     serializeUnion,
+    serializeAny,
+    appendQueryAny,
     SerializationError
 }
 from '../runtime/serializer-runtime.js';
@@ -91,6 +93,51 @@ describe( 'Serializer & Stringify', () =>
             it( 'throws for non-array input', () =>
             {
                 expect( () => serializeArray( 'nope' as any, v => v, 'items' )).toThrow( 'Serialization error at "items": Type<Array>' );
+            });
+        });
+
+        describe( 'serializeAny', () =>
+        {
+            it( 'JSON-stringifies opaque values and maps undefined to null', () =>
+            {
+                expect( serializeAny({ a : 1, b : 'x' })).toBe( '{"a":1,"b":"x"}' );
+                expect( serializeAny([ 1, 'two', null ])).toBe( '[1,"two",null]' );
+                expect( serializeAny( 42 )).toBe( '42' );
+                expect( serializeAny( 'hi' )).toBe( '"hi"' );
+                expect( serializeAny( null )).toBe( 'null' );
+                expect( serializeAny( undefined )).toBe( 'null' );
+            });
+        });
+
+        describe( 'appendQueryAny', () =>
+        {
+            it( 'deep-encodes objects, arrays, and scalars', () =>
+            {
+                const params: string[] = [];
+                appendQueryAny( params, { a : '1', nest : { b : 2 }, tags : [ 'x', 'y' ] }, '' );
+
+                expect( params.join( '&' )).toContain( 'a=1' );
+                expect( params.join( '&' )).toContain( 'nest%5Bb%5D=2' );
+                expect( params.join( '&' )).toContain( 'tags%5B%5D=x' );
+                expect( params.join( '&' )).toContain( 'tags%5B%5D=y' );
+            });
+
+            it( 'encodes a nested empty object as a presence marker', () =>
+            {
+                const params: string[] = [];
+                appendQueryAny( params, {}, 'meta' );
+
+                expect( params ).toEqual([ 'meta=' ]);
+            });
+
+            it( 'skips undefined and encodes null as an empty value', () =>
+            {
+                const params: string[] = [];
+                appendQueryAny( params, undefined, 'x' );
+                expect( params ).toEqual([]);
+
+                appendQueryAny( params, null, 'x' );
+                expect( params ).toEqual([ 'x=' ]);
             });
         });
 
@@ -183,6 +230,23 @@ describe( 'Serializer & Stringify', () =>
 
             return { dummyType, checker };
         }
+
+        it( 'emits serializeAny for any and unknown', () =>
+        {
+            for( const flag of [ ts.TypeFlags.Any, ts.TypeFlags.Unknown ])
+            {
+                const dummyType: any = { getFlags : () => flag, isUnion : () => false };
+                const code = generateSerializerCode( dummyType, {} as any );
+
+                expect( code ).toContain( '__tcRuntime.serializeAny' );
+                expect( code ).not.toContain( 'Type<Object>' );
+            }
+
+            const anyType: any = { getFlags : () => ts.TypeFlags.Any, isUnion : () => false };
+            const query = generateSerializerCode( anyType, {} as any, { format : 'query' });
+
+            expect( query ).toContain( '__tcRuntime.appendQueryAny' );
+        });
 
         it( 'emits string / number / array serializers', () =>
         {
@@ -498,6 +562,67 @@ describe( 'Serializer & Stringify', () =>
             expect( qs ).toContain( 'qty' );
             expect( mod.dumpNum( Infinity )).toBe( 'Infinity' );
             expect( () => mod.dumpNum( NaN )).toThrow( /Type<number>/ );
+        });
+
+        it( 'preserves nested any and unknown values', async() =>
+        {
+            const mod = await emitAndImport<{
+                dumpJson   : ( v: any ) => string
+                dumpUnknown : ( v: any ) => string
+                dumpItems  : ( v: any ) => string
+                dumpRecord : ( v: any ) => string
+                dumpQuery  : ( v: any ) => string
+                dumpRoot   : ( v: any ) => string
+            }>( `
+                import { stringify } from '../src/index.js';
+                interface Row { id: string; meta: any }
+                interface Opaque { meta: unknown }
+                interface List { items: any[] }
+                interface Bag { data: Record<string, any> }
+                export const dumpJson = ( v: Row ) => stringify<Row>( v );
+                export const dumpUnknown = ( v: Opaque ) => stringify<Opaque>( v );
+                export const dumpItems = ( v: List ) => stringify<List>( v );
+                export const dumpRecord = ( v: Bag ) => stringify<Bag>( v );
+                export const dumpQuery = ( v: Row ) => stringify<Row>( v, { format: 'query' } );
+                export const dumpRoot = ( v: any ) => stringify<any>( v );
+            `, 'temp_ser_e2e_any' );
+
+            expect( JSON.parse( mod.dumpJson({
+                id   : '1',
+                meta : { keep : true, n : 2, tags : [ 'a' ] }
+            }))).toEqual({
+                id   : '1',
+                meta : { keep : true, n : 2, tags : [ 'a' ] }
+            });
+            expect( JSON.parse( mod.dumpJson({ id : '1', meta : 42 }))).toEqual({ id : '1', meta : 42 });
+            expect( JSON.parse( mod.dumpJson({ id : '1', meta : 'raw' }))).toEqual({ id : '1', meta : 'raw' });
+            expect( JSON.parse( mod.dumpJson({ id : '1', meta : null }))).toEqual({ id : '1', meta : null });
+
+            expect( JSON.parse( mod.dumpUnknown({
+                meta : { nested : [ 1, { ok : true }] }
+            }))).toEqual({
+                meta : { nested : [ 1, { ok : true }] }
+            });
+
+            expect( JSON.parse( mod.dumpItems({
+                items : [ 1, 'two', { three : true }, null ]
+            }))).toEqual({
+                items : [ 1, 'two', { three : true }, null ]
+            });
+
+            expect( JSON.parse( mod.dumpRecord({
+                data : { a : 1, b : { c : 'x' } }
+            }))).toEqual({
+                data : { a : 1, b : { c : 'x' } }
+            });
+
+            expect( JSON.parse( mod.dumpRoot({ free : 'form', n : 9 }))).toEqual({ free : 'form', n : 9 });
+            expect( mod.dumpRoot( 7 )).toBe( '7' );
+
+            const qs = mod.dumpQuery({ id : '1', meta : { a : 'x', tags : [ 't' ] } });
+            expect( qs ).toContain( 'id=1' );
+            expect( qs ).toContain( 'meta%5Ba%5D=x' );
+            expect( qs ).toContain( 'meta%5Btags%5D%5B%5D=t' );
         });
     });
 });
