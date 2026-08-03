@@ -21,12 +21,99 @@ import
 }
 from './type-helpers.js';
 
-export type ParseSource = 'json' | 'query';
+export type ParseSource = 'json' | 'query' | 'string';
 
 export interface ParseGeneratorOptions
 {
     mode? : ValidationMode;
     from? : ParseSource;
+}
+
+/** Query-style coercions shared by `from: 'query'` and `from: 'string'`. */
+function wantsQueryCoercion( from: ParseSource ): boolean
+{
+    return from === 'query' || from === 'string';
+}
+
+/**
+ * Root types allowed for `from: 'string'` — single already-decoded scalars only
+ * (no objects, arrays, bags, or querystring parsing).
+ */
+function isStringSourceCompatible( type: ts.Type, checker: ts.TypeChecker, scope: ICustomFunctionScope ): boolean
+{
+    let walk = type;
+
+    if( typeof walk.isIntersection === 'function' && walk.isIntersection())
+    {
+        const peeled = peelTaggedIntersection( walk, checker, scope );
+
+        if( peeled ){ walk = peeled.base }
+    }
+
+    if( typeof walk.isUnion === 'function' && walk.isUnion())
+    {
+        return walk.types.every( arm => isStringSourceCompatible( arm, checker, scope ));
+    }
+
+    const flags = typeof walk.getFlags === 'function' ? walk.getFlags() : ts.TypeFlags.Any;
+
+    if( flags & ( ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Never ))
+    {
+        return false;
+    }
+
+    if( flags & ( ts.TypeFlags.Undefined | ts.TypeFlags.Null ))
+    {
+        return true;
+    }
+
+    if( typeof walk.isStringLiteral === 'function' && walk.isStringLiteral()){ return true }
+    if( typeof walk.isNumberLiteral === 'function' && walk.isNumberLiteral()){ return true }
+    if( flags & ts.TypeFlags.BooleanLiteral ){ return true }
+    if( flags & ts.TypeFlags.BigIntLiteral ){ return true }
+    if( flags & ts.TypeFlags.String ){ return true }
+    if( flags & ts.TypeFlags.Number ){ return true }
+    if( flags & ts.TypeFlags.Boolean ){ return true }
+    if( flags & ts.TypeFlags.BigInt ){ return true }
+    if( flags & ts.TypeFlags.TemplateLiteral ){ return true }
+
+    if( isNativeEnumType( walk ))
+    {
+        const members = enumMemberTypes( walk, checker );
+
+        return members.length > 0 && members.every( m => isStringSourceCompatible( m, checker, scope ));
+    }
+
+    const symbolName = typeSymbolName( walk );
+
+    if( symbolName === 'Date' || symbolName === 'RegExp' ){ return true }
+
+    if( typeof checker.isArrayType === 'function' && checker.isArrayType( walk )){ return false }
+    if( typeof checker.isTupleType === 'function' && checker.isTupleType( walk )){ return false }
+    if( symbolName === 'Set' || symbolName === 'Map' ){ return false }
+    if( symbolName && BUFFER_LIKE.has( symbolName )){ return false }
+
+    // Object / class / index-signature shapes are not single-wire scalars.
+    return false;
+}
+
+function assertStringSourceCompatible( type: ts.Type, checker: ts.TypeChecker, scope: ICustomFunctionScope ): void
+{
+    if( isStringSourceCompatible( type, checker, scope )){ return }
+
+    let label = 'unknown';
+
+    try
+    {
+        label = checker.typeToString( type );
+    }
+    catch
+    { /* ignore */ }
+
+    throw new Error(
+        `[Webergency] from: 'string' only supports basic scalar types ` +
+        `(string, number, boolean, bigint, Date, RegExp, literals, enums, and unions of these); got ${label}`
+    );
 }
 
 function minifyTypeString( str: string ): string
@@ -82,6 +169,15 @@ export function generateParseCode(
 {
     const mode = options.mode || 'strip';
     const from = options.from || 'json';
+
+    if( from === 'string' )
+    {
+        assertStringSourceCompatible( type, checker, scope );
+        const body = buildValidation( type, checker, mode, 'string', 'input', 'path', 'input', scope );
+
+        // Already-decoded scalar wire value — never parseQueryString / JSON.parse.
+        return `( function( input, path = "" ){ return ${body}; })`;
+    }
 
     if( from === 'query' )
     {
@@ -256,7 +352,7 @@ function buildValidationCore(
         const expected = JSON.stringify( type.value );
         const litCode = `Literal<'${String( type.value ).replace( /\\/g, '\\\\' ).replace( /'/g, "\\'" )}'>`;
 
-        if( from === 'query' )
+        if( wantsQueryCoercion( from ))
         {
             return `( function( v, path ){ if( typeof v !== "string" ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( litCode )} ); } if( v !== ${expected} ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( litCode )} ); } return v; })( ${varName}, ${p} )`;
         }
@@ -269,7 +365,7 @@ function buildValidationCore(
         const expected = type.value;
         const litCode = `Literal<${expected}>`;
 
-        if( from === 'query' )
+        if( wantsQueryCoercion( from ))
         {
             return `( function( v, path ){ const n = __tcRuntime.coerceNumber( v, path ); if( n !== ${expected} ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( litCode )} ); } return n; })( ${varName}, ${p} )`;
         }
@@ -282,7 +378,7 @@ function buildValidationCore(
         const expected = ( type as any ).intrinsicName === 'true';
         const litCode = `Literal<${expected}>`;
 
-        if( from === 'query' )
+        if( wantsQueryCoercion( from ))
         {
             return `( function( v, path ){ const b = __tcRuntime.coerceBoolean( v, path ); if( b !== ${expected} ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( litCode )} ); } return b; })( ${varName}, ${p} )`;
         }
@@ -297,7 +393,7 @@ function buildValidationCore(
 
     if( flags & ts.TypeFlags.Number )
     {
-        if( from === 'query' )
+        if( wantsQueryCoercion( from ))
         {
             return `__tcRuntime.coerceNumber( ${varName}, ${p} )`;
         }
@@ -307,7 +403,7 @@ function buildValidationCore(
 
     if( flags & ts.TypeFlags.Boolean )
     {
-        if( from === 'query' )
+        if( wantsQueryCoercion( from ))
         {
             return `__tcRuntime.coerceBoolean( ${varName}, ${p} )`;
         }
@@ -348,7 +444,7 @@ function buildValidationCore(
 
     if( symbolName === 'RegExp' )
     {
-        return `( function( v, path ){ if( v instanceof RegExp ){ return v } if( typeof v === "string" ){ const match = v.match( /^\\/(.*)\\/([gimuy]*)$/ ); if( match ){ try { return new RegExp( match[1], match[2] ); } catch( e ){} } ${from === 'query' ? 'try { return new RegExp( v ); } catch( e ){}' : ''} } if( v && typeof v === "object" && typeof v.source === "string" ){ try { return new RegExp( v.source, typeof v.flags === "string" ? v.flags : "" ); } catch( e ){} } throw new __tcRuntime.ParseError( path, "Type<RegExp>" ); })( ${varName}, ${p} )`;
+        return `( function( v, path ){ if( v instanceof RegExp ){ return v } if( typeof v === "string" ){ const match = v.match( /^\\/(.*)\\/([gimuy]*)$/ ); if( match ){ try { return new RegExp( match[1], match[2] ); } catch( e ){} } ${wantsQueryCoercion( from ) ? 'try { return new RegExp( v ); } catch( e ){}' : ''} } if( v && typeof v === "object" && typeof v.source === "string" ){ try { return new RegExp( v.source, typeof v.flags === "string" ? v.flags : "" ); } catch( e ){} } throw new __tcRuntime.ParseError( path, "Type<RegExp>" ); })( ${varName}, ${p} )`;
     }
 
     if( flags & ts.TypeFlags.TemplateLiteral )
@@ -398,7 +494,7 @@ function buildValidationCore(
         const elemType = ( checker as any ).getTypeArguments?.( type as ts.TypeReference )?.[0] || { getFlags : () => ts.TypeFlags.Any };
         const elemCode = buildValidation( elemType, checker, mode, from, 'item', 'itemP', rootExpr, scope );
 
-        if( from === 'query' )
+        if( wantsQueryCoercion( from ))
         {
             return `__tcRuntime.coerceArray( ${varName}, ${p}, ( item, itemP ) => ${elemCode} )`;
         }

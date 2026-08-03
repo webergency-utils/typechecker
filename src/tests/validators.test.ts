@@ -106,6 +106,13 @@ describe( 'Validators', () =>
             expect( validators.number( '123', 'path', ctx )).toBe( 123 );
             expect( ctx.success ).toBe( true );
 
+            // from: 'string' shares the same scalar coercions
+            ctx.success = true;
+            ctx.errors = [];
+            ctx.from = 'string';
+            expect( validators.number( '456', 'path', ctx )).toBe( 456 );
+            expect( ctx.success ).toBe( true );
+
             ctx.success = true;
             ctx.errors = [];
             validators.number( 'not-a-number', 'path', ctx );

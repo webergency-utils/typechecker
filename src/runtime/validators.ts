@@ -31,7 +31,7 @@ export interface PathContext {
 
 export type FromCoercionContext = PathContext & { kind : CoercionKind }
 
-type FromOption = 'json' | 'query' | (( val: any, ctx: FromCoercionContext ) => any );
+type FromOption = 'json' | 'query' | 'string' | (( val: any, ctx: FromCoercionContext ) => any );
 
 export interface ValidationContext {
     success     : boolean
@@ -196,14 +196,15 @@ function shouldMutate( ctx: ValidationContext ): boolean
     return ctx.mutate === true;
 }
 
+/** Query-style coercions — shared by `from: 'query'` and `from: 'string'`. */
 function wantsQuery( ctx: ValidationContext ): boolean
 {
-    return ctx.from === 'query';
+    return ctx.from === 'query' || ctx.from === 'string';
 }
 
 function wantsJsonRevive( ctx: ValidationContext ): boolean
 {
-    return ctx.from === 'json' || ctx.from === 'query';
+    return ctx.from === 'json' || ctx.from === 'query' || ctx.from === 'string';
 }
 
 function isIndexSegment( seg: string ): boolean

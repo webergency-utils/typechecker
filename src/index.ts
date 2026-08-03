@@ -107,7 +107,7 @@ export * from './runtime/parse-runtime.js';
 
 export type SerializationMode = ValidationMode;
 export type SerializeFormat = 'json' | 'query';
-export type ParseSource = 'json' | 'query';
+export type ParseSource = 'json' | 'query' | 'string';
 
 export interface SerializerOptions
 {

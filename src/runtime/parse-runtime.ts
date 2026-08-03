@@ -334,7 +334,7 @@ export function applyParseConstraints(
     val         : any,
     path        : string,
     constraints : ParseConstraint[],
-    from?       : 'json' | 'query'
+    from?       : 'json' | 'query' | 'string'
 ): any
 {
     let v = val;

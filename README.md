@@ -282,12 +282,17 @@ Single-pass parse + validate into `T`.
 
 - **Options**:
   - `mode`: `'strict' | 'relaxed' | 'strip'` (default `'strip'`).
-  - `from`: `'json'` (default) or `'query'` (coerces numbers/booleans/dates; uses `parseQueryString` bracket notation).
-- **Behavior**: Applies `tag.Default`, `transform.*`, and `constraint.*` / `format.*` (parity with `validate`). Rejects `NaN`; JSON allows `±Infinity`; query numbers must be finite. Throws `ParseError`.
+  - `from`:
+    - `'json'` (default) — JSON text / values; revives Date/RegExp/etc.
+    - `'query'` — raw query/form text, `URLSearchParams`, or already-parsed bags; runs `parseQueryString` when the root is encoded text; coerces numbers/booleans/dates.
+    - `'string'` — a single already-decoded scalar (path/header/cookie values). Same coercions as `'query'`, but **never** runs `parseQueryString`. Only basic scalar types (`string`, `number`, `boolean`, `bigint`, `Date`, `RegExp`, literals, enums, and unions of these).
+- **Behavior**: Applies `tag.Default`, `transform.*`, and `constraint.*` / `format.*` (parity with `validate`). Rejects `NaN`; JSON allows `±Infinity`; query/string numbers must be finite. Throws `ParseError`.
 - **Example**:
   ```typescript
   const user = parse<User>(req.body);
   const q = parse<Search>(req.url.search, { from: 'query', mode: 'strict' });
+  const id = parse<string>('jpUllytbmQ=', { from: 'string' }); // stays the string (no querystring parse)
+  const n = parse<number>('42', { from: 'string' }); // → 42
   ```
 
 #### Errors
@@ -333,7 +338,7 @@ Groups validation errors by path, including nested `issues` from failed unions.
 
 #### `coerceQueryNumber(v: any): any` / `coerceQueryBoolean(v: any): any` / `coerceQueryDate(v: any): any` / `coerceJsonDate(v: any): any`
 
-Shared coercion helpers used by `from: 'query'` / `from: 'json'` and by `transform.ToNumber` / `ToBoolean` / `ToDate`.
+Shared coercion helpers used by `from: 'query'` / `from: 'string'` / `from: 'json'` and by `transform.ToNumber` / `ToBoolean` / `ToDate`.
 
 #### `class ZodLikeError extends Error`
 
@@ -373,7 +378,7 @@ Options for `is` / `isSchema`. Always mutate in place (no `mutate` / `errorFacto
 | Property | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `mode` | `ValidationMode` | `'strict'` | Unknown-key policy (`strict` / `relaxed` / `strip`). Not coercion — see `ValidationMode` above. |
-| `from` | `'json' \| 'query' \| ((val, ctx) => any)` | `undefined` | In-place coercion for nested fields. Custom callbacks receive `(val, PathContext & { kind: CoercionKind })`. Root replacement fails the guard. |
+| `from` | `'json' \| 'query' \| 'string' \| ((val, ctx) => any)` | `undefined` | In-place coercion for nested fields. `'string'` uses the same scalar coercions as `'query'` (no querystring parsing). Custom callbacks receive `(val, PathContext & { kind: CoercionKind })`. Root replacement fails the guard. |
 
 #### `interface AssertGuardOptions`
 
@@ -390,7 +395,7 @@ Extends `GuardOptions` for `validate` / `validateSchema` (adds `mutate`; no `err
 | Property | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `mode` | `ValidationMode` | `'strict'` | Unknown-key policy (`strict` / `relaxed` / `strip`). Not coercion — see `ValidationMode` above. |
-| `from` | `'json' \| 'query' \| ((val, ctx) => any)` | `undefined` | Input conversion mode. `'json'` revives JSON-impossible types. `'query'` also coerces querystring shapes. A custom function is `(val, { key, path, parent, root, index?, kind }) => any` and runs only on type mismatch. `kind` is a `CoercionKind` dispatch tag (not `typeof` / a TS type). `key` is the nearest named path segment (for `[n]` leaves, the closest named key above). |
+| `from` | `'json' \| 'query' \| 'string' \| ((val, ctx) => any)` | `undefined` | Input conversion mode. `'json'` revives JSON-impossible types. `'query'` also coerces querystring shapes (and may `parseQueryString`). `'string'` coerces a single already-decoded scalar like `'query'` but never parses a querystring. A custom function is `(val, { key, path, parent, root, index?, kind }) => any` and runs only on type mismatch. `kind` is a `CoercionKind` dispatch tag (not `typeof` / a TS type). `key` is the nearest named path segment (for `[n]` leaves, the closest named key above). |
 | `mutate` | `boolean` | `false` | `true`: write in place while validating (half-changed input on failure is allowed; union arms still use a side tree). `false`: always allocate new containers. |
 
 #### `interface AssertOptions`

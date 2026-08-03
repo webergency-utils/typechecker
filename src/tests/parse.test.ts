@@ -385,6 +385,36 @@ describe( 'Parse', () =>
 
             expect( map.has( 'hash_parse_strict_json' )).toBe( true );
             expect( ts.isIdentifier( ref ) && ref.text ).toBe( '__parse_hash_parse_strict_json' );
+
+            buildParser( dummyType, {} as any, map, 'hash_parse', { from : 'string', mode : 'strip' });
+            expect( map.has( 'hash_parse_strip_string' )).toBe( true );
+        });
+
+        it( 'emits string-source parser without parseQueryString', () =>
+        {
+            const dummyType: any = { getFlags : () => ts.TypeFlags.String };
+            const code = generateParseCode( dummyType, {} as any, { from : 'string' });
+
+            expect( code ).toContain( 'expectString' );
+            expect( code ).not.toContain( 'parseQueryString' );
+            expect( code ).not.toContain( 'JSON.parse' );
+        });
+
+        it( 'rejects non-scalar roots for from:string at codegen', () =>
+        {
+            const objectLike: any = {
+                getFlags             : () => ts.TypeFlags.Object,
+                getProperties        : () => [],
+                getStringIndexType   : () => undefined,
+                getNumberIndexType   : () => undefined,
+                getSymbol            : () => ({ getName : () => '__object' })
+            };
+
+            expect( () => generateParseCode( objectLike, {
+                typeToString : () => '{ a: string }',
+                isArrayType  : () => false,
+                isTupleType  : () => false
+            } as any, { from : 'string' })).toThrow( /from: 'string' only supports basic scalar types/ );
         });
     });
 
@@ -476,6 +506,26 @@ describe( 'Parse', () =>
             ` )).toContain( 'PropertyNotAllowed<' );
         });
 
+        it( 'compiles from:string scalar parsers without parseQueryString', () =>
+        {
+            const code = compile( `
+                import { parse } from './src/index.js';
+                export function asString( v: unknown ) { return parse<string>( v, { from: 'string' } ); }
+                export function asNumber( v: unknown ) { return parse<number>( v, { from: 'string' } ); }
+                export function asBool( v: unknown ) { return parse<boolean>( v, { from: 'string' } ); }
+            ` );
+            expect( code ).toContain( '__tcRuntime.expectString' );
+            expect( code ).toContain( '__tcRuntime.coerceNumber' );
+            expect( code ).toContain( '__tcRuntime.coerceBoolean' );
+            expect( code ).not.toContain( 'parseQueryString' );
+
+            expect( () => compile( `
+                import { parse } from './src/index.js';
+                interface Bag { a: string }
+                export function run( v: unknown ) { return parse<Bag>( v, { from: 'string' } ); }
+            ` )).toThrow( /from: 'string' only supports basic scalar types/ );
+        });
+
         it( 'compiles Buffer / Date parse branches', () =>
         {
             const code = compile( `
@@ -560,6 +610,34 @@ describe( 'Parse', () =>
 
             const usp = new URLSearchParams({ page : '3', active : '1' });
             expect( mod.parseUsp( usp )).toEqual({ page : 3, active : true });
+        });
+
+        it( 'parses from:string scalars without querystring splitting', async() =>
+        {
+            const mod = await emitAndImport<{
+                asString : ( input: unknown ) => string
+                asNumber : ( input: unknown ) => number
+                asBool   : ( input: unknown ) => boolean
+                asDate   : ( input: unknown ) => Date
+                asRegex  : ( input: unknown ) => RegExp
+            }>( `
+                import { parse } from '../src/index.js';
+                export const asString = ( input: unknown ) => parse<string>( input, { from: 'string' } );
+                export const asNumber = ( input: unknown ) => parse<number>( input, { from: 'string' } );
+                export const asBool = ( input: unknown ) => parse<boolean>( input, { from: 'string' } );
+                export const asDate = ( input: unknown ) => parse<Date>( input, { from: 'string' } );
+                export const asRegex = ( input: unknown ) => parse<RegExp>( input, { from: 'string' } );
+            `, 'temp_parse_e2e_string' );
+
+            expect( mod.asString( 'jpUllytbmQ=' )).toBe( 'jpUllytbmQ=' );
+            expect( mod.asString( '100%' )).toBe( '100%' );
+            expect( mod.asString( 'a&b=c' )).toBe( 'a&b=c' );
+            expect( mod.asNumber( '42' )).toBe( 42 );
+            expect( mod.asBool( 'true' )).toBe( true );
+            expect( mod.asBool( '0' )).toBe( false );
+            expect( mod.asDate( '2026-01-01T00:00:00.000Z' ).toISOString()).toBe( '2026-01-01T00:00:00.000Z' );
+            expect( mod.asRegex( 'foo.*bar' )).toEqual( /foo.*bar/ );
+            expect( () => mod.asNumber( 'nope' )).toThrow( /Type<number>/ );
         });
 
         it( 'round-trips stringify(json) → parse and stringify(query) → parse', async() =>

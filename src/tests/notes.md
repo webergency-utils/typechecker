@@ -10,8 +10,8 @@
 - Plain-object guards reject `Buffer`, `ArrayBuffer`, and typed-array views; null-prototype objects are accepted.
 - A real `class` used as a type is **nominal**: emit `instanceof` against a reachable constructor (same module-scope / re-import rules as `Custom<typeof fn>`). Interfaces and type literals stay structural. Built-in globals (`Date`, `Promise`, typed arrays, …) keep their existing dedicated validators.
 - `mutate` on `validate` / `assert` defaults to false (always new containers). `mutate: true` writes in place while validating (same as `is` / `assertGuard`); half-changed input on failure is allowed. Union arms always use a side tree and commit only the winning arm. `allOf` members still validate without mutating the shared input.
-- Default validation is strict (no conversion). `mode` is unknown-key policy only: `strict` reject extras, `relaxed` keep extras (no coerce), `strip` drop extras. Coercion is only via `from` (`'json'` / `'query'` / custom) — never via `mode` / `relaxed`.
-- Use `from: 'json'` for wire revivals (Date/RegExp/bigint/Set/Map), `from: 'query'` for querystring coercions (including scalar→`[scalar]` for arrays and scalar→`Set`), or a custom `from` function on type mismatch only.
+- Default validation is strict (no conversion). `mode` is unknown-key policy only: `strict` reject extras, `relaxed` keep extras (no coerce), `strip` drop extras. Coercion is only via `from` (`'json'` / `'query'` / `'string'` / custom) — never via `mode` / `relaxed`.
+- Use `from: 'json'` for wire revivals (Date/RegExp/bigint/Set/Map), `from: 'query'` for querystring coercions (including scalar→`[scalar]` for arrays and scalar→`Set`), `from: 'string'` for a single already-decoded scalar with the same coercions as `'query'` but no `parseQueryString`, or a custom `from` function on type mismatch only.
 - Function types validate with `typeof === 'function'`. Native enums compile to literal unions.
 - Map json revival requires a plain object (rejects Date/RegExp/etc.).
 - `validators.object` returns the (possibly converted) object, or `false` when the value is not a plain object.
