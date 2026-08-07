@@ -110,8 +110,14 @@ export function getCachedPattern( source: string ): RegExp | undefined
     return regex;
 }
 
+const MAX_REGEX_TEST_LENGTH = 10_000;
+
 export function testRegex( regex: RegExp, value: string ): boolean
 {
+    // Bound subject length to limit polynomial ReDoS on library-input regexes.
+    // Unsafe user patterns are rejected earlier via createSafeRegex / isRegexSafe.
+    if( value.length > MAX_REGEX_TEST_LENGTH ){ return false }
+
     if( !regex.global && !regex.sticky ){ return regex.test( value ) }
 
     const copy = new RegExp( regex.source, regex.flags );

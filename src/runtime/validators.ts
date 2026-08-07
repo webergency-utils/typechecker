@@ -478,6 +478,63 @@ function fromCustom( ctx: ValidationContext, path: string, value: any, kind: Coe
     return ( ctx.from as ( val: any, c: FromCoercionContext ) => any )( value, { ...pathContext( path, ctx ), kind });
 }
 
+/** True when `s` is a finite decimal / scientific literal (linear scan, no ReDoS). */
+function isCoercibleQueryNumberString( s: string ): boolean
+{
+    let i = 0;
+
+    if( s[i] === '+' || s[i] === '-' ){ i++ }
+
+    const start = i;
+    let sawDigit = false;
+    let sawDot = false;
+
+    while( i < s.length )
+    {
+        const ch = s.charCodeAt( i );
+
+        if( ch >= 48 && ch <= 57 )
+        {
+            sawDigit = true;
+            i++;
+            continue;
+        }
+
+        if( ch === 46 && !sawDot )
+        {
+            sawDot = true;
+            i++;
+            continue;
+        }
+
+        break;
+    }
+
+    if( !sawDigit || i === start ){ return false }
+
+    if( i < s.length && ( s[i] === 'e' || s[i] === 'E' ))
+    {
+        i++;
+
+        if( s[i] === '+' || s[i] === '-' ){ i++ }
+
+        const expStart = i;
+
+        while( i < s.length )
+        {
+            const ch = s.charCodeAt( i );
+
+            if( ch < 48 || ch > 57 ){ break }
+
+            i++;
+        }
+
+        if( i === expStart ){ return false }
+    }
+
+    return i === s.length;
+}
+
 /** Query-style number coercion — shared by `from: 'query'` and `transform.ToNumber`. */
 export function coerceQueryNumber( v: any ): any
 {
@@ -487,7 +544,7 @@ export function coerceQueryNumber( v: any ): any
     {
         const normalized = v.trim();
 
-        if( !/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test( normalized )){ return v }
+        if( !isCoercibleQueryNumberString( normalized )){ return v }
 
         const parsed = Number( normalized );
 

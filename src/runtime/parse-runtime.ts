@@ -101,7 +101,21 @@ function isUnsafeKey( key: string | number ): boolean
 
 function createPlainObject(): Record<string | number, any>
 {
-    return {};
+    return Object.create( null );
+}
+
+/** Assign a dynamic key without prototype-polluting sinks (`obj[key] = …`). */
+function setOwn( obj: any, key: string | number, value: any ): void
+{
+    if( isUnsafeKey( key )){ return }
+
+    Object.defineProperty( obj, key,
+    {
+        value,
+        writable     : true,
+        enumerable   : true,
+        configurable : true
+    });
 }
 
 /** decodeURIComponent throws URIError on lone `%` / bad hex; keep the raw segment instead. */
@@ -151,14 +165,20 @@ export function parseQueryString( querystring: string ): Record<string, any>
 
             if( typeof k === 'string' && Array.isArray( obj ))
             {
-                parent[parent_key!] = obj = obj.reduce(( o: any, v: any, i: number ) => ( o[i] = v, o ), createPlainObject());
+                obj = obj.reduce(( o: any, v: any, i: number ) =>
+                {
+                    setOwn( o, i, v );
+
+                    return o;
+                }, createPlainObject());
+                setOwn( parent, parent_key!, obj );
             }
 
             if( i < keys.length - 1 )
             {
                 if( !obj[k])
                 {
-                    obj[k] = ( keys[i + 1] === '' || intRE.test( keys[i + 1])) ? [] : createPlainObject();
+                    setOwn( obj, k, ( keys[i + 1] === '' || intRE.test( keys[i + 1])) ? [] : createPlainObject());
                 }
 
                 if( isUnsafeKey( keys[i + 1])){ return }
@@ -178,16 +198,19 @@ export function parseQueryString( querystring: string ): Record<string, any>
                     else if( typeof obj[k] === 'object' && obj[k] !== null )
                     {
                         const nested = obj[k];
-                        obj[k][Math.max( -1, ...Object.keys( nested ).map( nk => intRE.test( nk ) ? parseInt( nk, 10 ) : -1 )) + 1] = value;
+                        const nextIndex = Math.max( -1, ...Object.keys( nested ).map( nk => intRE.test( nk ) ? parseInt( nk, 10 ) : -1 )) + 1;
+                        setOwn( nested, nextIndex, value );
                     }
                     else
                     {
-                        ( obj[k] = [obj[k]]).push( value );
+                        const arr = [obj[k]];
+                        arr.push( value );
+                        setOwn( obj, k, arr );
                     }
                 }
                 else
                 {
-                    obj[k] = value;
+                    setOwn( obj, k, value );
                 }
             }
         }

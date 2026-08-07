@@ -5,7 +5,10 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.ts'],
     // TS program creation per case is slow on CI (staticAsserts / transformer).
+    // GitHub-hosted runners are ~2 vCPU; unbounded file parallelism + coverage
+    // starves createProgram-heavy suites (e.g. defaults-regression → minutes).
     testTimeout: 30000,
+    maxWorkers: process.env.CI ? 2 : undefined,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
