@@ -13,16 +13,16 @@ import
     tryTaggedUnionTypes,
     typeSymbolName
 }
-from './type-helpers.js';
+    from './type-helpers.js';
 
 export type SerializationMode = ValidationMode;
 export type SerializeFormat = 'json' | 'query';
 
 export interface SerializerGeneratorOptions
 {
-    mode?   : ValidationMode;
-    format? : SerializeFormat;
-    to?     : SerializeFormat;
+    mode?   : ValidationMode
+    format? : SerializeFormat
+    to?     : SerializeFormat
 }
 
 function minifyTypeString( str: string ): string
@@ -202,7 +202,7 @@ function buildJsonSerializer(
         const slotInits = typeArgs.map(( elem, i ) =>
             `const ${slotVars[i]} = ${buildJsonSerializer( elem, checker, mode, `${path}[${i}]`, `${varName}[${i}]` )};`
         ).join( ' ' );
-        const joined = slotVars.join( ` + "," + ` );
+        const joined = slotVars.join( ' + "," + ' );
 
         return `( function(){ if( !Array.isArray( ${varName} ) || ${varName}.length !== ${typeArgs.length} ){ throw new __tcRuntime.SerializationError( ${pathLiteral}, "Tuple<${typeArgs.length}>" ); } ${slotInits} return "[" + ${joined} + "]"; })()`;
     }
@@ -210,7 +210,7 @@ function buildJsonSerializer(
     if( typeof checker.isArrayType === 'function' && checker.isArrayType( type ))
     {
         const typeArgs = typeof checker.getTypeArguments === 'function' ? checker.getTypeArguments( type as ts.TypeReference ) : [];
-        const elemType = typeArgs[0] || ( { getFlags : () => ts.TypeFlags.Any } as any );
+        const elemType = typeArgs[0] || ({ getFlags : () => ts.TypeFlags.Any } as any );
         const elemSer = buildJsonSerializer( elemType, checker, mode, path + '[]', 'item' );
 
         return `__tcRuntime.serializeArray( ${varName}, item => ${elemSer}, ${pathLiteral} )`;
@@ -244,7 +244,7 @@ function buildJsonSerializer(
 }
 
 function buildObjectSerializer(
-    props     : { name: string, type: ts.Type, isOptional: boolean }[],
+    props     : { name : string, type : ts.Type, isOptional : boolean }[],
     indexType : ts.Type | undefined,
     checker   : ts.TypeChecker,
     mode      : ValidationMode,
@@ -256,7 +256,7 @@ function buildObjectSerializer(
     const declaredPropNames = props.map( p => p.name );
     const statements: string[] = [];
     statements.push( `if( typeof obj !== 'object' || obj === null || Array.isArray( obj ) ){ throw new __tcRuntime.SerializationError( ${pathLiteral}, "Type<Object>" ); }` );
-    statements.push( `let parts = [];` );
+    statements.push( 'let parts = [];' );
 
     if( indexType || mode === 'strict' || mode === 'relaxed' )
     {
@@ -289,10 +289,10 @@ function buildObjectSerializer(
     }
     else if( mode === 'relaxed' )
     {
-        statements.push( `for( const k in obj ){ if( !__keys.has( k ) && obj[k] !== undefined ){ parts.push( JSON.stringify( k ) + ":" + JSON.stringify( obj[k] ) ); } }` );
+        statements.push( 'for( const k in obj ){ if( !__keys.has( k ) && obj[k] !== undefined ){ parts.push( JSON.stringify( k ) + ":" + JSON.stringify( obj[k] ) ); } }' );
     }
 
-    statements.push( `return '{' + parts.join( ',' ) + '}';` );
+    statements.push( 'return \'{\' + parts.join( \',\' ) + \'}\';' );
 
     return `( function( obj ){ ${statements.join( ' ' )} })( ${varName} )`;
 }
@@ -371,7 +371,7 @@ function buildQuerySerializer(
     if( typeof checker.isArrayType === 'function' && checker.isArrayType( type ))
     {
         const typeArgs = typeof checker.getTypeArguments === 'function' ? checker.getTypeArguments( type as ts.TypeReference ) : [];
-        const elemType = typeArgs[0] || ( { getFlags : () => ts.TypeFlags.Any } as any );
+        const elemType = typeArgs[0] || ({ getFlags : () => ts.TypeFlags.Any } as any );
         const elemCode = buildQuerySerializer( elemType, checker, mode, 'item', `(${prefixExpr}) + "[]"` );
 
         return `if( !Array.isArray( ${varName} ) ){ throw new __tcRuntime.SerializationError( ${prefixExpr}, "Type<Array>" ); } for( const item of ${varName} ){ ${elemCode} }`;
@@ -402,7 +402,7 @@ function buildQuerySerializer(
 }
 
 function buildQueryObject(
-    props      : { name: string, type: ts.Type, isOptional: boolean }[],
+    props      : { name : string, type : ts.Type, isOptional : boolean }[],
     indexType  : ts.Type | undefined,
     checker    : ts.TypeChecker,
     mode       : ValidationMode,

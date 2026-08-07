@@ -4,7 +4,7 @@ import stylistic from '@stylistic/eslint-plugin';
 
 export default tseslint.config(
     {
-        ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**', '**/build/**'],
+        ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**', '**/build/**', '**/tests/fixtures/**'],
     },
     {
         files: ['src/**/*.ts', 'tests/**/*.ts'],
@@ -20,6 +20,8 @@ export default tseslint.config(
             '@typescript-eslint/no-explicit-any': 'off',
             '@typescript-eslint/no-unsafe-function-type': 'off',
             '@typescript-eslint/no-unused-vars': 'off',
+            '@typescript-eslint/no-unused-expressions': 'off',
+            'no-control-regex': 'off',
             'no-empty': 'off',
             // Indentation: 4 spaces strictly, ignoring Array/Object assignments to allow Allman brackets on new lines
             '@stylistic/indent': ['error', 4, {

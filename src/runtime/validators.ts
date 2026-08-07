@@ -5,11 +5,11 @@ import { createSafeRegex, isRegexSafe, testRegex } from './regex.js';
 export type ValidationMode = 'strict' | 'relaxed' | 'strip';
 
 export interface IValidationError {
-    path     : string
-    value    : any
-    error    : string
+    path    : string
+    value   : any
+    error   : string
     /** Nested failures (e.g. per-arm errors for a failed union). */
-    issues?  : IValidationError[]
+    issues? : IValidationError[]
 }
 
 /** Expected runtime kind for custom `from` — a dispatch tag, not `typeof` / a TS type. */
@@ -21,25 +21,25 @@ export type CoercionKind =
 /** Shared context for `constraint.Custom` and custom `from` callbacks. */
 export interface PathContext {
     /** Nearest named property; for `[n]` leaves, the closest named segment above. */
-    key     : string
-    path    : string
-    parent  : any
-    root    : any
+    key    : string
+    path   : string
+    parent : any
+    root   : any
     /** Set when the leaf path segment is an array index. */
-    index?  : number
+    index? : number
 }
 
-export type FromCoercionContext = PathContext & { kind : CoercionKind }
+export type FromCoercionContext = PathContext & { kind : CoercionKind };
 
 type FromOption = 'json' | 'query' | 'string' | (( val: any, ctx: FromCoercionContext ) => any );
 
 export interface ValidationContext {
-    success     : boolean
-    errors      : IValidationError[]
-    mode        : ValidationMode
-    from?       : FromOption
-    mutate?     : boolean
-    root?       : any
+    success : boolean
+    errors  : IValidationError[]
+    mode    : ValidationMode
+    from?   : FromOption
+    mutate? : boolean
+    root?   : any
 }
 
 
@@ -53,8 +53,8 @@ export interface GuardOptions {
      *
      * Coercion / revival is controlled only by `from`, never by `mode`.
      */
-    mode?         : ValidationMode
-    from?         : FromOption
+    mode? : ValidationMode
+    from? : FromOption
 }
 
 /** Options for `assertGuard` / `assertGuardSchema`. */
@@ -65,7 +65,7 @@ export interface AssertGuardOptions extends GuardOptions {
 /** Options for `validate` / `validateSchema`. */
 export interface ValidationOptions extends GuardOptions {
     /** `true`: write in place while validating. `false` (default): allocate new containers. */
-    mutate?       : boolean
+    mutate? : boolean
 }
 
 /** Options for `assert` / `assertSchema`. */
@@ -703,7 +703,7 @@ function uniqueContentHash( value: any, seen?: WeakSet<object> ): number | undef
 
     if( type !== 'object' ){ return undefined }
 
-    if( value instanceof Date ){ return mixNumberHash( 0x60000000, value.getTime() ) >>> 0 }
+    if( value instanceof Date ){ return mixNumberHash( 0x60000000, value.getTime()) >>> 0 }
 
     if( value instanceof RegExp ){ return mixStringHash( 0x70000000, `${value.source}/${value.flags}` ) >>> 0 }
 
@@ -787,7 +787,7 @@ export const validators = {
     coerceQueryDate,
     coerceJsonDate,
     safeRegExp : createSafeRegex,
-    assign : ( target: any, source: any ) =>
+    assign     : ( target: any, source: any ) =>
     {
         assignOwnProperties( target, source );
 
@@ -1066,6 +1066,7 @@ export const validators = {
                 return v;
             }
         }
+
         if( shouldMutate( ctx ))
         {
             for( let i = 0; i < v.length; i++ )
@@ -1122,7 +1123,7 @@ export const validators = {
         return { ...v };
     },
 
-    stripExtras : ( data: any, ctx: ValidationContext, allowedKeys?: string[] | Set<string>) => 
+    stripExtras : ( data: any, ctx: ValidationContext, allowedKeys?: string[] | Set<string> ) => 
     {
         if( !shouldMutate( ctx ) || ctx.mode !== 'strip' || !allowedKeys || !data || typeof data !== 'object' ) { return data }
 
@@ -1529,7 +1530,7 @@ export const validators = {
                         continue;
                     }
 
-                    let bucket = collisionBuckets.get( hash );
+                    const bucket = collisionBuckets.get( hash );
 
                     if( !bucket )
                     {
@@ -1721,6 +1722,7 @@ export const validators = {
                 return v;
             }
         }
+
         if( shouldMutate( ctx ))
         {
             for( let i = 0; i < checks.length; i++ )

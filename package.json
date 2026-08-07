@@ -1,73 +1,114 @@
 {
   "name": "@webergency-utils/typechecker",
-  "version": "0.5.3",
+  "version": "1.0.0",
 
   "type": "module",
   "description": "TypeScript compiler plugin for runtime validation",
   "author": "radixxko",
   "license": "MIT",
-  "main": "dist/index.js",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.js",
-      "default": "./dist/index.js"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./runtime": {
-      "types": "./dist/runtime/index.d.ts",
-      "import": "./dist/runtime/index.js",
-      "require": "./dist/runtime/index.js",
-      "default": "./dist/runtime/index.js"
+      "import": {
+        "types": "./dist/runtime/index.d.ts",
+        "default": "./dist/runtime/index.js"
+      },
+      "require": {
+        "types": "./dist/runtime/index.d.cts",
+        "default": "./dist/runtime/index.cjs"
+      }
     },
     "./runtime/validators": {
-      "types": "./dist/runtime/validators.d.ts",
-      "import": "./dist/runtime/validators.js",
-      "require": "./dist/runtime/validators.js",
-      "default": "./dist/runtime/validators.js"
+      "import": {
+        "types": "./dist/runtime/validators.d.ts",
+        "default": "./dist/runtime/validators.js"
+      },
+      "require": {
+        "types": "./dist/runtime/validators.d.cts",
+        "default": "./dist/runtime/validators.cjs"
+      }
     },
     "./runtime/parse": {
-      "types": "./dist/runtime/parse-runtime.d.ts",
-      "import": "./dist/runtime/parse-runtime.js",
-      "require": "./dist/runtime/parse-runtime.js",
-      "default": "./dist/runtime/parse-runtime.js"
+      "import": {
+        "types": "./dist/runtime/parse-runtime.d.ts",
+        "default": "./dist/runtime/parse-runtime.js"
+      },
+      "require": {
+        "types": "./dist/runtime/parse-runtime.d.cts",
+        "default": "./dist/runtime/parse-runtime.cjs"
+      }
     },
     "./runtime/serialize": {
-      "types": "./dist/runtime/serializer-runtime.d.ts",
-      "import": "./dist/runtime/serializer-runtime.js",
-      "require": "./dist/runtime/serializer-runtime.js",
-      "default": "./dist/runtime/serializer-runtime.js"
+      "import": {
+        "types": "./dist/runtime/serializer-runtime.d.ts",
+        "default": "./dist/runtime/serializer-runtime.js"
+      },
+      "require": {
+        "types": "./dist/runtime/serializer-runtime.d.cts",
+        "default": "./dist/runtime/serializer-runtime.cjs"
+      }
     },
     "./runtime/casing": {
-      "types": "./dist/runtime/casing.d.ts",
-      "import": "./dist/runtime/casing.js",
-      "require": "./dist/runtime/casing.js",
-      "default": "./dist/runtime/casing.js"
+      "import": {
+        "types": "./dist/runtime/casing.d.ts",
+        "default": "./dist/runtime/casing.js"
+      },
+      "require": {
+        "types": "./dist/runtime/casing.d.cts",
+        "default": "./dist/runtime/casing.cjs"
+      }
     },
     "./runtime/path": {
-      "types": "./dist/runtime/path.d.ts",
-      "import": "./dist/runtime/path.js",
-      "require": "./dist/runtime/path.js",
-      "default": "./dist/runtime/path.js"
+      "import": {
+        "types": "./dist/runtime/path.d.ts",
+        "default": "./dist/runtime/path.js"
+      },
+      "require": {
+        "types": "./dist/runtime/path.d.cts",
+        "default": "./dist/runtime/path.cjs"
+      }
     },
     "./runtime/regex": {
-      "types": "./dist/runtime/regex.d.ts",
-      "import": "./dist/runtime/regex.js",
-      "require": "./dist/runtime/regex.js",
-      "default": "./dist/runtime/regex.js"
+      "import": {
+        "types": "./dist/runtime/regex.d.ts",
+        "default": "./dist/runtime/regex.js"
+      },
+      "require": {
+        "types": "./dist/runtime/regex.d.cts",
+        "default": "./dist/runtime/regex.cjs"
+      }
     },
     "./transformer": {
-      "types": "./dist/transformer.d.ts",
-      "import": "./dist/transformer.js",
-      "require": "./dist/transformer.js",
-      "default": "./dist/transformer.js"
+      "import": {
+        "types": "./dist/transformer.d.ts",
+        "default": "./dist/transformer.js"
+      },
+      "require": {
+        "types": "./dist/transformer.d.cts",
+        "default": "./dist/transformer.cjs"
+      }
     },
     "./plugin": {
-      "types": "./dist/plugin.d.ts",
-      "import": "./dist/plugin.js",
-      "require": "./dist/plugin.js",
-      "default": "./dist/plugin.js"
+      "import": {
+        "types": "./dist/plugin.d.ts",
+        "default": "./dist/plugin.js"
+      },
+      "require": {
+        "types": "./dist/plugin.d.cts",
+        "default": "./dist/plugin.cjs"
+      }
     }
   },
   "publishConfig": {
@@ -84,7 +125,7 @@
     "coverage": "npm run build && vitest run --coverage",
     "clean": "rm -rf ./dist ./dist-fuzz",
     "reset": "npm run clean && rm -rf node_modules package-lock.json && npm i",
-    "build": "npm run clean && tsc && node update_imports.js",
+    "build": "npm run clean && tsup",
     "build:fuzz": "esbuild src/fuzz-runtime.ts --bundle --platform=node --format=cjs --outfile=dist-fuzz/runtime.cjs",
     "commit": "node -e \"const version = require('./package.json').version.trim(); require('child_process').execSync('git add . && git commit -m \\\"Version ' + version + '\\\"');\"",
     "version": "npm run build && npm publish --access public && npm run commit && git push"
@@ -109,7 +150,8 @@
     "@vitest/coverage-v8": "^4.1.6",
     "esbuild": "^0.28.1",
     "eslint": "^10.4.1",
-    "typescript": "^6.0.3 || ^7.0.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.7.0",
     "typescript-eslint": "^8.60.0",
     "vitest": "^4.1.6"
   }

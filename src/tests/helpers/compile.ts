@@ -2,7 +2,10 @@ import ts from 'typescript';
 import * as fs from 'fs';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
-import transformer from '../../transformer.js';
+import { createRequire } from 'module';
+import transformerSource from '../../transformer.js';
+
+const require = createRequire( import.meta.url );
 
 const COMPILER_OPTIONS: ts.CompilerOptions =
 {
@@ -11,15 +14,48 @@ const COMPILER_OPTIONS: ts.CompilerOptions =
     moduleResolution : ts.ModuleResolutionKind.NodeNext,
     strict           : true,
     skipLibCheck     : true,
-    // ResolveDefaults references `Buffer`; without node types the whole alias collapses to `any`.
     types            : ['node']
 };
 
+const distEsmTransformerPath = path.resolve( './dist/transformer.js' );
+const distCjsTransformerPath = path.resolve( './dist/transformer.cjs' );
+
 /**
- * Transform a snippet and print the result. Each caller needs its own `tempName`, since test files
- * run in parallel and share the package root as their working directory.
+ * Get transformer instance from built ESM artifact (dist/transformer.js) if present.
  */
-export function compileAndTransform( sourceCode: string, tempName: string ): string
+export function getEsmTransformer( program: ts.Program ): ( context: ts.TransformationContext ) => ( sourceFile: ts.SourceFile ) => ts.SourceFile
+{
+    if( fs.existsSync( distEsmTransformerPath ))
+    {
+        const mod = require( distEsmTransformerPath );
+        const fn = mod.default || mod.transformer || mod;
+
+        return fn( program );
+    }
+
+    return transformerSource( program );
+}
+
+/**
+ * Get transformer instance from built CJS artifact (dist/transformer.cjs) if present.
+ */
+export function getCjsTransformer( program: ts.Program ): ( context: ts.TransformationContext ) => ( sourceFile: ts.SourceFile ) => ts.SourceFile
+{
+    if( fs.existsSync( distCjsTransformerPath ))
+    {
+        const mod = require( distCjsTransformerPath );
+        const fn = mod.default || mod.transformer || mod;
+
+        return fn( program );
+    }
+
+    return transformerSource( program );
+}
+
+/**
+ * Transform a snippet and print the result using the built transformer.
+ */
+export function compileAndTransform( sourceCode: string, tempName: string, mode: 'esm' | 'cjs' = 'esm' ): string
 {
     const file = path.resolve( `./${tempName}.ts` );
 
@@ -27,12 +63,24 @@ export function compileAndTransform( sourceCode: string, tempName: string ): str
 
     try
     {
-        const program = ts.createProgram([file], COMPILER_OPTIONS );
+        const opts = mode === 'cjs'
+            ? {
+                target           : ts.ScriptTarget.ES2022,
+                module           : ts.ModuleKind.CommonJS,
+                moduleResolution : ts.ModuleResolutionKind.Node10,
+                strict           : true,
+                skipLibCheck     : true,
+                types            : ['node']
+            }
+            : COMPILER_OPTIONS;
+
+        const program = ts.createProgram([file], opts );
         const sourceFile = program.getSourceFile( file );
 
         if( !sourceFile ){ throw new Error( `Could not load ${file}` ) }
 
-        const result = ts.transform( sourceFile, [transformer( program )]);
+        const tf = mode === 'cjs' ? getCjsTransformer( program ) : getEsmTransformer( program );
+        const result = ts.transform( sourceFile, [tf]);
 
         return ts.createPrinter().printFile( result.transformed[0]);
     }
@@ -43,15 +91,28 @@ export function compileAndTransform( sourceCode: string, tempName: string ): str
 }
 
 /**
- * Run `main.ts` through the real emit pipeline and return the emitted JavaScript. Unlike
- * `compileAndTransform`, this exercises TypeScript's own passes — notably import elision, which runs
- * after ours and is invisible when printing the transformed AST.
+ * Run `main.ts` through the real emit pipeline using built dist transformer artifacts.
  */
-export function emitWithTransformer( files: Record<string, string>, tempName: string ): string
+export function emitWithTransformer(
+    files: Record<string, string>,
+    tempName: string,
+    mode: 'esm' | 'cjs' = 'esm'
+): string
 {
     const dir = path.resolve( `./${tempName}` );
 
     fs.mkdirSync( dir, { recursive : true });
+
+    const opts: ts.CompilerOptions = mode === 'cjs'
+        ? {
+            target           : ts.ScriptTarget.ES2022,
+            module           : ts.ModuleKind.CommonJS,
+            moduleResolution : ts.ModuleResolutionKind.Node10,
+            strict           : true,
+            skipLibCheck     : true,
+            types            : ['node']
+        }
+        : COMPILER_OPTIONS;
 
     try
     {
@@ -61,15 +122,16 @@ export function emitWithTransformer( files: Record<string, string>, tempName: st
         }
 
         const entry = path.join( dir, 'main.ts' );
-        const program = ts.createProgram([entry], COMPILER_OPTIONS );
+        const program = ts.createProgram([entry], opts );
         let output = '';
+        const tf = mode === 'cjs' ? getCjsTransformer( program ) : getEsmTransformer( program );
 
         program.emit(
             program.getSourceFile( entry ),
             ( _fileName, text ) => { output = text },
             undefined,
             false,
-            { before : [transformer( program )]}
+            { before : [tf]}
         );
 
         return output;
@@ -81,10 +143,8 @@ export function emitWithTransformer( files: Record<string, string>, tempName: st
 }
 
 /**
- * Emit `source` (a `main.ts` body) through the transformer, rewrite imports to the built
- * `dist/` tree, and dynamically import the result. Requires a prior `npm run build`
- * (`npm test` / `npm run coverage` already do this).
- * Each caller needs its own `tempName` — tests run in parallel from the package root.
+ * Emit `source` (a `main.ts` body) through the transformer using ESM built artifacts (dist/index.js),
+ * and dynamically import the result.
  */
 export async function emitAndImport<T extends Record<string, unknown> = Record<string, unknown>>(
     source: string,
@@ -97,22 +157,66 @@ export async function emitAndImport<T extends Record<string, unknown> = Record<s
 
     if( !fs.existsSync( runtimeDist ))
     {
-        throw new Error( 'emitAndImport requires dist/ — run `npm run build` first (or use `npm test` / `npm run coverage`).' );
+        throw new Error( 'emitAndImport requires dist/ — run `npm run build` first.' );
     }
 
     fs.mkdirSync( dir, { recursive : true });
 
     try
     {
-        const output = emitWithTransformer({ 'main.ts' : source }, `${tempName}_src` );
+        const output = emitWithTransformer({ 'main.ts' : source }, `${tempName}_src`, 'esm' );
         const patched = output
             .replace( '@webergency-utils/typechecker/runtime', pathToFileURL( runtimeDist ).href )
-            .replace( /from ['"]\.\.\/src\/index\.js['"]/, `from '${pathToFileURL( indexDist ).href}'` );
+            .replace( /from ['"]\.\.\/src\/index(?:\.js)?['"]/g, `from '${pathToFileURL( indexDist ).href}'` )
+            .replace( /from ['"]\.\/src\/index(?:\.js)?['"]/g, `from '${pathToFileURL( indexDist ).href}'` )
+            .replace( /from ['"]@webergency-utils\/typechecker['"]/g, `from '${pathToFileURL( indexDist ).href}'` );
         const file = path.join( dir, 'main.js' );
 
         fs.writeFileSync( file, patched );
 
         return await import( pathToFileURL( file ).href + '?t=' + Date.now()) as T;
+    }
+    finally
+    {
+        fs.rmSync( dir, { recursive : true, force : true });
+    }
+}
+
+/**
+ * Emit `source` (a `main.ts` body) through the transformer using CommonJS built artifacts (dist/index.cjs),
+ * and require the result.
+ */
+export function emitAndRequire<T extends Record<string, unknown> = Record<string, unknown>>(
+    source: string,
+    tempName: string
+): T
+{
+    const dir = path.resolve( `./${tempName}_cjs_pkg` );
+    const runtimeDistCjs = path.resolve( './dist/runtime/index.cjs' );
+    const indexDistCjs = path.resolve( './dist/index.cjs' );
+
+    if( !fs.existsSync( runtimeDistCjs ))
+    {
+        throw new Error( 'emitAndRequire requires dist/ — run `npm run build` first.' );
+    }
+
+    fs.mkdirSync( dir, { recursive : true });
+
+    try
+    {
+        const output = emitWithTransformer({ 'main.ts' : source }, `${tempName}_cjs_src`, 'cjs' );
+        const patched = output
+            .replace( /require\(['"]@webergency-utils\/typechecker\/runtime['"]\)/g, `require('${runtimeDistCjs}')` )
+            .replace( /require\(['"]\.\.\/src\/index(?:\.js)?['"]\)/g, `require('${indexDistCjs}')` )
+            .replace( /require\(['"]\.\/src\/index(?:\.js)?['"]\)/g, `require('${indexDistCjs}')` )
+            .replace( /require\(['"]@webergency-utils\/typechecker['"]\)/g, `require('${indexDistCjs}')` );
+        const file = path.join( dir, 'main.cjs' );
+
+        fs.writeFileSync( file, patched );
+
+        delete require.cache[require.resolve( file )];
+
+        return require( file ) as T;
     }
     finally
     {

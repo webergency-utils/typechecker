@@ -149,7 +149,7 @@ describe( 'validators uniqueItems / commit / regex coverage', () =>
 
     describe( 'uniqueItems scalar and container duplicates', () =>
     {
-        const duplicateCases: { name: string, values: any[] }[] =
+        const duplicateCases: { name : string, values : any[] }[] =
         [
             { name : 'null', values : [null, null] },
             { name : 'undefined', values : [undefined, undefined] },

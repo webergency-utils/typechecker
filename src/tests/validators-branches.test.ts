@@ -197,7 +197,7 @@ describe( 'validators uncovered branches', () =>
             ctx = { success : true, errors : [], mode : 'strict' };
 
             // Act
-            validators.instanceOf( {}, 'x', ctx, 'NotAGlobalCtor' );
+            validators.instanceOf({}, 'x', ctx, 'NotAGlobalCtor' );
 
             // Assert
             expect( ctx.success ).toBe( false );

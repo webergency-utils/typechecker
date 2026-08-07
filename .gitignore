@@ -131,3 +131,6 @@ dist-fuzz
 .pnp.*
 .DS_Store
 .npmrc
+temp_*
+ast_*
+parity_*

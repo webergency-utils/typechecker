@@ -2,24 +2,24 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { emitAndImport } from './helpers/compile.js';
 
 type ValidateResult =
-{
-    success : boolean
-    errors  : { path: string, error: string, value?: unknown }[]
-    data?   : unknown
-};
+    {
+        success : boolean
+        errors  : { path : string, error : string, value? : unknown }[]
+        data?   : unknown
+    };
 
 type ParityFns =
-{
-    assert   : ( value: unknown ) => unknown
-    parse    : ( value: unknown ) => unknown
-    validate : ( value: unknown ) => ValidateResult
-};
+    {
+        assert   : ( value: unknown ) => unknown
+        parse    : ( value: unknown ) => unknown
+        validate : ( value: unknown ) => ValidateResult
+    };
 
 type CanonicalFailure =
-{
-    path : string
-    code : string
-};
+    {
+        path : string
+        code : string
+    };
 
 /**
  * Map assert / parse wording onto one canonical failure so the suite can assert shared semantics
@@ -66,14 +66,14 @@ function canonicalizeFailure( path: string, code: string ): CanonicalFailure
     return { path : p, code : c };
 }
 
-function isParseError( err: unknown ): err is { name: string, path: string, message: string }
+function isParseError( err: unknown ): err is { name : string, path : string, message : string }
 {
     return Boolean(
         err &&
         typeof err === 'object' &&
-        ( err as { name?: string }).name === 'ParseError' &&
-        typeof ( err as { path?: unknown }).path === 'string' &&
-        typeof ( err as { message?: unknown }).message === 'string'
+        ( err as { name? : string }).name === 'ParseError' &&
+        typeof ( err as { path? : unknown }).path === 'string' &&
+        typeof ( err as { message? : unknown }).message === 'string'
     );
 }
 
@@ -91,7 +91,7 @@ function failureFromParse( err: unknown ): CanonicalFailure
 {
     expect( isParseError( err )).toBe( true );
 
-    const pe = err as { path: string, message: string };
+    const pe = err as { path : string, message : string };
     const body = pe.message
         .replace( /^Parse error at "[^"]*":\s*/, '' )
         .replace( /^Parse error:\s*/, '' );
@@ -113,7 +113,7 @@ function expectParityThrow( fns: ParityFns, input: unknown, expected?: Partial<C
     const validated = fns.validate( input );
     const assertFailure = failureFromValidate( validated );
 
-    expect( () => fns.assert( input )).toThrow( /Validation Error/ );
+    expect(() => fns.assert( input )).toThrow( /Validation Error/ );
 
     let thrown: unknown;
 
@@ -859,8 +859,8 @@ describe( 'assert ↔ parse parity', () =>
 
         it( 'intersection missing prop', () =>
         {
-            expect( () => mod.intersectionObjs.assert({ a : 'x' })).toThrow( /Validation Error/ );
-            expect( () => mod.intersectionObjs.parse({ a : 'x' })).toThrow( /Parse error/ );
+            expect(() => mod.intersectionObjs.assert({ a : 'x' })).toThrow( /Validation Error/ );
+            expect(() => mod.intersectionObjs.parse({ a : 'x' })).toThrow( /Parse error/ );
         });
     });
 });

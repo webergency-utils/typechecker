@@ -398,7 +398,7 @@ describe( 'Validators', () =>
 
         it( 'should accept class instances as record-like object inputs', () =>
         {
-            class Foo { x = 1 }
+            class Foo { x = 1; }
 
             const input = new Foo();
             const result = validators.object( input, 'obj', ctx );
@@ -1044,7 +1044,7 @@ describe( 'Validators', () =>
         {
             const schema = 
             {
-                type       : 'object',
+                type : 'object',
                 properties : 
                 {
                     name : { type : 'string' }
@@ -1072,7 +1072,7 @@ describe( 'Validators', () =>
         {
             const schema = 
             {
-                type       : 'object',
+                type : 'object',
                 properties : 
                 {
                     name : { type : 'string' }
@@ -1099,7 +1099,7 @@ describe( 'Validators', () =>
         {
             const schema = 
             {
-                type       : 'object',
+                type : 'object',
                 properties : 
                 {
                     name : { type : 'string' }
@@ -1129,7 +1129,7 @@ describe( 'Validators', () =>
         {
             const schema = 
             {
-                type  : 'array',
+                type : 'array',
                 items : 
                 [
                     { type : 'string' },
@@ -1159,7 +1159,7 @@ describe( 'Validators', () =>
         {
             const schema = 
             {
-                type       : 'object',
+                type : 'object',
                 properties : 
                 {
                     name : { type : 'string' }
@@ -1200,7 +1200,7 @@ describe( 'Validators', () =>
         {
             const schema = 
             {
-                type       : 'object',
+                type : 'object',
                 properties : 
                 {
                     name : 'not-an-object' as any
@@ -1386,7 +1386,7 @@ describe( 'Validators', () =>
             expect( resSuccess.errors ).toEqual([]);
 
             // Failure case with options object
-            const resFail = validate( dummyVal, 'world', { mode : 'strict', from : 'query' } );
+            const resFail = validate( dummyVal, 'world', { mode : 'strict', from : 'query' });
 
             expect( resFail.success ).toBe( false );
             expect( resFail.data ).toBeUndefined();

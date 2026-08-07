@@ -9,11 +9,11 @@ export const BUFFER_LIKE: ReadonlySet<string> = new Set([
 ]);
 
 export type ParsedConstraint =
-{
-    type     : string
-    value?   : any
-    message? : string
-};
+    {
+        type     : string
+        value?   : any
+        message? : string
+    };
 
 /** No-op scope for codegen unit tests that never hit Custom tags. */
 export const VERBATIM_CUSTOM_SCOPE: ICustomFunctionScope =
@@ -23,36 +23,36 @@ export const VERBATIM_CUSTOM_SCOPE: ICustomFunctionScope =
 };
 
 export type TaggedUnionInfo =
-{
-    key  : string
-    arms : { tag: string | number, type: ts.Type }[]
-};
+    {
+        key  : string
+        arms : { tag : string | number, type : ts.Type }[]
+    };
 
 export type MergedPropInfo =
-{
-    name       : string
-    symbol     : ts.Symbol
-    type       : ts.Type
-    isOptional : boolean
-    hasDefault : boolean
-};
+    {
+        name       : string
+        symbol     : ts.Symbol
+        type       : ts.Type
+        isOptional : boolean
+        hasDefault : boolean
+    };
 
 export type MergedObjectInfo =
-{
-    props      : MergedPropInfo[]
-    indexType? : ts.Type
-};
+    {
+        props      : MergedPropInfo[]
+        indexType? : ts.Type
+    };
 
 export type PeelResult =
-{
-    base        : ts.Type
-    constraints : ParsedConstraint[]
-    hasTags     : boolean
-};
+    {
+        base        : ts.Type
+        constraints : ParsedConstraint[]
+        hasTags     : boolean
+    };
 
 export function getPropertyType( parentType: ts.Type, prop: ts.Symbol, checker: ts.TypeChecker ): ts.Type
 {
-    const fromSymbol = ( checker as ts.TypeChecker & { getTypeOfSymbol?: ( s: ts.Symbol ) => ts.Type }).getTypeOfSymbol?.( prop );
+    const fromSymbol = ( checker as ts.TypeChecker & { getTypeOfSymbol? : ( s: ts.Symbol ) => ts.Type }).getTypeOfSymbol?.( prop );
 
     if( fromSymbol && typeof fromSymbol.getFlags === 'function' && !( fromSymbol.flags & ts.TypeFlags.Any )){ return fromSymbol }
 
@@ -72,7 +72,7 @@ export function getPropertyType( parentType: ts.Type, prop: ts.Symbol, checker: 
 
         if( parentProp && parentProp !== prop )
         {
-            const fromParent = ( checker as ts.TypeChecker & { getTypeOfSymbol?: ( s: ts.Symbol ) => ts.Type }).getTypeOfSymbol?.( parentProp );
+            const fromParent = ( checker as ts.TypeChecker & { getTypeOfSymbol? : ( s: ts.Symbol ) => ts.Type }).getTypeOfSymbol?.( parentProp );
 
             if( fromParent && typeof fromParent.getFlags === 'function' && !( fromParent.flags & ts.TypeFlags.Any ))
             {
@@ -81,7 +81,7 @@ export function getPropertyType( parentType: ts.Type, prop: ts.Symbol, checker: 
         }
     }
 
-    if( ( prop as any ).type && typeof ( prop as any ).type.getFlags === 'function' )
+    if(( prop as any ).type && typeof ( prop as any ).type.getFlags === 'function' )
     {
         return ( prop as any ).type;
     }
@@ -266,7 +266,7 @@ export function tryTaggedUnionTypes( members: readonly ts.Type[], checker: ts.Ty
 
     for( const key of literalsByMember[0].keys())
     {
-        const arms: { tag: string | number, type: ts.Type }[] = [];
+        const arms: { tag : string | number, type : ts.Type }[] = [];
         const seen = new Set<string | number>();
 
         for( let i = 0; i < literalsByMember.length; i++ )
@@ -490,17 +490,17 @@ export function collectConstraintsFromProps(
 
         const map: Record<string, string> =
         {
-            __minLength         : 'minLength',
-            __maxLength         : 'maxLength',
-            __minimum           : 'minimum',
-            __maximum           : 'maximum',
-            __exclusiveMinimum  : 'exclusiveMinimum',
-            __exclusiveMaximum  : 'exclusiveMaximum',
-            __multipleOf        : 'multipleOf',
-            __pattern           : 'pattern',
-            __format            : 'format',
-            __minItems          : 'minItems',
-            __maxItems          : 'maxItems'
+            __minLength        : 'minLength',
+            __maxLength        : 'maxLength',
+            __minimum          : 'minimum',
+            __maximum          : 'maximum',
+            __exclusiveMinimum : 'exclusiveMinimum',
+            __exclusiveMaximum : 'exclusiveMaximum',
+            __multipleOf       : 'multipleOf',
+            __pattern          : 'pattern',
+            __format           : 'format',
+            __minItems         : 'minItems',
+            __maxItems         : 'maxItems'
         };
 
         const mapped = map[pName];
@@ -588,7 +588,7 @@ export function peelTaggedIntersection(
 }
 
 /** Resolve the effective type for walking: peel brands/tags to base when present. */
-export function resolveWalkType( type: ts.Type, checker: ts.TypeChecker ): { type: ts.Type, constraints: ParsedConstraint[] }
+export function resolveWalkType( type: ts.Type, checker: ts.TypeChecker ): { type : ts.Type, constraints : ParsedConstraint[] }
 {
     if( typeof type.isIntersection === 'function' && type.isIntersection())
     {

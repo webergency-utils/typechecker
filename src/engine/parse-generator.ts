@@ -19,14 +19,14 @@ import
     typeSymbolName,
     VERBATIM_CUSTOM_SCOPE
 }
-from './type-helpers.js';
+    from './type-helpers.js';
 
 export type ParseSource = 'json' | 'query' | 'string';
 
 export interface ParseGeneratorOptions
 {
-    mode? : ValidationMode;
-    from? : ParseSource;
+    mode? : ValidationMode
+    from? : ParseSource
 }
 
 /** Query-style coercions shared by `from: 'query'` and `from: 'string'`. */
@@ -68,13 +68,21 @@ function isStringSourceCompatible( type: ts.Type, checker: ts.TypeChecker, scope
     }
 
     if( typeof walk.isStringLiteral === 'function' && walk.isStringLiteral()){ return true }
+
     if( typeof walk.isNumberLiteral === 'function' && walk.isNumberLiteral()){ return true }
+
     if( flags & ts.TypeFlags.BooleanLiteral ){ return true }
+
     if( flags & ts.TypeFlags.BigIntLiteral ){ return true }
+
     if( flags & ts.TypeFlags.String ){ return true }
+
     if( flags & ts.TypeFlags.Number ){ return true }
+
     if( flags & ts.TypeFlags.Boolean ){ return true }
+
     if( flags & ts.TypeFlags.BigInt ){ return true }
+
     if( flags & ts.TypeFlags.TemplateLiteral ){ return true }
 
     if( isNativeEnumType( walk ))
@@ -89,8 +97,11 @@ function isStringSourceCompatible( type: ts.Type, checker: ts.TypeChecker, scope
     if( symbolName === 'Date' || symbolName === 'RegExp' ){ return true }
 
     if( typeof checker.isArrayType === 'function' && checker.isArrayType( walk )){ return false }
+
     if( typeof checker.isTupleType === 'function' && checker.isTupleType( walk )){ return false }
+
     if( symbolName === 'Set' || symbolName === 'Map' ){ return false }
+
     if( symbolName && BUFFER_LIKE.has( symbolName )){ return false }
 
     // Object / class / index-signature shapes are not single-wire scalars.
@@ -111,7 +122,7 @@ function assertStringSourceCompatible( type: ts.Type, checker: ts.TypeChecker, s
     { /* ignore */ }
 
     throw new Error(
-        `[Webergency] from: 'string' only supports basic scalar types ` +
+        '[Webergency] from: \'string\' only supports basic scalar types ' +
         `(string, number, boolean, bigint, Date, RegExp, literals, enums, and unions of these); got ${label}`
     );
 }
@@ -538,7 +549,7 @@ function buildValidationCore(
 }
 
 function buildObjectValidation(
-    props     : { name: string, type: ts.Type, isOptional: boolean, hasDefault: boolean }[],
+    props     : { name : string, type : ts.Type, isOptional : boolean, hasDefault : boolean }[],
     indexType : ts.Type | undefined,
     checker   : ts.TypeChecker,
     mode      : ValidationMode,
@@ -588,11 +599,11 @@ function buildObjectValidation(
         }
         else if( mode === 'strict' )
         {
-            extraHandling = `for( const k in o ){ if( !__keys.has( k ) ){ throw new __tcRuntime.ParseError( p, "PropertyNotAllowed<" + k + ">" ); } }`;
+            extraHandling = 'for( const k in o ){ if( !__keys.has( k ) ){ throw new __tcRuntime.ParseError( p, "PropertyNotAllowed<" + k + ">" ); } }';
         }
         else
         {
-            extraHandling = `for( const k in o ){ if( !__keys.has( k ) ){ res[k] = o[k]; } }`;
+            extraHandling = 'for( const k in o ){ if( !__keys.has( k ) ){ res[k] = o[k]; } }';
         }
     }
 

@@ -58,8 +58,8 @@ describe( 'hoister', () =>
         const printed = printSource( hoistEmitLocals( source, cache ));
 
         // Assert
-        expect( printed.indexOf( 'import * as __tcRuntime' )).toBeLessThan( printed.indexOf( "import { value }" ));
-        expect( printed.indexOf( "import { value }" )).toBeLessThan( printed.indexOf( 'const validators =' ));
+        expect( printed.indexOf( 'import * as __tcRuntime' )).toBeLessThan( printed.indexOf( 'import { value }' ));
+        expect( printed.indexOf( 'import { value }' )).toBeLessThan( printed.indexOf( 'const validators =' ));
         expect( printed.indexOf( 'const validators =' )).toBeLessThan( printed.indexOf( 'export const ready' ));
         expect( printed ).toContain( 'const __val_abc123 =' );
         expect( printed ).not.toContain( 'registerValidator' );
@@ -190,7 +190,7 @@ describe( 'hoister', () =>
         expect( printed ).not.toContain( 'const validators' );
         expect( printed ).toContain( 'const __ser_s1 =' );
         expect( printed ).toContain( 'const __parse_p1 =' );
-        expect( printed.indexOf( 'import * as __tcRuntime' )).toBeLessThan( printed.indexOf( "import { value }" ));
+        expect( printed.indexOf( 'import * as __tcRuntime' )).toBeLessThan( printed.indexOf( 'import { value }' ));
     });
 
     it( 'should rename nested __tcRuntime references when the namespace is taken', () =>

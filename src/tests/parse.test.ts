@@ -17,7 +17,7 @@ import
     parseUnion,
     ParseError
 }
-from '../runtime/parse-runtime.js';
+    from '../runtime/parse-runtime.js';
 import { getCachedPattern, createSafeRegex, testRegex, isRegexSafe } from '../runtime/regex.js';
 import { childPath, indexPath } from '../runtime/path.js';
 import { generateParseCode } from '../engine/parse-generator.js';
@@ -35,17 +35,17 @@ describe( 'Parse', () =>
         it( 'accepts matching primitives and rejects mismatches', () =>
         {
             expect( expectString( 'x', 'n' )).toBe( 'x' );
-            expect( () => expectString( 1, 'n' )).toThrow( /Type<string>/ );
+            expect(() => expectString( 1, 'n' )).toThrow( /Type<string>/ );
             expect( expectNumber( 3, 'n' )).toBe( 3 );
-            expect( () => expectNumber( NaN, 'n' )).toThrow( /Type<number>/ );
-            expect( () => expectNumber( '1', 'n' )).toThrow( /Type<number>/ );
+            expect(() => expectNumber( NaN, 'n' )).toThrow( /Type<number>/ );
+            expect(() => expectNumber( '1', 'n' )).toThrow( /Type<number>/ );
             expect( expectBoolean( false, 'n' )).toBe( false );
-            expect( () => expectBoolean( 'false', 'n' )).toThrow( /Type<boolean>/ );
+            expect(() => expectBoolean( 'false', 'n' )).toThrow( /Type<boolean>/ );
             expect( expectObject({ a : 1 }, 'n' )).toEqual({ a : 1 });
-            expect( () => expectObject( null, 'n' )).toThrow( /Type<Object>/ );
-            expect( () => expectObject([], 'n' )).toThrow( /Type<Object>/ );
+            expect(() => expectObject( null, 'n' )).toThrow( /Type<Object>/ );
+            expect(() => expectObject([], 'n' )).toThrow( /Type<Object>/ );
             expect( expectArray([ 1 ], 'n' )).toEqual([ 1 ]);
-            expect( () => expectArray( {}, 'n' )).toThrow( /Type<Array>/ );
+            expect(() => expectArray({}, 'n' )).toThrow( /Type<Array>/ );
         });
 
         it( 'parseUnion returns the first matching arm', () =>
@@ -58,14 +58,14 @@ describe( 'Parse', () =>
 
         it( 'parseUnion rethrows the last ParseError when its code matches expected', () =>
         {
-            expect( () => parseUnion( true, 'u', 'Type<string>', [
+            expect(() => parseUnion( true, 'u', 'Type<string>', [
                 () => { throw new ParseError( 'u', 'Type<string>' ) }
             ])).toThrow( 'Parse error at "u": Type<string>' );
         });
 
         it( 'parseUnion throws expected when no arm matches with that code', () =>
         {
-            expect( () => parseUnion( true, 'u', 'Type<Union>', [
+            expect(() => parseUnion( true, 'u', 'Type<Union>', [
                 () => { throw new ParseError( 'u', 'Type<string>' ) },
                 () => { throw new ParseError( 'u', 'Type<number>' ) }
             ])).toThrow( 'Parse error at "u": Type<Union>' );
@@ -73,14 +73,14 @@ describe( 'Parse', () =>
 
         it( 'parseUnion rethrows non-ParseError failures', () =>
         {
-            expect( () => parseUnion( 1, 'u', 'Type<Union>', [
+            expect(() => parseUnion( 1, 'u', 'Type<Union>', [
                 () => { throw new TypeError( 'boom' ) }
             ])).toThrow( TypeError );
         });
 
         it( 'parseUnion falls through when ParseError message is rewritten', () =>
         {
-            expect( () => parseUnion( 1, 'u', 'Type<Union>', [
+            expect(() => parseUnion( 1, 'u', 'Type<Union>', [
                 () =>
                 {
                     const err = new ParseError( 'u', 'Type<string>' );
@@ -109,7 +109,7 @@ describe( 'Parse', () =>
             expect( b ).toBe( a );
             expect( getCachedPattern( 'a'.repeat( 1025 ))).toBeUndefined();
             expect( createSafeRegex( 'ok', 'i' ).flags ).toContain( 'i' );
-            expect( () => createSafeRegex( 'a'.repeat( 1025 ))).toThrow( /Unsafe regular expression/ );
+            expect(() => createSafeRegex( 'a'.repeat( 1025 ))).toThrow( /Unsafe regular expression/ );
             expect( testRegex( /x/g, 'x' )).toBe( true );
             expect( isRegexSafe( /ok/ )).toBe( true );
         });
@@ -119,7 +119,7 @@ describe( 'Parse', () =>
     {
         it( 'throws when transformer was not applied', () =>
         {
-            expect( () => parse( '{}' )).toThrow( 'Typechecker transformer was not applied' );
+            expect(() => parse( '{}' )).toThrow( 'Typechecker transformer was not applied' );
         });
     });
 
@@ -222,10 +222,10 @@ describe( 'Parse', () =>
         it( 'blocks prototype pollution patterns', () =>
         {
             const polluted = parseQueryString( '__proto__[polluted]=true&constructor[prototype][bad]=true&prototype[danger]=true&safe=ok' );
-            expect( ( polluted as any ).polluted ).toBeUndefined();
-            expect( ( Object.prototype as any ).polluted ).toBeUndefined();
-            expect( ( Object.prototype as any ).bad ).toBeUndefined();
-            expect( ( Object.prototype as any ).danger ).toBeUndefined();
+            expect(( polluted as any ).polluted ).toBeUndefined();
+            expect(( Object.prototype as any ).polluted ).toBeUndefined();
+            expect(( Object.prototype as any ).bad ).toBeUndefined();
+            expect(( Object.prototype as any ).danger ).toBeUndefined();
             expect( polluted ).toEqual({ safe : 'ok' });
 
             expect( parseQueryString( 'constructor=bad&prototype=bad' )).toEqual({});
@@ -245,11 +245,11 @@ describe( 'Parse', () =>
 
         it( 'coerceNumber throws with path for invalid input', () =>
         {
-            expect( () => coerceNumber( 'not-a-number', 'user.age' ))
+            expect(() => coerceNumber( 'not-a-number', 'user.age' ))
                 .toThrow( 'Parse error at "user.age": Type<number>' );
-            expect( () => coerceNumber( NaN, 'user.age' )).toThrow( ParseError );
-            expect( () => coerceNumber( {}, 'user.age' )).toThrow( /Type<number>/ );
-            expect( () => coerceNumber( '', 'user.age' )).toThrow( ParseError );
+            expect(() => coerceNumber( NaN, 'user.age' )).toThrow( ParseError );
+            expect(() => coerceNumber({}, 'user.age' )).toThrow( /Type<number>/ );
+            expect(() => coerceNumber( '', 'user.age' )).toThrow( ParseError );
         });
 
         it( 'coerceBoolean accepts query-style truthy/falsy forms', () =>
@@ -268,9 +268,9 @@ describe( 'Parse', () =>
             expect( coerceBoolean( 'no', 'flag' )).toBe( false );
             expect( coerceBoolean( 'off', 'flag' )).toBe( false );
 
-            expect( () => coerceBoolean( 2, 'user.active' )).toThrow( ParseError );
-            expect( () => coerceBoolean( {}, 'active' )).toThrow( ParseError );
-            expect( () => coerceBoolean( 'maybe', 'active' )).toThrow( ParseError );
+            expect(() => coerceBoolean( 2, 'user.active' )).toThrow( ParseError );
+            expect(() => coerceBoolean({}, 'active' )).toThrow( ParseError );
+            expect(() => coerceBoolean( 'maybe', 'active' )).toThrow( ParseError );
         });
 
         it( 'coerceDate accepts Date, ISO, and epoch', () =>
@@ -280,9 +280,9 @@ describe( 'Parse', () =>
             expect( coerceDate( d, 'createdAt' )).toEqual( d );
             expect( coerceDate( '2026-06-15T12:34:56.789Z', 'createdAt' )).toEqual( d );
             expect( coerceDate( d.getTime(), 'createdAt' )).toEqual( d );
-            expect( () => coerceDate( 'invalid-date-string', 'event.date' )).toThrow( /Type<Date>/ );
-            expect( () => coerceDate( new Date( NaN ), 'event.date' )).toThrow( ParseError );
-            expect( () => coerceDate( {}, 'date' )).toThrow( ParseError );
+            expect(() => coerceDate( 'invalid-date-string', 'event.date' )).toThrow( /Type<Date>/ );
+            expect(() => coerceDate( new Date( NaN ), 'event.date' )).toThrow( ParseError );
+            expect(() => coerceDate({}, 'date' )).toThrow( ParseError );
         });
 
         it( 'coerceArray wraps scalars and maps arrays', () =>
@@ -299,7 +299,7 @@ describe( 'Parse', () =>
             expect( coerceBuffer( Uint8Array.from([ 104, 101, 108, 108, 111 ]), 'blob' ).toString()).toBe( 'hello' );
             expect( coerceBuffer( Uint8Array.from([ 104, 101, 108, 108, 111 ]).buffer, 'blob' ).toString()).toBe( 'hello' );
             expect( coerceBuffer( 'aGVsbG8=', 'blob' ).toString()).toBe( 'hello' );
-            expect( () => coerceBuffer( 123 as any, 'blob' )).toThrow( ParseError );
+            expect(() => coerceBuffer( 123 as any, 'blob' )).toThrow( ParseError );
         });
 
         it( 'coerceBigInt accepts bigint, numeric strings, and integers', () =>
@@ -307,9 +307,9 @@ describe( 'Parse', () =>
             expect( coerceBigInt( 10n, 'v' )).toBe( 10n );
             expect( coerceBigInt( '99', 'v' )).toBe( 99n );
             expect( coerceBigInt( 7, 'v' )).toBe( 7n );
-            expect( () => coerceBigInt( 'nope', 'v' )).toThrow( ParseError );
-            expect( () => coerceBigInt( 1.5, 'v' )).toThrow( ParseError );
-            expect( () => coerceBigInt( '', 'v' )).toThrow( ParseError );
+            expect(() => coerceBigInt( 'nope', 'v' )).toThrow( ParseError );
+            expect(() => coerceBigInt( 1.5, 'v' )).toThrow( ParseError );
+            expect(() => coerceBigInt( '', 'v' )).toThrow( ParseError );
         });
 
         it( 'applyParseConstraints fills defaults, transforms, and checks', () =>
@@ -322,29 +322,29 @@ describe( 'Parse', () =>
             ])).toBe( 'hi' );
             expect( applyParseConstraints( 'HI', 'n', [{ type : 'transform', value : 'uppercase' }])).toBe( 'HI' );
             expect( applyParseConstraints( 'hello', 'n', [{ type : 'transform', value : 'capitalize' }])).toBe( 'Hello' );
-            expect( () => applyParseConstraints( 'x', 'n', [{ type : 'minLength', value : 2 }])).toThrow( /MinLength/ );
-            expect( () => applyParseConstraints( 'abcdef', 'n', [{ type : 'maxLength', value : 3 }])).toThrow( /MaxLength/ );
-            expect( () => applyParseConstraints( 5, 'n', [{ type : 'minimum', value : 10 }])).toThrow( /Minimum/ );
-            expect( () => applyParseConstraints( 50, 'n', [{ type : 'maximum', value : 10 }])).toThrow( /Maximum/ );
-            expect( () => applyParseConstraints( 10, 'n', [{ type : 'exclusiveMinimum', value : 10 }])).toThrow( /ExclusiveMinimum/ );
-            expect( () => applyParseConstraints( 10, 'n', [{ type : 'exclusiveMaximum', value : 10 }])).toThrow( /ExclusiveMaximum/ );
-            expect( () => applyParseConstraints( 7, 'n', [{ type : 'multipleOf', value : 3 }])).toThrow( /MultipleOf/ );
-            expect( () => applyParseConstraints( 'abc', 'n', [{ type : 'pattern', value : '^[0-9]+$' }])).toThrow( /Pattern/ );
-            expect( () => applyParseConstraints( 'abc', 'n', [{ type : 'pattern', value : 'a'.repeat( 1025 ) }])).toThrow( /UnsafePattern/ );
-            expect( () => applyParseConstraints([ 1 ], 'n', [{ type : 'minItems', value : 2 }])).toThrow( /MinItems/ );
-            expect( () => applyParseConstraints([ 1, 2, 3 ], 'n', [{ type : 'maxItems', value : 2 }])).toThrow( /MaxItems/ );
-            expect( () => applyParseConstraints([ 1, 1 ], 'n', [{ type : 'uniqueItems', value : true }])).toThrow( /UniqueItems/ );
+            expect(() => applyParseConstraints( 'x', 'n', [{ type : 'minLength', value : 2 }])).toThrow( /MinLength/ );
+            expect(() => applyParseConstraints( 'abcdef', 'n', [{ type : 'maxLength', value : 3 }])).toThrow( /MaxLength/ );
+            expect(() => applyParseConstraints( 5, 'n', [{ type : 'minimum', value : 10 }])).toThrow( /Minimum/ );
+            expect(() => applyParseConstraints( 50, 'n', [{ type : 'maximum', value : 10 }])).toThrow( /Maximum/ );
+            expect(() => applyParseConstraints( 10, 'n', [{ type : 'exclusiveMinimum', value : 10 }])).toThrow( /ExclusiveMinimum/ );
+            expect(() => applyParseConstraints( 10, 'n', [{ type : 'exclusiveMaximum', value : 10 }])).toThrow( /ExclusiveMaximum/ );
+            expect(() => applyParseConstraints( 7, 'n', [{ type : 'multipleOf', value : 3 }])).toThrow( /MultipleOf/ );
+            expect(() => applyParseConstraints( 'abc', 'n', [{ type : 'pattern', value : '^[0-9]+$' }])).toThrow( /Pattern/ );
+            expect(() => applyParseConstraints( 'abc', 'n', [{ type : 'pattern', value : 'a'.repeat( 1025 ) }])).toThrow( /UnsafePattern/ );
+            expect(() => applyParseConstraints([ 1 ], 'n', [{ type : 'minItems', value : 2 }])).toThrow( /MinItems/ );
+            expect(() => applyParseConstraints([ 1, 2, 3 ], 'n', [{ type : 'maxItems', value : 2 }])).toThrow( /MaxItems/ );
+            expect(() => applyParseConstraints([ 1, 1 ], 'n', [{ type : 'uniqueItems', value : true }])).toThrow( /UniqueItems/ );
             expect( applyParseConstraints([ 1, 2 ], 'n', [{ type : 'uniqueItems', value : true }])).toEqual([ 1, 2 ]);
-            expect( () => applyParseConstraints({ a : 1 }, 'n', [{ type : 'requires', value : 'b' }])).toThrow( /Requires/ );
+            expect(() => applyParseConstraints({ a : 1 }, 'n', [{ type : 'requires', value : 'b' }])).toThrow( /Requires/ );
             expect( applyParseConstraints({ a : 1, b : 2 }, 'n', [{ type : 'requires', value : [ 'a', 'b' ] }])).toEqual({ a : 1, b : 2 });
-            expect( () => applyParseConstraints( 'not-an-email', 'n', [{ type : 'format', value : 'email' }])).toThrow();
+            expect(() => applyParseConstraints( 'not-an-email', 'n', [{ type : 'format', value : 'email' }])).toThrow();
             expect( applyParseConstraints( 'a@b.co', 'n', [{ type : 'format', value : 'email' }])).toBe( 'a@b.co' );
             expect( applyParseConstraints( '1', 'n', [{ type : 'transform', value : 'tonumber' }])).toBe( 1 );
             expect( applyParseConstraints( 'true', 'n', [{ type : 'transform', value : 'toboolean' }])).toBe( true );
             expect( applyParseConstraints( '2026-01-01T00:00:00.000Z', 'n', [{ type : 'transform', value : 'todate' }])).toBeInstanceOf( Date );
             expect( applyParseConstraints( 'x', 'n', [{ type : 'minLength', value : 1, message : 'too short' }], 'json' )).toBe( 'x' );
-            expect( () => applyParseConstraints( '', 'n', [{ type : 'minLength', value : 1, message : 'too short' }])).toThrow( /too short/ );
-            expect( () => applyParseConstraints( 'z', 'n', [
+            expect(() => applyParseConstraints( '', 'n', [{ type : 'minLength', value : 1, message : 'too short' }])).toThrow( /too short/ );
+            expect(() => applyParseConstraints( 'z', 'n', [
                 { type : 'message', value : 'custom-msg' },
                 { type : 'minLength', value : 2 }
             ])).toThrow( /custom-msg/ );
@@ -403,14 +403,14 @@ describe( 'Parse', () =>
         it( 'rejects non-scalar roots for from:string at codegen', () =>
         {
             const objectLike: any = {
-                getFlags             : () => ts.TypeFlags.Object,
-                getProperties        : () => [],
-                getStringIndexType   : () => undefined,
-                getNumberIndexType   : () => undefined,
-                getSymbol            : () => ({ getName : () => '__object' })
+                getFlags           : () => ts.TypeFlags.Object,
+                getProperties      : () => [],
+                getStringIndexType : () => undefined,
+                getNumberIndexType : () => undefined,
+                getSymbol          : () => ({ getName : () => '__object' })
             };
 
-            expect( () => generateParseCode( objectLike, {
+            expect(() => generateParseCode( objectLike, {
                 typeToString : () => '{ a: string }',
                 isArrayType  : () => false,
                 isTupleType  : () => false
@@ -519,7 +519,7 @@ describe( 'Parse', () =>
             expect( code ).toContain( '__tcRuntime.coerceBoolean' );
             expect( code ).not.toContain( 'parseQueryString' );
 
-            expect( () => compile( `
+            expect(() => compile( `
                 import { parse } from './src/index.js';
                 interface Bag { a: string }
                 export function run( v: unknown ) { return parse<Bag>( v, { from: 'string' } ); }
@@ -543,10 +543,10 @@ describe( 'Parse', () =>
         it( 'parses JSON with modes, optionals, nested arrays, and invalid JSON', async() =>
         {
             const mod = await emitAndImport<{
-                parseUser   : ( input: unknown ) => any
-                parseStrict : ( input: unknown ) => any
+                parseUser    : ( input: unknown ) => any
+                parseStrict  : ( input: unknown ) => any
                 parseRelaxed : ( input: unknown ) => any
-                parseOrder  : ( input: unknown ) => any
+                parseOrder   : ( input: unknown ) => any
             }>( `
                 import { parse } from '../src/index.js';
                 interface User { id: string; age: number; email?: string }
@@ -561,19 +561,19 @@ describe( 'Parse', () =>
             expect( mod.parseUser({ id : '1', age : 30, email : 'a@b.c', drop : true })).toEqual({
                 id : '1', age : 30, email : 'a@b.c'
             });
-            expect( () => mod.parseStrict({ id : '1', age : 30, drop : true })).toThrow( /PropertyNotAllowed<drop>/ );
+            expect(() => mod.parseStrict({ id : '1', age : 30, drop : true })).toThrow( /PropertyNotAllowed<drop>/ );
             expect( mod.parseRelaxed({ id : '1', age : 30, drop : true }).drop ).toBe( true );
             expect( mod.parseOrder( '{"id":"o1","items":[{"id":1},{"id":2}]}' )).toEqual({
                 id : 'o1', items : [{ id : 1 }, { id : 2 }]
             });
-            expect( () => mod.parseUser( '{bad' )).toThrow( /Invalid JSON/ );
-            expect( () => mod.parseUser({ age : 30 })).toThrow( /Type<string>/ );
+            expect(() => mod.parseUser( '{bad' )).toThrow( /Invalid JSON/ );
+            expect(() => mod.parseUser({ age : 30 })).toThrow( /Type<string>/ );
         });
 
         it( 'parses Date and Buffer from JSON', async() =>
         {
             const mod = await emitAndImport<{
-                parseFile : ( input: unknown ) => { createdAt: Date; blob: Buffer }
+                parseFile : ( input: unknown ) => { createdAt : Date, blob : Buffer }
             }>( `
                 import { parse } from '../src/index.js';
                 interface FileMeta { createdAt: Date; blob: Buffer }
@@ -606,7 +606,7 @@ describe( 'Parse', () =>
             expect( mod.parseQs( 'page=1&active=0&tags[]=a&tags[]=b' )).toEqual({
                 page : 1, active : false, tags : [ 'a', 'b' ]
             });
-            expect( () => mod.parseQs( 'page=1&active=true&rogue=1' )).toThrow( /PropertyNotAllowed<rogue>/ );
+            expect(() => mod.parseQs( 'page=1&active=true&rogue=1' )).toThrow( /PropertyNotAllowed<rogue>/ );
 
             const usp = new URLSearchParams({ page : '3', active : '1' });
             expect( mod.parseUsp( usp )).toEqual({ page : 3, active : true });
@@ -637,7 +637,7 @@ describe( 'Parse', () =>
             expect( mod.asBool( '0' )).toBe( false );
             expect( mod.asDate( '2026-01-01T00:00:00.000Z' ).toISOString()).toBe( '2026-01-01T00:00:00.000Z' );
             expect( mod.asRegex( 'foo.*bar' )).toEqual( /foo.*bar/ );
-            expect( () => mod.asNumber( 'nope' )).toThrow( /Type<number>/ );
+            expect(() => mod.asNumber( 'nope' )).toThrow( /Type<number>/ );
         });
 
         it( 'round-trips stringify(json) → parse and stringify(query) → parse', async() =>
@@ -691,11 +691,11 @@ describe( 'Parse', () =>
             `, 'temp_parse_e2e_parity' );
 
             expect( mod.parseLit( '"on"' )).toBe( 'on' );
-            expect( () => mod.parseLit( '"maybe"' )).toThrow();
+            expect(() => mod.parseLit( '"maybe"' )).toThrow();
             expect( mod.parseTup( '["a",1]' )).toEqual([ 'a', 1 ]);
-            expect( () => mod.parseTup( '["a"]' )).toThrow( /Tuple<2>/ );
+            expect(() => mod.parseTup( '["a"]' )).toThrow( /Tuple<2>/ );
             expect( mod.parseTag({ kind : 'square', s : 4 })).toEqual({ kind : 'square', s : 4 });
-            expect( () => mod.parseTag({ kind : 'triangle' })).toThrow();
+            expect(() => mod.parseTag({ kind : 'triangle' })).toThrow();
             expect( mod.parseRec({ x : 1, y : 2 })).toEqual({ x : 1, y : 2 });
             expect( mod.parseBrand( '"uid"' )).toBe( 'uid' );
             expect( mod.parseBig( '"42"' )).toBe( 42n );
@@ -719,8 +719,8 @@ describe( 'Parse', () =>
             expect( mod.parseUser({ name : '  ab  ', age : 20 })).toEqual({
                 name : 'ab', age : 20, role : 'guest'
             });
-            expect( () => mod.parseUser({ name : 'x', age : 20 })).toThrow( /minLength/i );
-            expect( () => mod.parseUser({ name : 'ab', age : 10 })).toThrow( /minimum/i );
+            expect(() => mod.parseUser({ name : 'x', age : 20 })).toThrow( /minLength/i );
+            expect(() => mod.parseUser({ name : 'ab', age : 10 })).toThrow( /minimum/i );
         });
 
         it( 'applies transform.Custom and constraint.Custom like assert', async() =>
@@ -741,7 +741,7 @@ describe( 'Parse', () =>
             expect( mod.parseRow({ code : 'abc', key : 'web_ok' })).toEqual({
                 code : 'web_abc', key : 'web_ok'
             });
-            expect( () => mod.parseRow({ code : 'abc', key : 'bad' })).toThrow( /Custom/ );
+            expect(() => mod.parseRow({ code : 'abc', key : 'bad' })).toThrow( /Custom/ );
         });
 
         it( 'rejects Infinity from query numbers and accepts JSON Infinity', async() =>
@@ -755,17 +755,17 @@ describe( 'Parse', () =>
                 export const parseJ = ( v: unknown ) => parse<{ n: number }>( v );
             `, 'temp_parse_e2e_nan' );
 
-            expect( () => mod.parseQ( 'n=Infinity' )).toThrow( /number/ );
+            expect(() => mod.parseQ( 'n=Infinity' )).toThrow( /number/ );
             expect( mod.parseJ({ n : Infinity })).toEqual({ n : Infinity });
-            expect( () => mod.parseJ({ n : NaN })).toThrow( /number/ );
+            expect(() => mod.parseJ({ n : NaN })).toThrow( /number/ );
         });
 
         it( 'passes through any and unknown after json/query decode', async() =>
         {
             const mod = await emitAndImport<{
-                parseAnyJson   : ( v: unknown ) => any
+                parseAnyJson     : ( v: unknown ) => any
                 parseUnknownJson : ( v: unknown ) => any
-                parseAnyQuery  : ( v: unknown ) => any
+                parseAnyQuery    : ( v: unknown ) => any
             }>( `
                 import { parse } from '../src/index.js';
                 export const parseAnyJson = ( v: unknown ) => parse<any>( v );

@@ -57,7 +57,7 @@ export function appendQueryAny( params: string[], val: any, prefix: string ): vo
 
     if( val === null || typeof val !== 'object' )
     {
-        params.push( encodeURIComponent( prefix ) + '=' + encodeURIComponent( leafQueryValue( val ) ) );
+        params.push( encodeURIComponent( prefix ) + '=' + encodeURIComponent( leafQueryValue( val )));
 
         return;
     }
@@ -111,7 +111,7 @@ export function serializeDate( val: Date | string | number, path = '' ): string
 
 export function serializeBuffer( val: Uint8Array | ArrayBuffer, path = '' ): string
 {
-    if( val instanceof Uint8Array || ( typeof Buffer !== 'undefined' && Buffer.isBuffer( val ) ) || val instanceof ArrayBuffer )
+    if( val instanceof Uint8Array || ( typeof Buffer !== 'undefined' && Buffer.isBuffer( val )) || val instanceof ArrayBuffer )
     {
         const buf = val instanceof Uint8Array ? val : new Uint8Array( val );
 
@@ -132,7 +132,7 @@ export function serializeArray<T>( val: T[], mapper: ( item: T ) => string, path
 
     for( let i = 0; i < val.length; i++ )
     {
-        parts.push( mapper( val[i] ) );
+        parts.push( mapper( val[i]));
     }
 
     return `[${parts.join( ',' )}]`;

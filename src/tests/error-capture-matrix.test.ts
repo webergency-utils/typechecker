@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { validators, toZodIssues, groupErrorsByPath, type ValidationContext, type IValidationError, getOrCompileSchema, is, assert, assertGuard, validate } from '../runtime/validators.js';
 
-function ctx( mode: ValidationContext['mode'] = 'strict', from?: ValidationContext['from'] ): ValidationContext
+function ctx( mode: ValidationContext['mode'] = 'strict', from?: ValidationContext['from']): ValidationContext
 {
     return { success : true, errors : [], mode, from, root : undefined };
 }
@@ -72,7 +72,7 @@ describe( 'Error capture matrix', () =>
 
     describe( 'schema primitive and container failures', () =>
     {
-        const cases: { name: string, schema: any, value: any, pathError: RegExp | string }[] =
+        const cases: { name : string, schema : any, value : any, pathError : RegExp | string }[] =
         [
             { name : 'string', schema : { type : 'string' }, value : 1, pathError : 'Type<string>' },
             { name : 'number', schema : { type : 'number' }, value : 'x', pathError : 'Type<number>' },
@@ -159,8 +159,8 @@ describe( 'Error capture matrix', () =>
                 pathError : /UniqueItems/i
             },
             {
-                name      : 'required prop',
-                schema    :
+                name : 'required prop',
+                schema :
                 {
                     type                 : 'object',
                     properties           : { a : { type : 'string' } },
@@ -171,8 +171,8 @@ describe( 'Error capture matrix', () =>
                 pathError : /Type<string>|Required/i
             },
             {
-                name      : 'strict extra prop',
-                schema    :
+                name : 'strict extra prop',
+                schema :
                 {
                     type                 : 'object',
                     properties           : { a : { type : 'string' } },
@@ -398,7 +398,7 @@ describe( 'Error capture matrix', () =>
         {
             // Arrange
             const fn = getOrCompileSchema({
-                type       : 'object',
+                type : 'object',
                 properties :
                 {
                     node :
@@ -407,8 +407,8 @@ describe( 'Error capture matrix', () =>
                         [
                             { type : 'string' },
                             {
-                                type                 : 'object',
-                                properties           :
+                                type : 'object',
+                                properties :
                                 {
                                     child : {
                                         anyOf : [{ type : 'number' }, { type : 'boolean' }]
@@ -431,7 +431,7 @@ describe( 'Error capture matrix', () =>
             expect( result.success ).toBe( false );
             const paths = result.errors.flatMap( function walk( e ): string[]
             {
-                return [e.path, ...( e.issues ? e.issues.flatMap( walk ) : [] )];
+                return [e.path, ...( e.issues ? e.issues.flatMap( walk ) : [])];
             });
             expect( paths.some( p => p.includes( 'node' ))).toBe( true );
         });
@@ -487,7 +487,7 @@ describe( 'Error capture matrix', () =>
         {
             // Arrange
             const fn = getOrCompileSchema({
-                type       : 'object',
+                type : 'object',
                 properties :
                 {
                     a : { type : 'string' },
@@ -636,7 +636,7 @@ describe( 'Error capture matrix', () =>
         {
             // Arrange
             const fn = getOrCompileSchema({ type : 'string' });
-            const factory = ( errors: IValidationError[] ) =>
+            const factory = ( errors: IValidationError[]) =>
             {
                 const err = new Error( 'custom' );
                 ( err as any ).issues = errors;

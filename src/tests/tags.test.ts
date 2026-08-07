@@ -31,10 +31,10 @@ describe( 'ResolveDefaults', () =>
         expect( x.d.e ).toBe( 1 );
 
         expectTypeOf<Resolved>().toMatchTypeOf<{
-            a : string
+            a  : string
             b? : string
-            c : number
-            d : { e : number }
+            c  : number
+            d  : { e : number }
         }>();
         expectTypeOf<Resolved>().not.toMatchTypeOf<{ a? : string }>();
     });
@@ -42,14 +42,14 @@ describe( 'ResolveDefaults', () =>
     test( 'keeps optional properties without Default optional', () =>
     {
         type Schema = {
-            required : string
-            optional? : number
+            required   : string
+            optional?  : number
             defaulted? : boolean & tag.Default<false>
         };
         type Resolved = ResolveDefaults<Schema>;
 
         expectTypeOf<Resolved>().toMatchTypeOf<{
-            required : string
+            required  : string
             optional? : number
             defaulted : boolean
         }>();
@@ -70,7 +70,7 @@ describe( 'ResolveDefaults', () =>
 
     test( 'resolves Defaults through arrays of objects', () =>
     {
-        type Item = { name? : string & tag.Default<'anon'>; age? : number };
+        type Item = { name? : string & tag.Default<'anon'>, age? : number };
         type Schema = { items : Item[] };
         type Resolved = ResolveDefaults<Schema>;
 
@@ -92,17 +92,17 @@ describe( 'ResolveDefaults', () =>
 
         // Parent stays optional (no Default on nested itself); inner port becomes required.
         expectTypeOf<Resolved>().toMatchTypeOf<{
-            nested? : { port : number; host? : string }
+            nested? : { port : number, host? : string }
         }>();
     });
 
     test( 'composes with ConvertPropertyCasing like AppConfig / PollerConfig', () =>
     {
         type PollerConfigSchema = {
-            MAILBOX_ADDRESS : string
+            MAILBOX_ADDRESS   : string
             POLL_INTERVAL_MS? : number & constraint.Minimum<0> & tag.Default<60000>
-            MARK_AS_READ? : boolean & tag.Default<false>
-            PAGE_SIZE? : number
+            MARK_AS_READ?     : boolean & tag.Default<false>
+            PAGE_SIZE?        : number
         };
 
         type PollerConfig = ResolveDefaults<ConvertPropertyCasing<PollerConfigSchema, 'camelCase'>>;
@@ -110,8 +110,8 @@ describe( 'ResolveDefaults', () =>
         expectTypeOf<PollerConfig>().toMatchTypeOf<{
             mailboxAddress : string
             pollIntervalMs : number
-            markAsRead : boolean
-            pageSize? : number
+            markAsRead     : boolean
+            pageSize?      : number
         }>();
         expectTypeOf<PollerConfig>().not.toMatchTypeOf<{ pollIntervalMs? : number }>();
         expectTypeOf<PollerConfig>().not.toMatchTypeOf<{ MARK_AS_READ? : boolean }>();
@@ -166,10 +166,10 @@ describe( 'ResolveDefaults', () =>
         expect( resolved.r ).toBeInstanceOf( RegExp );
 
         expectTypeOf<Resolved>().toMatchTypeOf<{
-            m : Map<string, number>
+            m  : Map<string, number>
             s? : Set<string>
-            p : Promise<string>
-            r : RegExp
+            p  : Promise<string>
+            r  : RegExp
         }>();
     });
 

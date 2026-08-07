@@ -22,7 +22,7 @@ import
     createMapCheck,
     createInstanceOfCheck
 } 
-from '../engine/generators.js';
+    from '../engine/generators.js';
 
 function stripPositions<T extends ts.Node>( node: T ): T 
 {
@@ -129,7 +129,7 @@ describe( 'generators', () =>
             expect( printExpr( createRecordCheck( child ))).toContain( 'validators.record' );
             expect( printExpr( createSetCheck( child ))).toContain( 'validators.set' );
             expect( printExpr( createMapCheck( key, child ))).toContain( 'validators.map' );
-            expect( printExpr( createTupleCheck([key, child] ))).toContain( 'validators.tuple' );
+            expect( printExpr( createTupleCheck([key, child]))).toContain( 'validators.tuple' );
             expect( printExpr( createInstanceOfCheck( 'Date' ))).toContain( 'validators.instanceOf' );
             expect( printExpr( createInstanceOfCheck( 'Date' ))).toContain( '"Date"' );
 
@@ -147,7 +147,7 @@ describe( 'generators', () =>
             // Act
             const union = printExpr( createUnionCheck([a, b], 'Type<Union>' ));
             const tpl = printExpr( createTemplateLiteralCheck( '^id_', 'Template' ));
-            const inter = printExpr( createIntersectionCheck([a, b] ));
+            const inter = printExpr( createIntersectionCheck([a, b]));
 
             // Assert
             expect( union ).toContain( 'validators.union' );

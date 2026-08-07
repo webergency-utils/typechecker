@@ -386,7 +386,7 @@ export function createRecordCheck( valueValidator: ts.Expression ): ts.Expressio
     return injectNodes( templateToAst( tpl ), { '__CHILD__' : valueValidator });
 }
 
-export function createTupleCheck( checks: ts.Expression[] ): ts.Expression 
+export function createTupleCheck( checks: ts.Expression[]): ts.Expression 
 {
     const tpl = '((checks) => (v, path, ctx) => validators.tuple(v, path, ctx, checks))(__CHECKS__)';
 
@@ -415,7 +415,7 @@ export function createUndefinedCheck(): ts.Expression
     return ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'validators' ), ts.factory.createIdentifier( 'undefined' ));
 }
 
-export function createIntersectionCheck( checks: ts.Expression[] ): ts.Expression 
+export function createIntersectionCheck( checks: ts.Expression[]): ts.Expression 
 {
     const tpl = `
     ((checks) => (v, path, ctx) => {

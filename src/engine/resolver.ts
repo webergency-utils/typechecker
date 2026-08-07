@@ -184,7 +184,7 @@ function tryTaggedUnion(
 }
 
 /** Classify a peeled base for constrained-primitive emit. */
-function constrainedBaseKind( type: ts.Type, checker: ts.TypeChecker ): { baseName: string, baseType?: ts.Type } | undefined
+function constrainedBaseKind( type: ts.Type, checker: ts.TypeChecker ): { baseName : string, baseType? : ts.Type } | undefined
 {
     const flags = typeof type.getFlags === 'function' ? type.getFlags() : 0;
 
@@ -288,7 +288,7 @@ function buildValidatorScoped(
         if( peeled?.hasTags )
         {
             const constraints = peeled.constraints;
-            let walkBase = peeled.base;
+            const walkBase = peeled.base;
             let kind = constrainedBaseKind( walkBase, checker );
 
             if( !kind && typeof walkBase.isIntersection === 'function' && walkBase.isIntersection())
@@ -376,16 +376,16 @@ function buildValidatorScoped(
     }
     else if( type.getSymbol()?.name === 'Date' ) 
     {
-        result = createDateCheck( );
+        result = createDateCheck();
     }
     else if( type.getSymbol()?.name === 'RegExp' ) 
     {
-        result = createRegExpCheck( );
+        result = createRegExpCheck();
     }
     else if( type.getSymbol()?.name === 'Set' ) 
     {
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
-        result = createSetCheck( buildValidatorScoped( elementType, checker, validatorsMap, scope ) );
+        result = createSetCheck( buildValidatorScoped( elementType, checker, validatorsMap, scope ));
     }
     else if( type.getSymbol()?.name === 'Map' ) 
     {
@@ -406,11 +406,11 @@ function buildValidatorScoped(
     }
     else if( flags & ts.TypeFlags.Null ) 
     {
-        result = createNullCheck( );
+        result = createNullCheck();
     }
     else if( flags & ts.TypeFlags.Undefined || flags & ts.TypeFlags.Void ) 
     {
-        result = createUndefinedCheck( );
+        result = createUndefinedCheck();
     }
     else if( flags & ts.TypeFlags.String ) 
     {
@@ -458,7 +458,7 @@ function buildValidatorScoped(
             }
         }
         regexStr += '$';
-        result = createTemplateLiteralCheck( regexStr, checker.typeToString( type ) );
+        result = createTemplateLiteralCheck( regexStr, checker.typeToString( type ));
     }
     else if( type.isStringLiteral()) 
     {
@@ -479,12 +479,12 @@ function buildValidatorScoped(
     else if( checker.isTupleType( type )) 
     {
         const typeArgs = ( type as ts.TupleTypeReference ).typeArguments || [];
-        result = createTupleCheck( typeArgs.map( t => buildValidatorScoped( t, checker, validatorsMap, scope )) );
+        result = createTupleCheck( typeArgs.map( t => buildValidatorScoped( t, checker, validatorsMap, scope )));
     }
     else if( checker.isArrayType( type )) 
     {
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
-        result = createArrayCheck( buildValidatorScoped( elementType, checker, validatorsMap, scope ) );
+        result = createArrayCheck( buildValidatorScoped( elementType, checker, validatorsMap, scope ));
     }
     else if( type.getCallSignatures().length > 0 && type.getConstructSignatures().length === 0 ) 
     {
@@ -533,7 +533,7 @@ function buildValidatorScoped(
 
             if( stringIndexInfo && props.length === 0 )
             {
-                result = createRecordCheck( buildValidatorScoped( stringIndexInfo.type, checker, validatorsMap, scope ) );
+                result = createRecordCheck( buildValidatorScoped( stringIndexInfo.type, checker, validatorsMap, scope ));
             }
             else if( flags & ts.TypeFlags.Object || type.isClassOrInterface() || type.isTypeParameter() || stringIndexInfo )
             {
@@ -1282,7 +1282,7 @@ function buildJsonSchemaInternal(
         }
 
         const schemaObj: any = {
-            type       : 'object',
+            type : 'object',
             properties
         };
 

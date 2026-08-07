@@ -245,12 +245,12 @@ describe( 'Nominal class types', () =>
                         sourcefile : 'main.js',
                         loader     : 'js'
                     },
-                    bundle        : true,
-                    write         : false,
-                    format        : 'esm',
-                    platform      : 'node',
-                    packages      : 'external',
-                    plugins       : [
+                    bundle   : true,
+                    write    : false,
+                    format   : 'esm',
+                    platform : 'node',
+                    packages : 'external',
+                    plugins  : [
                         {
                             name  : 'tc-class-test',
                             setup : ( build ) =>

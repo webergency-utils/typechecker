@@ -15,18 +15,18 @@ describe( 'Casing + Defaults + original optionality', () =>
     describe( 'type level', () =>
     {
         type AppConfigSchema = {
-            TENANT_ID : string
-            CLIENT_ID : string
-            MAX_RETRIES : number & tag.Default<5>
+            TENANT_ID           : string
+            CLIENT_ID           : string
+            MAX_RETRIES         : number & tag.Default<5>
             BASE_RETRY_DELAY_MS : number & tag.Default<1000>
         };
 
         type PollerConfigSchema = {
-            MAILBOX_ADDRESS : string
+            MAILBOX_ADDRESS   : string
             POLL_INTERVAL_MS? : number & constraint.Minimum<0> & tag.Default<60000>
-            PAGE_SIZE? : number & constraint.Range<1, 999> & tag.Default<50>
-            MARK_AS_READ? : boolean & tag.Default<false>
-            DEBUG_LABEL? : string
+            PAGE_SIZE?        : number & constraint.Range<1, 999> & tag.Default<50>
+            MARK_AS_READ?     : boolean & tag.Default<false>
+            DEBUG_LABEL?      : string
         };
 
         it( 'ConvertPropertyCasing alone preserves original optionality', () =>
@@ -34,11 +34,11 @@ describe( 'Casing + Defaults + original optionality', () =>
             type Cased = ConvertPropertyCasing<PollerConfigSchema, 'camelCase'>;
 
             expectTypeOf<Cased>().toMatchTypeOf<{
-                mailboxAddress : string
+                mailboxAddress  : string
                 pollIntervalMs? : number
-                pageSize? : number
-                markAsRead? : boolean
-                debugLabel? : string
+                pageSize?       : number
+                markAsRead?     : boolean
+                debugLabel?     : string
             }>();
             expectTypeOf<Cased>().not.toMatchTypeOf<{ pollIntervalMs : number }>();
             expectTypeOf<Cased>().not.toMatchTypeOf<{ POLL_INTERVAL_MS? : number }>();
@@ -51,9 +51,9 @@ describe( 'Casing + Defaults + original optionality', () =>
             expectTypeOf<Resolved>().toMatchTypeOf<{
                 mailboxAddress : string
                 pollIntervalMs : number
-                pageSize : number
-                markAsRead : boolean
-                debugLabel? : string
+                pageSize       : number
+                markAsRead     : boolean
+                debugLabel?    : string
             }>();
             expectTypeOf<Resolved>().not.toMatchTypeOf<{ debugLabel : string }>();
             expectTypeOf<Resolved>().not.toMatchTypeOf<{ pollIntervalMs? : number }>();
@@ -64,9 +64,9 @@ describe( 'Casing + Defaults + original optionality', () =>
             type Resolved = ResolveDefaults<ConvertPropertyCasing<AppConfigSchema, 'camelCase'>>;
 
             expectTypeOf<Resolved>().toMatchTypeOf<{
-                tenantId : string
-                clientId : string
-                maxRetries : number
+                tenantId         : string
+                clientId         : string
+                maxRetries       : number
                 baseRetryDelayMs : number
             }>();
             expectTypeOf<Resolved>().not.toMatchTypeOf<{ maxRetries? : number }>();
@@ -79,9 +79,9 @@ describe( 'Casing + Defaults + original optionality', () =>
             expectTypeOf<ResolvedThenCased>().toMatchTypeOf<{
                 mailboxAddress : string
                 pollIntervalMs : number
-                pageSize : number
-                markAsRead : boolean
-                debugLabel? : string
+                pageSize       : number
+                markAsRead     : boolean
+                debugLabel?    : string
             }>();
         });
 
@@ -91,14 +91,14 @@ describe( 'Casing + Defaults + original optionality', () =>
             type Pascal = ResolveDefaults<ConvertPropertyCasing<PollerConfigSchema, 'PascalCase'>>;
 
             expectTypeOf<Snake>().toMatchTypeOf<{
-                mailbox_address : string
+                mailbox_address  : string
                 poll_interval_ms : number
-                debug_label? : string
+                debug_label?     : string
             }>();
             expectTypeOf<Pascal>().toMatchTypeOf<{
                 MailboxAddress : string
                 PollIntervalMs : number
-                DebugLabel? : string
+                DebugLabel?    : string
             }>();
         });
 
@@ -108,7 +108,7 @@ describe( 'Casing + Defaults + original optionality', () =>
                 OUTER_NAME : string
                 SETTINGS? : {
                     RETRY_MS? : number & tag.Default<100>
-                    LABEL? : string
+                    LABEL?    : string
                 }
             };
             type Resolved = ResolveDefaults<ConvertPropertyCasing<Nested, 'camelCase'>>;
@@ -117,7 +117,7 @@ describe( 'Casing + Defaults + original optionality', () =>
                 outerName : string
                 settings? : {
                     retryMs : number
-                    label? : string
+                    label?  : string
                 }
             }>();
         });
@@ -218,11 +218,11 @@ describe( 'Casing + Defaults + original optionality', () =>
             });
 
             expect( mod.load({
-                TENANT_ID          : 't1',
-                CLIENT_ID          : 'c1',
-                MAX_RETRIES        : '9',
-                BASE_RETRY_DELAY_MS: '250',
-                OPTIONAL_NOTE      : 'hi'
+                TENANT_ID           : 't1',
+                CLIENT_ID           : 'c1',
+                MAX_RETRIES         : '9',
+                BASE_RETRY_DELAY_MS : '250',
+                OPTIONAL_NOTE       : 'hi'
             })).toEqual({
                 tenantId         : 't1',
                 clientId         : 'c1',
@@ -387,19 +387,19 @@ describe( 'Casing + Defaults + original optionality', () =>
         {
             // Pure runtime check: filled SCREAMING_SNAKE keys convert cleanly.
             const filled = {
-                TENANT_ID            : 't1',
-                MAX_RETRIES          : 5,
-                BASE_RETRY_DELAY_MS  : 1000,
-                POLL_INTERVAL_MS     : 60000,
-                MARK_AS_READ         : false
+                TENANT_ID           : 't1',
+                MAX_RETRIES         : 5,
+                BASE_RETRY_DELAY_MS : 1000,
+                POLL_INTERVAL_MS    : 60000,
+                MARK_AS_READ        : false
             };
 
             expect( convertPropertyCasing( filled, 'camelCase' )).toEqual({
-                tenantId           : 't1',
-                maxRetries         : 5,
-                baseRetryDelayMs   : 1000,
-                pollIntervalMs     : 60000,
-                markAsRead         : false
+                tenantId         : 't1',
+                maxRetries       : 5,
+                baseRetryDelayMs : 1000,
+                pollIntervalMs   : 60000,
+                markAsRead       : false
             });
 
             expect( convertPropertyCasing(

@@ -45,17 +45,17 @@ describe( 'plugin', () =>
             reportsUnnecessary : undefined
         }];
         const languageService = 
-        {
-            getProgram             : () => program,
-            getSemanticDiagnostics : ( name: string ) => name === fileName ? baseDiagnostics : []
-        } as unknown as ts.LanguageService;
+            {
+                getProgram             : () => program,
+                getSemanticDiagnostics : ( name: string ) => name === fileName ? baseDiagnostics : []
+            } as unknown as ts.LanguageService;
         const plugin = init({ typescript : ts });
         const proxy = plugin.create({
             languageService,
-            project        : {} as ts.server.Project,
+            project             : {} as ts.server.Project,
             languageServiceHost : {} as ts.LanguageServiceHost,
-            serverHost     : {} as ts.server.ServerHost,
-            config         : {}
+            serverHost          : {} as ts.server.ServerHost,
+            config              : {}
         } as ts.server.PluginCreateInfo );
 
         // Act
@@ -73,13 +73,13 @@ describe( 'plugin', () =>
         const base: ts.Diagnostic[] = [];
         const dts = ts.createSourceFile( '/pkg/index.d.ts', 'export {};', ts.ScriptTarget.Latest, true );
         const languageService = 
-        {
-            getProgram : () => ({
-                getSourceFile : ( name: string ) => name.endsWith( '.d.ts' ) ? dts : undefined,
-                getTypeChecker : () => ({})
-            }),
-            getSemanticDiagnostics : () => base
-        } as unknown as ts.LanguageService;
+            {
+                getProgram : () => ({
+                    getSourceFile  : ( name: string ) => name.endsWith( '.d.ts' ) ? dts : undefined,
+                    getTypeChecker : () => ({})
+                }),
+                getSemanticDiagnostics : () => base
+            } as unknown as ts.LanguageService;
         const proxy = plugin.create({
             languageService,
             project             : {} as ts.server.Project,

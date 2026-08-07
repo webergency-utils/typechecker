@@ -321,11 +321,11 @@ export function coerceBigInt( val: any, path: string ): bigint
 }
 
 export type ParseConstraint =
-{
-    type     : string
-    value?   : any
-    message? : string
-};
+    {
+        type     : string
+        value?   : any
+        message? : string
+    };
 
 /**
  * Applies defaults, transforms, then validator constraint helpers; throws ParseError on failure.
@@ -460,7 +460,7 @@ export function applyParseConstraints(
             const ctx =
             {
                 success : true,
-                errors  : [] as { path: string, value: any, error: string }[],
+                errors  : [] as { path : string, value : any, error : string }[],
                 mode    : 'strict' as const,
                 from,
                 root    : v

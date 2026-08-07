@@ -10,7 +10,7 @@ import
     appendQueryAny,
     SerializationError
 }
-from '../runtime/serializer-runtime.js';
+    from '../runtime/serializer-runtime.js';
 import { generateSerializerCode } from '../engine/serializer-generator.js';
 import { compileAndTransform, emitAndImport } from './helpers/compile.js';
 import { serializer, stringify } from '../index.js';
@@ -25,8 +25,8 @@ describe( 'Serializer & Stringify', () =>
     {
         it( 'throws when transformer was not applied', () =>
         {
-            expect( () => serializer()).toThrow( 'Typechecker transformer was not applied' );
-            expect( () => stringify( {} )).toThrow( 'Typechecker transformer was not applied' );
+            expect(() => serializer()).toThrow( 'Typechecker transformer was not applied' );
+            expect(() => stringify({})).toThrow( 'Typechecker transformer was not applied' );
         });
     });
 
@@ -43,8 +43,8 @@ describe( 'Serializer & Stringify', () =>
 
             it( 'throws SerializationError with path for non-strings', () =>
             {
-                expect( () => serializeString( 123 as any, 'user.name' )).toThrow( SerializationError );
-                expect( () => serializeString( 123 as any, 'user.name' )).toThrow( 'Serialization error at "user.name": Type<string>' );
+                expect(() => serializeString( 123 as any, 'user.name' )).toThrow( SerializationError );
+                expect(() => serializeString( 123 as any, 'user.name' )).toThrow( 'Serialization error at "user.name": Type<string>' );
             });
         });
 
@@ -62,9 +62,9 @@ describe( 'Serializer & Stringify', () =>
 
             it( 'throws for invalid Date values', () =>
             {
-                expect( () => serializeDate( new Date( NaN ), 'createdAt' )).toThrow( 'Serialization error at "createdAt": Type<Date>' );
-                expect( () => serializeDate( 'invalid-date' )).toThrow( SerializationError );
-                expect( () => serializeDate( {} as any )).toThrow( SerializationError );
+                expect(() => serializeDate( new Date( NaN ), 'createdAt' )).toThrow( 'Serialization error at "createdAt": Type<Date>' );
+                expect(() => serializeDate( 'invalid-date' )).toThrow( SerializationError );
+                expect(() => serializeDate({} as any )).toThrow( SerializationError );
             });
         });
 
@@ -79,7 +79,7 @@ describe( 'Serializer & Stringify', () =>
 
             it( 'throws for invalid buffer input', () =>
             {
-                expect( () => serializeBuffer( 'not-a-buffer' as any, 'blob' )).toThrow( 'Serialization error at "blob"' );
+                expect(() => serializeBuffer( 'not-a-buffer' as any, 'blob' )).toThrow( 'Serialization error at "blob"' );
             });
         });
 
@@ -92,7 +92,7 @@ describe( 'Serializer & Stringify', () =>
 
             it( 'throws for non-array input', () =>
             {
-                expect( () => serializeArray( 'nope' as any, v => v, 'items' )).toThrow( 'Serialization error at "items": Type<Array>' );
+                expect(() => serializeArray( 'nope' as any, v => v, 'items' )).toThrow( 'Serialization error at "items": Type<Array>' );
             });
         });
 
@@ -153,14 +153,14 @@ describe( 'Serializer & Stringify', () =>
 
             it( 'rethrows the last SerializationError when its code matches expected', () =>
             {
-                expect( () => serializeUnion( 1, 'v', 'Type<string>', [
+                expect(() => serializeUnion( 1, 'v', 'Type<string>', [
                     () => { throw new SerializationError( 'v', 'Type<string>' ) }
                 ])).toThrow( 'Serialization error at "v": Type<string>' );
             });
 
             it( 'throws expected when arms fail with other codes', () =>
             {
-                expect( () => serializeUnion( true, 'v', 'Type<Union>', [
+                expect(() => serializeUnion( true, 'v', 'Type<Union>', [
                     () => { throw new SerializationError( 'v', 'Type<string>' ) },
                     () => { throw new SerializationError( 'v', 'Type<number>' ) }
                 ])).toThrow( 'Serialization error at "v": Type<Union>' );
@@ -168,18 +168,18 @@ describe( 'Serializer & Stringify', () =>
 
             it( 'rethrows non-SerializationError failures', () =>
             {
-                expect( () => serializeUnion( 1, 'v', 'Type<Union>', [
+                expect(() => serializeUnion( 1, 'v', 'Type<Union>', [
                     () => { throw new RangeError( 'nope' ) }
                 ])).toThrow( RangeError );
             });
 
             it( 'covers root-path and rewritten-message code extraction', () =>
             {
-                expect( () => serializeUnion( 1, '', 'Type<Union>', [
+                expect(() => serializeUnion( 1, '', 'Type<Union>', [
                     () => { throw new SerializationError( '', 'Type<string>' ) }
                 ])).toThrow( 'Type<Union>' );
 
-                expect( () => serializeUnion( 1, 'v', 'Type<Union>', [
+                expect(() => serializeUnion( 1, 'v', 'Type<Union>', [
                     () =>
                     {
                         const err = new SerializationError( 'v', 'Type<string>' );
@@ -394,8 +394,8 @@ describe( 'Serializer & Stringify', () =>
         it( 'round-trips JSON objects with modes, optionals, and nested arrays', async() =>
         {
             const mod = await emitAndImport<{
-                dump     : ( v: any ) => string
-                dumpStrict : ( v: any ) => string
+                dump        : ( v: any ) => string
+                dumpStrict  : ( v: any ) => string
                 dumpRelaxed : ( v: any ) => string
             }>( `
                 import { stringify } from '../src/index.js';
@@ -414,7 +414,7 @@ describe( 'Serializer & Stringify', () =>
             });
             expect( mod.dump({ id : '1', age : 30, active : true, email : undefined } as any )).not.toContain( 'email' );
 
-            expect( () => mod.dumpStrict({ id : '1', age : 30, active : true, rogue : true } as any ))
+            expect(() => mod.dumpStrict({ id : '1', age : 30, active : true, rogue : true } as any ))
                 .toThrow( /PropertyNotAllowed<rogue>/ );
 
             const relaxed = JSON.parse( mod.dumpRelaxed({ id : '1', age : 30, active : true, extra : 9 } as any ));
@@ -447,8 +447,8 @@ describe( 'Serializer & Stringify', () =>
 
             expect( mod.dumpUnion( 'hi' )).toBe( '"hi"' );
             expect( mod.dumpUnion( 42 )).toBe( '42' );
-            expect( () => mod.dumpUnion( true as any )).toThrow( /Type<(Value|Union)>/ );
-            expect( () => mod.dumpPayload({ blob : Buffer.from( 'x' ), label : 'y' } as any ))
+            expect(() => mod.dumpUnion( true as any )).toThrow( /Type<(Value|Union)>/ );
+            expect(() => mod.dumpPayload({ blob : Buffer.from( 'x' ), label : 'y' } as any ))
                 .toThrow( /Type<Date>/ );
         });
 
@@ -484,14 +484,14 @@ describe( 'Serializer & Stringify', () =>
             expect( params.get( 'filter[category]' )).toBe( 'books' );
             expect( params.get( 'since' )).toBe( '2026-06-01T00:00:00.000Z' );
 
-            expect( () => mod.ser({ q : 'x', page : 1, tags : [], rogue : 1 } as any ))
+            expect(() => mod.ser({ q : 'x', page : 1, tags : [], rogue : 1 } as any ))
                 .toThrow( /PropertyNotAllowed<rogue>/ );
         });
 
         it( 'reuses serializer factory from serializer<T>()', async() =>
         {
             const mod = await emitAndImport<{
-                ser : ( v: { id: string } ) => string
+                ser : ( v: { id : string }) => string
             }>( `
                 import { serializer } from '../src/index.js';
                 interface Row { id: string }
@@ -520,11 +520,11 @@ describe( 'Serializer & Stringify', () =>
             `, 'temp_ser_e2e_parity' );
 
             expect( mod.dumpLit( 'on' )).toBe( '"on"' );
-            expect( () => mod.dumpLit( 'maybe' as any )).toThrow( /Type<(Status|Union|'on'|'off'|Literal)/ );
+            expect(() => mod.dumpLit( 'maybe' as any )).toThrow( /Type<(Status|Union|'on'|'off'|Literal)/ );
             expect( mod.dumpTup([ 'a', 1 ])).toBe( '["a",1]' );
-            expect( () => mod.dumpTup([ 'a' ] as any )).toThrow( /Tuple<2>/ );
+            expect(() => mod.dumpTup([ 'a' ] as any )).toThrow( /Tuple<2>/ );
             expect( JSON.parse( mod.dumpTag({ kind : 'circle', r : 2 }))).toEqual({ kind : 'circle', r : 2 });
-            expect( () => mod.dumpTag({ kind : 'triangle', r : 1 } as any )).toThrow( /Type<(Shape|Union)>/ );
+            expect(() => mod.dumpTag({ kind : 'triangle', r : 1 } as any )).toThrow( /Type<(Shape|Union)>/ );
         });
 
         it( 'serializes Record and branded strings', async() =>
@@ -561,18 +561,18 @@ describe( 'Serializer & Stringify', () =>
             expect( qs ).toContain( 'name' );
             expect( qs ).toContain( 'qty' );
             expect( mod.dumpNum( Infinity )).toBe( 'Infinity' );
-            expect( () => mod.dumpNum( NaN )).toThrow( /Type<number>/ );
+            expect(() => mod.dumpNum( NaN )).toThrow( /Type<number>/ );
         });
 
         it( 'preserves nested any and unknown values', async() =>
         {
             const mod = await emitAndImport<{
-                dumpJson   : ( v: any ) => string
+                dumpJson    : ( v: any ) => string
                 dumpUnknown : ( v: any ) => string
-                dumpItems  : ( v: any ) => string
-                dumpRecord : ( v: any ) => string
-                dumpQuery  : ( v: any ) => string
-                dumpRoot   : ( v: any ) => string
+                dumpItems   : ( v: any ) => string
+                dumpRecord  : ( v: any ) => string
+                dumpQuery   : ( v: any ) => string
+                dumpRoot    : ( v: any ) => string
             }>( `
                 import { stringify } from '../src/index.js';
                 interface Row { id: string; meta: any }

@@ -111,15 +111,15 @@ export type ParseSource = 'json' | 'query' | 'string';
 
 export interface SerializerOptions
 {
-    mode?   : SerializationMode;
-    format? : SerializeFormat;
-    to?     : SerializeFormat;
+    mode?   : SerializationMode
+    format? : SerializeFormat
+    to?     : SerializeFormat
 }
 
 export interface ParseOptions
 {
-    mode? : ValidationMode;
-    from? : ParseSource;
+    mode? : ValidationMode
+    from? : ParseSource
 }
 
 /** AOT Macro: Compiles a fast serializer function for type `T`. */

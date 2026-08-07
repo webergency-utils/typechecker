@@ -12,9 +12,9 @@ function typesFrom( sourceText: string ): { checker : ts.TypeChecker, sourceFile
         ...baseHost,
         getSourceFile : ( name, languageVersion, onError, shouldCreateNewSourceFile ) =>
             name === fileName ? sourceFile : baseHost.getSourceFile( name, languageVersion, onError, shouldCreateNewSourceFile ),
-        fileExists    : ( name ) => name === fileName || baseHost.fileExists( name ),
-        readFile      : ( name ) => name === fileName ? sourceText : baseHost.readFile( name ),
-        writeFile     : () => undefined
+        fileExists : ( name ) => name === fileName || baseHost.fileExists( name ),
+        readFile   : ( name ) => name === fileName ? sourceText : baseHost.readFile( name ),
+        writeFile  : () => undefined
     };
     const program = ts.createProgram([fileName], { target : ts.ScriptTarget.ES2022, strict : true }, host );
 

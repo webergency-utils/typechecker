@@ -181,7 +181,7 @@ describe( 'Branch coverage edges', () =>
 
     describe( 'custom from returning wrong types', () =>
     {
-        const kinds: { name: string, validator: Function, bad: any }[] =
+        const kinds: { name : string, validator : Function, bad : any }[] =
         [
             { name : 'string', validator : validators.string, bad : 1 },
             { name : 'number', validator : validators.number, bad : 'x' },
@@ -300,7 +300,7 @@ describe( 'Branch coverage edges', () =>
             const data: any = {};
             const optionalCtx: ValidationContext =
             { success : true, errors : [], mode : 'strict', root : {} };
-            validators.props( {}, data, 'o', optionalCtx, [
+            validators.props({}, data, 'o', optionalCtx, [
                 ['missing', true, validators.string]
             ]);
 
@@ -441,7 +441,7 @@ describe( 'Branch coverage edges', () =>
             ctx = { success : true, errors : [], mode : 'strict', root : [10, 20] };
 
             // Act
-            validators.array( [10, 20], 'rows', ctx, ( v, path, c ) =>
+            validators.array([10, 20], 'rows', ctx, ( v, path, c ) =>
             {
                 validators.custom( v, path, c, ( val: any, pc: any ) =>
                 {
@@ -475,9 +475,9 @@ describe( 'Branch coverage edges', () =>
                         additionalProperties : true
                     },
                     {
-                        type                 : 'object',
-                        properties           : { b : { type : 'number' } },
-                        required             : ['b']
+                        type       : 'object',
+                        properties : { b : { type : 'number' } },
+                        required   : ['b']
                     }
                 ]
             });

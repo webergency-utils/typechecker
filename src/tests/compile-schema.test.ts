@@ -33,7 +33,7 @@ describe( 'compileSchema', () =>
             ctx = { success : true, errors : [], mode : 'strict' };
 
             // Act
-            fn( {}, '', ctx );
+            fn({}, '', ctx );
 
             // Assert
             expect( ctx.success ).toBe( false );
@@ -200,7 +200,7 @@ describe( 'compileSchema', () =>
                 {
                     Name : { type : 'string', minLength : 2 }
                 },
-                type       : 'object',
+                type : 'object',
                 properties : 
                 {
                     name : { $ref : '#/$defs/Name' }
