@@ -1,4 +1,5 @@
 import ts from 'typescript';
+import type { JsonSchema } from '../runtime/validators.js';
 import {
     createPrimitiveCheck,
     createLiteralCheck,
@@ -57,7 +58,15 @@ function minifyTypeString( str: string ): string
 }
 
 /** Map peeled tag constraints onto JSON Schema / x-extension fields. */
-function applyConstraintsToJsonSchema( target: Record<string, any>, constraints: ParsedConstraint[]): void
+function applyConstraintsToJsonSchema(
+    target      : Record<string, any>,
+    constraints : ParsedConstraint[],
+    checker?    : ts.TypeChecker,
+    defs?       : Record<string, any>,
+    visited?    : Map<number, string>,
+    counts?     : Map<string, number>,
+    circularHashes?: Set<string>
+): void
 {
     for( const c of constraints )
     {
@@ -68,13 +77,48 @@ function applyConstraintsToJsonSchema( target: Record<string, any>, constraints:
             c.type === 'minimum' || c.type === 'maximum' ||
             c.type === 'exclusiveMinimum' || c.type === 'exclusiveMaximum' ||
             c.type === 'multipleOf' || c.type === 'pattern' || c.type === 'format' ||
-            c.type === 'minItems' || c.type === 'maxItems'
+            c.type === 'minItems' || c.type === 'maxItems' ||
+            c.type === 'minProperties' || c.type === 'maxProperties' ||
+            c.type === 'minContains' || c.type === 'maxContains'
         )
         {
             if( c.value !== undefined ){ target[c.type] = c.value }
         }
         else if( c.type === 'uniqueItems' ){ target.uniqueItems = true }
+        else if( c.type === 'contains' && c.nestedType && checker && defs && visited && counts && circularHashes )
+        {
+            target.contains = buildJsonSchemaInternal(
+                c.nestedType, checker, defs, visited, counts, circularHashes
+            );
+        }
+        else if( c.type === 'propertyNames' && c.nestedType && checker && defs && visited && counts && circularHashes )
+        {
+            target.propertyNames = buildJsonSchemaInternal(
+                c.nestedType, checker, defs, visited, counts, circularHashes
+            );
+        }
     }
+}
+
+function attachNestedConstraintChecks(
+    constraints   : ParsedConstraint[],
+    checker       : ts.TypeChecker,
+    validatorsMap : Map<string, ts.Expression>,
+    scope         : ICustomFunctionScope
+): ParsedConstraint[]
+{
+    return constraints.map( c =>
+    {
+        if(( c.type === 'contains' || c.type === 'propertyNames' ) && c.nestedType )
+        {
+            return {
+                ...c,
+                nestedCheck : buildValidatorScoped( c.nestedType, checker, validatorsMap, scope )
+            };
+        }
+
+        return c;
+    });
 }
 
 function buildEnumValidator(
@@ -287,7 +331,12 @@ function buildValidatorScoped(
 
         if( peeled?.hasTags )
         {
-            const constraints = peeled.constraints;
+            const constraints = attachNestedConstraintChecks(
+                peeled.constraints,
+                checker,
+                validatorsMap,
+                scope
+            );
             const walkBase = peeled.base;
             let kind = constrainedBaseKind( walkBase, checker );
 
@@ -966,7 +1015,7 @@ export function preScanType(
     visited.delete( typeId );
 }
 
-export function buildJsonSchema( type: ts.Type, checker: ts.TypeChecker ): any 
+export function buildJsonSchema( type: ts.Type, checker: ts.TypeChecker ): JsonSchema
 {
     const defs: Record<string, any> = {};
     const visited = new Map<number, string>();
@@ -1053,7 +1102,12 @@ function buildJsonSchemaInternal(
             {
                 applyConstraintsToJsonSchema(
                     constraints,
-                    collectConstraintsFromProps( getTypeProps( sub, checker ), checker )
+                    collectConstraintsFromProps( getTypeProps( sub, checker ), checker ),
+                    checker,
+                    defs,
+                    visited,
+                    counts,
+                    circularHashes
                 );
                 continue;
             }

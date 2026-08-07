@@ -40,6 +40,22 @@ export interface ValidationContext {
     from?   : FromOption
     mutate? : boolean
     root?   : any
+    /**
+     * Draft 2019-09 / 2020-12 annotation frame for the current instance location.
+     * In-place applicators (`allOf`, `anyOf`, `oneOf`, `if`, `$ref`) merge into the
+     * parent frame; nested property/item applications push a fresh frame.
+     */
+    annotations? : SchemaAnnotationFrame
+    /** Dynamic scope bindings for `$dynamicAnchor` / `$dynamicRef` (and 2019-09 recursive). */
+    dynamicAnchors? : Map<string, JsonSchema | boolean>[]
+}
+
+/** Evaluated properties / items collected for `unevaluatedProperties` / `unevaluatedItems`. */
+export interface SchemaAnnotationFrame
+{
+    properties : Set<string>
+    items      : Set<number>
+    itemsAll   : boolean
 }
 
 
@@ -73,6 +89,86 @@ export interface AssertOptions extends ValidationOptions {
     errorFactory? : ( errors: IValidationError[]) => Error
 }
 
+/** JSON Schema `type` values supported by `compileSchema`. */
+export type JsonSchemaType =
+    | 'string' | 'number' | 'integer' | 'boolean' | 'null' | 'array' | 'object';
+
+/** `x-typescript-type` extensions emitted by `jsonSchema<T>()`. */
+export type JsonSchemaTypescriptType =
+    | 'Date' | 'RegExp' | 'bigint' | 'undefined' | 'Set' | 'Map' | 'Promise'
+    | 'Uint8Array' | 'Uint16Array' | 'Uint32Array'
+    | 'Int8Array' | 'Int16Array' | 'Int32Array'
+    | 'Float32Array' | 'Float64Array'
+    | 'ArrayBuffer' | 'SharedArrayBuffer' | 'DataView' | 'Buffer';
+
+/**
+ * Supported JSON Schema object subset (draft-07 / selected 2019-09+ / 2020-12 keywords)
+ * plus `x-typescript-type` extensions.
+ * Root boolean schemas (`true` / `false`) still work at runtime but are not part of this type.
+ */
+export type JsonSchema = JsonSchemaObject;
+
+export interface JsonSchemaObject
+{
+    $schema?               : string
+    $id?                   : string
+    $defs?                 : Record<string, JsonSchema>
+    definitions?           : Record<string, JsonSchema>
+    $ref?                  : string
+    type?                  : JsonSchemaType | JsonSchemaType[]
+    const?                 : unknown
+    enum?                  : unknown[]
+    minLength?             : number
+    maxLength?             : number
+    pattern?               : string
+    format?                : string
+    minimum?               : number
+    maximum?               : number
+    exclusiveMinimum?      : number | boolean
+    exclusiveMaximum?      : number | boolean
+    multipleOf?            : number
+    minProperties?         : number
+    maxProperties?         : number
+    items?                 : JsonSchema | boolean | ( JsonSchema | boolean )[]
+    prefixItems?           : ( JsonSchema | boolean )[]
+    additionalItems?       : boolean | JsonSchema
+    minItems?              : number
+    maxItems?              : number
+    uniqueItems?           : boolean
+    contains?              : JsonSchema | boolean
+    minContains?           : number
+    maxContains?           : number
+    unevaluatedItems?      : boolean | JsonSchema
+    properties?            : Record<string, JsonSchema | boolean>
+    patternProperties?     : Record<string, JsonSchema | boolean>
+    propertyNames?         : JsonSchema | boolean
+    required?              : string[]
+    additionalProperties?  : boolean | JsonSchema
+    unevaluatedProperties? : boolean | JsonSchema
+    dependencies?          : Record<string, string[] | JsonSchema | boolean>
+    dependentRequired?     : Record<string, string[]>
+    dependentSchemas?      : Record<string, JsonSchema | boolean>
+    contentMediaType?      : string
+    contentEncoding?       : string
+    contentSchema?         : JsonSchema | boolean
+    $anchor?               : string
+    $dynamicAnchor?        : string
+    $dynamicRef?           : string
+    $recursiveAnchor?      : boolean | string
+    $recursiveRef?         : string
+    allOf?                 : ( JsonSchema | boolean )[]
+    anyOf?                 : ( JsonSchema | boolean )[]
+    oneOf?                 : ( JsonSchema | boolean )[]
+    not?                   : JsonSchema | boolean
+    if?                    : JsonSchema | boolean
+    then?                  : JsonSchema | boolean
+    else?                  : JsonSchema | boolean
+    'x-typescript-type'?   : JsonSchemaTypescriptType
+    key?                   : JsonSchema | boolean
+    value?                 : JsonSchema | boolean
+}
+
+export type SchemaValidator = ( v: any, path: string, ctx: ValidationContext ) => any;
 
 const report = ( ctx: ValidationContext, path: string, expected: string, value: any, message?: string ) => 
 {
@@ -121,6 +217,140 @@ function assignOwnProperties( target: any, source: any ): void
     {
         setOwnProperty( target, key, source[key]);
     }
+}
+
+function emptyAnnotations(): SchemaAnnotationFrame
+{
+    return { properties : new Set(), items : new Set(), itemsAll : false };
+}
+
+function ensureAnnotations( ctx: ValidationContext ): SchemaAnnotationFrame
+{
+    if( !ctx.annotations ){ ctx.annotations = emptyAnnotations() }
+
+    return ctx.annotations;
+}
+
+function mergeAnnotations( target: SchemaAnnotationFrame, source?: SchemaAnnotationFrame ): void
+{
+    if( !source ){ return }
+
+    for( const key of source.properties ){ target.properties.add( key ) }
+
+    for( const index of source.items ){ target.items.add( index ) }
+
+    if( source.itemsAll ){ target.itemsAll = true }
+}
+
+/** Run `check` on the same instance location; child annotations merge into the parent frame. */
+function runInPlace(
+    check: SchemaValidator,
+    v: any,
+    path: string,
+    ctx: ValidationContext
+): any
+{
+    const parent = ensureAnnotations( ctx );
+    const child = emptyAnnotations();
+    const prev = ctx.annotations;
+    ctx.annotations = child;
+    const result = check( v, path, ctx );
+    mergeAnnotations( parent, ctx.annotations );
+    ctx.annotations = parent;
+
+    return result;
+}
+
+/** Run `check` on a nested instance; annotations stay local to that call. */
+function runNested(
+    check: SchemaValidator,
+    v: any,
+    path: string,
+    ctx: ValidationContext
+): any
+{
+    const prev = ctx.annotations;
+    ctx.annotations = emptyAnnotations();
+    const result = check( v, path, ctx );
+    ctx.annotations = prev;
+
+    return result;
+}
+
+function markProperty( ctx: ValidationContext, key: string ): void
+{
+    ensureAnnotations( ctx ).properties.add( key );
+}
+
+function markItem( ctx: ValidationContext, index: number ): void
+{
+    ensureAnnotations( ctx ).items.add( index );
+}
+
+function markAllItems( ctx: ValidationContext ): void
+{
+    ensureAnnotations( ctx ).itemsAll = true;
+}
+
+function pushDynamicAnchor( ctx: ValidationContext, name: string, schema: JsonSchema | boolean ): void
+{
+    if( !ctx.dynamicAnchors ){ ctx.dynamicAnchors = [] }
+
+    const top = ctx.dynamicAnchors[ctx.dynamicAnchors.length - 1];
+
+    if( top )
+    {
+        top.set( name, schema );
+    }
+    else
+    {
+        ctx.dynamicAnchors.push( new Map([[ name, schema ]]));
+    }
+}
+
+function resolveDynamicAnchor( ctx: ValidationContext, name: string ): JsonSchema | boolean | undefined
+{
+    if( !ctx.dynamicAnchors ){ return undefined }
+
+    for( let i = ctx.dynamicAnchors.length - 1; i >= 0; i-- )
+    {
+        const found = ctx.dynamicAnchors[i].get( name );
+
+        if( found !== undefined ){ return found }
+    }
+
+    return undefined;
+}
+
+function decodeContentEncoding( value: string, encoding: string ): Buffer | string | undefined
+{
+    const normalized = encoding.toLowerCase();
+
+    if( normalized === 'base64' || normalized === 'base64url' )
+    {
+        try
+        {
+            const standard = normalized === 'base64url'
+                ? value.replace( /-/g, '+' ).replace( /_/g, '/' )
+                : value;
+            const buf = Buffer.from( standard, 'base64' );
+
+            if( buf.length === 0 && value.length > 0 ){ return undefined }
+
+            return buf;
+        }
+        catch
+        {
+            return undefined;
+        }
+    }
+
+    if( normalized === '7bit' || normalized === '8bit' || normalized === 'binary' || normalized === 'quoted-printable' )
+    {
+        return value;
+    }
+
+    return undefined;
 }
 
 function keySetHas( keys: string[] | Set<string>, key: string ): boolean
@@ -1347,6 +1577,105 @@ export const validators = {
         return v;
     },
 
+    minProperties : ( v: any, path: string, ctx: ValidationContext, min: number, message?: string ) =>
+    {
+        if( isPlainObject( v ) && Object.keys( v ).length < min )
+        {
+            report( ctx, path, `MinProperties<${min}>`, v, message );
+        }
+
+        return v;
+    },
+
+    maxProperties : ( v: any, path: string, ctx: ValidationContext, max: number, message?: string ) =>
+    {
+        if( isPlainObject( v ) && Object.keys( v ).length > max )
+        {
+            report( ctx, path, `MaxProperties<${max}>`, v, message );
+        }
+
+        return v;
+    },
+
+    contains : (
+        v           : any,
+        path        : string,
+        ctx         : ValidationContext,
+        itemCheck   : SchemaValidator,
+        minContains : number = 1,
+        maxContains?: number,
+        message?    : string
+    ) =>
+    {
+        if( !Array.isArray( v )){ return v }
+
+        let count = 0;
+
+        for( let i = 0; i < v.length; i++ )
+        {
+            const probe: ValidationContext =
+            {
+                success        : true,
+                errors         : [],
+                mode           : ctx.mode,
+                from           : ctx.from,
+                mutate         : false,
+                root           : ctx.root,
+                dynamicAnchors : ctx.dynamicAnchors
+            };
+            itemCheck( v[i], indexPath( path, i ), probe );
+
+            if( probe.success ){ count++ }
+        }
+
+        if( count < minContains )
+        {
+            report( ctx, path, `Contains<min:${minContains}>`, v, message );
+        }
+
+        if( maxContains !== undefined && count > maxContains )
+        {
+            report( ctx, path, `Contains<max:${maxContains}>`, v, message );
+        }
+
+        return v;
+    },
+
+    propertyNames : (
+        v        : any,
+        path     : string,
+        ctx      : ValidationContext,
+        keyCheck : SchemaValidator,
+        message? : string
+    ) =>
+    {
+        if( !isPlainObject( v )){ return v }
+
+        for( const key of Object.keys( v ))
+        {
+            const keyPath = childPath( path, key );
+            const probe: ValidationContext =
+            {
+                success        : true,
+                errors         : [],
+                mode           : ctx.mode,
+                from           : ctx.from,
+                mutate         : false,
+                root           : ctx.root,
+                dynamicAnchors : ctx.dynamicAnchors
+            };
+            keyCheck( key, keyPath, probe );
+
+            if( !probe.success )
+            {
+                const nested = probe.errors[0]?.error || 'PropertyNames';
+                report( ctx, keyPath, nested, key, message );
+            }
+        }
+
+        return v;
+    },
+
     uniqueItems : ( v: any[], path: string, ctx: ValidationContext, message?: string ) => 
     {
         // Typed scalar sets avoid per-item string encoding (SameValueZero for numbers,
@@ -2089,13 +2418,13 @@ function hasPath( obj: any, path: string ): boolean
     return val !== undefined && val !== null;
 }
 
-const compiledSchemas = new WeakMap<object, Function>();
+const compiledSchemas = new WeakMap<object, SchemaValidator>();
 
-export function getOrCompileSchema( schema: any ): Function
+export function getOrCompileSchema( schema: JsonSchema | boolean ): SchemaValidator
 {
     if( typeof schema === 'boolean' ){ return compileSchema( schema ) }
 
-    if( typeof schema !== 'object' || schema === null )
+    if( typeof schema !== 'object' || schema === null || Array.isArray( schema ))
     {
         throw new Error( 'Invalid JSON Schema: must be a non-null object or boolean' );
     }
@@ -2236,33 +2565,514 @@ export function groupErrorsByPath( errors: IValidationError[]): Record<string, {
     return grouped;
 }
 
-const UNSUPPORTED_SCHEMA_KEYWORDS =
-[
-    'enum',
-    'oneOf',
-    'not',
-    'if',
-    'then',
-    'else',
-    'patternProperties',
-    'propertyNames',
-    'dependencies',
-    'dependentRequired',
-    'dependentSchemas',
-    'contains',
-    'minContains',
-    'maxContains',
-    'prefixItems',
-    'unevaluatedProperties',
-    'unevaluatedItems'
-];
-
-export function compileSchema( schema: any ): ( v: any, path: string, ctx: any ) => any 
+function decodeJsonPointerToken( token: string ): string
 {
-    const rootDefs = schema.$defs || schema.definitions || {};
-    const compiledDefs = new Map<string, any>();
+    return token.replace( /~1/g, '/' ).replace( /~0/g, '~' );
+}
 
-    function build( subSchema: any ): ( v: any, path: string, ctx: any ) => any 
+const SCHEMA_META_KEYS = new Set([
+    '$schema', '$id', '$defs', 'definitions',
+    '$anchor', '$dynamicAnchor', '$recursiveAnchor'
+]);
+
+const SCHEMA_COMBINATOR_KEYS = new Set([
+    '$ref', '$dynamicRef', '$recursiveRef', 'allOf', 'anyOf', 'oneOf'
+]);
+
+/** Resolve a local JSON Pointer / anchor `$ref` against the compiled root schema. */
+function resolveSchemaRef(
+    root: JsonSchema | boolean,
+    ref: string,
+    anchors?: Map<string, JsonSchema | boolean>
+): JsonSchema | boolean
+{
+    if( ref === '#' || ref === '#/' )
+    {
+        return root;
+    }
+
+    if( /^https?:\/\//i.test( ref ))
+    {
+        throw new Error( `Unsupported JSON Schema reference: ${ref}` );
+    }
+
+    // Plain fragment anchor: `#name` (not a JSON Pointer `#/…`).
+    if( ref.startsWith( '#' ) && !ref.startsWith( '#/' ))
+    {
+        const name = decodeURIComponent( ref.slice( 1 ));
+        const found = anchors?.get( name );
+
+        if( found !== undefined ){ return found }
+
+        throw new Error( `Schema reference not found: ${ref}` );
+    }
+
+    if( !ref.startsWith( '#/' ))
+    {
+        throw new Error( `Schema reference not found: ${ref}` );
+    }
+
+    if( typeof root !== 'object' || root === null )
+    {
+        throw new Error( `Schema reference not found: ${ref}` );
+    }
+
+    const tokens = ref.slice( 2 ).split( '/' ).map( decodeJsonPointerToken );
+    let current: any = root;
+
+    for( const token of tokens )
+    {
+        if( Array.isArray( current ))
+        {
+            const index = Number( token );
+
+            if( !Number.isInteger( index ) || index < 0 || index >= current.length )
+            {
+                throw new Error( `Schema reference not found: ${ref}` );
+            }
+
+            current = current[index];
+            continue;
+        }
+
+        if( current === null || typeof current !== 'object' || !Object.hasOwn( current, token ))
+        {
+            throw new Error( `Schema reference not found: ${ref}` );
+        }
+
+        current = current[token];
+    }
+
+    if( current === true || current === false )
+    {
+        return current;
+    }
+
+    if( current === null || typeof current !== 'object' || Array.isArray( current ))
+    {
+        throw new Error( `Schema reference not found: ${ref}` );
+    }
+
+    return current as JsonSchema;
+}
+
+function collectSchemaAnchors( node: unknown, anchors: Map<string, JsonSchema | boolean> ): void
+{
+    if( node === true || node === false || node === null || typeof node !== 'object' ){ return }
+
+    if( Array.isArray( node ))
+    {
+        for( const item of node ){ collectSchemaAnchors( item, anchors ) }
+
+        return;
+    }
+
+    const schema = node as JsonSchemaObject;
+
+    if( typeof schema.$anchor === 'string' ){ anchors.set( schema.$anchor, schema ) }
+
+    if( typeof schema.$dynamicAnchor === 'string' ){ anchors.set( schema.$dynamicAnchor, schema ) }
+
+    if( typeof schema.$recursiveAnchor === 'string' ){ anchors.set( schema.$recursiveAnchor, schema ) }
+
+    if( schema.$recursiveAnchor === true ){ anchors.set( '', schema ) }
+
+    for( const value of Object.values( schema ))
+    {
+        collectSchemaAnchors( value, anchors );
+    }
+}
+
+function schemaHasCombinator( schema: JsonSchemaObject ): boolean
+{
+    return !!( schema.$ref || schema.$dynamicRef || schema.$recursiveRef ||
+        schema.allOf || schema.anyOf || schema.oneOf );
+}
+
+function schemaHasSignificantSibling( schema: JsonSchemaObject ): boolean
+{
+    for( const key of Object.keys( schema ))
+    {
+        if( SCHEMA_META_KEYS.has( key ) || SCHEMA_COMBINATOR_KEYS.has( key )){ continue }
+
+        return true;
+    }
+
+    return false;
+}
+
+function dynamicAnchorName( schema: JsonSchemaObject ): string | undefined
+{
+    if( typeof schema.$dynamicAnchor === 'string' ){ return schema.$dynamicAnchor }
+
+    if( typeof schema.$recursiveAnchor === 'string' ){ return schema.$recursiveAnchor }
+
+    if( schema.$recursiveAnchor === true ){ return '' }
+
+    return undefined;
+}
+
+/**
+ * Schemas produced by {@link openAllOfMemberRoot}: unknown keys must be allowed for sibling-member
+ * merging, but must NOT be annotation-evaluated (so parent `unevaluatedProperties` can see them).
+ */
+const allofOpenedRoots = new WeakSet<object>();
+
+/**
+ * Typeless object schemas inferred during compile: JSON Schema allows undeclared keys by default
+ * without applying the `additionalProperties` applicator (so they stay unevaluated).
+ */
+const typelessInferredObjects = new WeakSet<object>();
+
+/**
+ * allOf members that close unknown keys must not reject sibling keys contributed by other members.
+ * Open only the member's own root object; nested `additionalProperties` stay intact and see the
+ * caller's real `mode`.
+ */
+function openAllOfMemberRoot( schema: JsonSchema | boolean ): JsonSchema | boolean
+{
+    if( typeof schema !== 'object' || schema === null || schema.type !== 'object' )
+    {
+        return schema;
+    }
+
+    if( 'additionalProperties' in schema && schema.additionalProperties !== false )
+    {
+        return schema;
+    }
+
+    const opened = { ...schema, additionalProperties : true as const };
+    allofOpenedRoots.add( opened );
+
+    return opened;
+}
+
+export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
+{
+    const rootSchema = schema;
+    const compiledDefs = new Map<string, SchemaValidator>();
+    const anchors = new Map<string, JsonSchema | boolean>();
+
+    collectSchemaAnchors( rootSchema, anchors );
+
+    function withEnum( check: SchemaValidator, subSchema: JsonSchemaObject ): SchemaValidator
+    {
+        if( !Array.isArray( subSchema.enum )){ return check }
+
+        const values = subSchema.enum;
+
+        return ( v, path, ctx ) =>
+        {
+            v = check( v, path, ctx );
+
+            if( !values.some( expected => deepEqual( v, expected )))
+            {
+                report(
+                    ctx,
+                    path,
+                    `Enum<${values.map( expected => JSON.stringify( expected )).join( '|' )}>`,
+                    v
+                );
+            }
+
+            return v;
+        };
+    }
+
+    function withConst( check: SchemaValidator, subSchema: JsonSchemaObject ): SchemaValidator
+    {
+        if( !Object.hasOwn( subSchema, 'const' )){ return check }
+
+        const expected = subSchema.const;
+
+        return ( v, path, ctx ) =>
+        {
+            v = check( v, path, ctx );
+
+            if( !deepEqual( v, expected ))
+            {
+                report( ctx, path, `Const<${JSON.stringify( expected )}>`, v );
+            }
+
+            return v;
+        };
+    }
+
+    function maybeWrapDynamicAnchor( check: SchemaValidator, subSchema: JsonSchemaObject ): SchemaValidator
+    {
+        const name = dynamicAnchorName( subSchema );
+
+        if( name === undefined ){ return check }
+
+        return ( v, path, ctx ) =>
+        {
+            pushDynamicAnchor( ctx, name, subSchema );
+
+            return check( v, path, ctx );
+        };
+    }
+
+    function finalize( check: SchemaValidator, subSchema: JsonSchemaObject ): SchemaValidator
+    {
+        let wrapped = check;
+
+        if( Object.hasOwn( subSchema, 'not' ))
+        {
+            const inner = build( subSchema.not );
+            const prev = wrapped;
+
+            wrapped = ( v, path, ctx ) =>
+            {
+                const out = prev( v, path, ctx );
+
+                if( !ctx.success ){ return out }
+
+                const probe: ValidationContext =
+                {
+                    success         : true,
+                    errors          : [],
+                    mode            : ctx.mode,
+                    from            : ctx.from,
+                    mutate          : false,
+                    root            : ctx.root,
+                    dynamicAnchors  : ctx.dynamicAnchors
+                };
+                inner( v, path, probe );
+
+                if( probe.success )
+                {
+                    report( ctx, path, 'Schema<not>', v );
+                }
+
+                return out;
+            };
+        }
+
+        if( Object.hasOwn( subSchema, 'if' ))
+        {
+            const ifCheck = build( subSchema.if ?? true );
+            const thenCheck = subSchema.then !== undefined ? build( subSchema.then ) : null;
+            const elseCheck = subSchema.else !== undefined ? build( subSchema.else ) : null;
+            const prev = wrapped;
+
+            wrapped = ( v, path, ctx ) =>
+            {
+                let out = prev( v, path, ctx );
+
+                if( !ctx.success ){ return out }
+
+                const probe: ValidationContext =
+                {
+                    success         : true,
+                    errors          : [],
+                    mode            : ctx.mode,
+                    from            : ctx.from,
+                    mutate          : false,
+                    root            : ctx.root,
+                    annotations     : emptyAnnotations(),
+                    dynamicAnchors  : ctx.dynamicAnchors
+                };
+                ifCheck( v, path, probe );
+                mergeAnnotations( ensureAnnotations( ctx ), probe.annotations );
+
+                if( probe.success )
+                {
+                    if( thenCheck ){ out = runInPlace( thenCheck, v, path, ctx ) }
+                }
+                else if( elseCheck )
+                {
+                    out = runInPlace( elseCheck, v, path, ctx );
+                }
+
+                return out;
+            };
+        }
+
+        if( 'unevaluatedProperties' in subSchema || 'unevaluatedItems' in subSchema )
+        {
+            const unevaluatedProps = subSchema.unevaluatedProperties;
+            const unevaluatedPropsCheck = unevaluatedProps && typeof unevaluatedProps === 'object'
+                ? build( unevaluatedProps )
+                : undefined;
+            const unevaluatedItems = subSchema.unevaluatedItems;
+            const unevaluatedItemsCheck = unevaluatedItems && typeof unevaluatedItems === 'object'
+                ? build( unevaluatedItems )
+                : undefined;
+            const prev = wrapped;
+
+            wrapped = ( v, path, ctx ) =>
+            {
+                let out = prev( v, path, ctx );
+
+                if( !ctx.success ){ return out }
+
+                if( 'unevaluatedProperties' in subSchema && isPlainObject( out ))
+                {
+                    const evaluated = ensureAnnotations( ctx ).properties;
+
+                    for( const key of Object.keys( out ))
+                    {
+                        if( evaluated.has( key )){ continue }
+
+                        if( unevaluatedProps === false )
+                        {
+                            report( ctx, path, `UnevaluatedProperty<${key}>`, out[key]);
+                        }
+                        else if( unevaluatedPropsCheck )
+                        {
+                            setOwnProperty(
+                                out,
+                                key,
+                                runNested( unevaluatedPropsCheck, out[key], childPath( path, key ), ctx )
+                            );
+                        }
+                    }
+                }
+
+                if( 'unevaluatedItems' in subSchema && Array.isArray( out ))
+                {
+                    const ann = ensureAnnotations( ctx );
+
+                    for( let i = 0; i < out.length; i++ )
+                    {
+                        if( ann.itemsAll || ann.items.has( i )){ continue }
+
+                        if( unevaluatedItems === false )
+                        {
+                            report( ctx, path, `UnevaluatedItem<${i}>`, out[i]);
+                        }
+                        else if( unevaluatedItemsCheck )
+                        {
+                            setOwnProperty(
+                                out,
+                                i,
+                                runNested( unevaluatedItemsCheck, out[i], indexPath( path, i ), ctx )
+                            );
+                        }
+                    }
+                }
+
+                return out;
+            };
+        }
+
+        return withConst( withEnum( wrapped, subSchema ), subSchema );
+    }
+
+    function buildRefValidator( refPath: string ): SchemaValidator
+    {
+        if( compiledDefs.has( refPath ))
+        {
+            return compiledDefs.get( refPath )!;
+        }
+
+        const targetSchema = resolveSchemaRef( rootSchema, refPath, anchors );
+
+        let resolved: SchemaValidator | null = null;
+        const proxy: SchemaValidator = ( v, path, ctx ) =>
+        {
+            if( !resolved )
+            {
+                resolved = build( targetSchema );
+            }
+
+            return runInPlace( resolved, v, path, ctx );
+        };
+
+        compiledDefs.set( refPath, proxy );
+
+        return proxy;
+    }
+
+    function buildDynamicRefValidator( refPath: string ): SchemaValidator
+    {
+        const name = refPath.startsWith( '#' ) && !refPath.startsWith( '#/' )
+            ? decodeURIComponent( refPath.slice( 1 ))
+            : refPath === '#' || refPath === '#/'
+                ? ''
+                : decodeURIComponent( refPath.replace( /^#/, '' ));
+
+        return ( v, path, ctx ) =>
+        {
+            const target = resolveDynamicAnchor( ctx, name ) ?? anchors.get( name );
+
+            if( target === undefined )
+            {
+                throw new Error( `Schema reference not found: ${refPath}` );
+            }
+
+            return runInPlace( build( target ), v, path, ctx );
+        };
+    }
+
+    function peelCombinators( subSchema: JsonSchemaObject ): SchemaValidator
+    {
+        const rest: JsonSchemaObject = { ...subSchema };
+        const members: ( JsonSchema | boolean )[] = [];
+
+        if( rest.$ref )
+        {
+            members.push({ $ref : rest.$ref });
+            delete rest.$ref;
+        }
+
+        if( rest.$dynamicRef )
+        {
+            members.push({ $dynamicRef : rest.$dynamicRef });
+            delete rest.$dynamicRef;
+        }
+
+        if( rest.$recursiveRef )
+        {
+            members.push({ $recursiveRef : rest.$recursiveRef });
+            delete rest.$recursiveRef;
+        }
+
+        if( rest.allOf )
+        {
+            members.push( ...rest.allOf );
+            delete rest.allOf;
+        }
+
+        if( rest.anyOf )
+        {
+            members.push({ anyOf : rest.anyOf });
+            delete rest.anyOf;
+        }
+
+        if( rest.oneOf )
+        {
+            members.push({ oneOf : rest.oneOf });
+            delete rest.oneOf;
+        }
+
+        const composed: JsonSchemaObject = { allOf : [] };
+
+        // Lift unevaluated* onto the composed schema so finalize sees merged sibling annotations.
+        if( 'unevaluatedProperties' in rest )
+        {
+            composed.unevaluatedProperties = rest.unevaluatedProperties;
+            delete rest.unevaluatedProperties;
+        }
+
+        if( 'unevaluatedItems' in rest )
+        {
+            composed.unevaluatedItems = rest.unevaluatedItems;
+            delete rest.unevaluatedItems;
+        }
+
+        const restSignificant = Object.keys( rest ).some( key => !SCHEMA_META_KEYS.has( key ));
+        const allOfMembers: ( JsonSchema | boolean )[] = [];
+
+        if( restSignificant ){ allOfMembers.push( rest ) }
+
+        allOfMembers.push( ...members );
+        composed.allOf = allOfMembers;
+
+        return build( composed, { skipPeel : true });
+    }
+
+    function build( subSchema: JsonSchema | boolean | undefined, opts?: { skipPeel? : boolean }): SchemaValidator
     {
         if( subSchema === true || subSchema === undefined )
         {
@@ -2279,22 +3089,29 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
             };
         }
 
-        if( !subSchema || typeof subSchema !== 'object' )
+        if( !subSchema || typeof subSchema !== 'object' || Array.isArray( subSchema ))
         {
             throw new Error( 'Invalid JSON Schema: subschemas must be objects or booleans' );
         }
 
-        for( const keyword of UNSUPPORTED_SCHEMA_KEYWORDS )
-        {
-            if( keyword in subSchema )
-            {
-                throw new Error( `Unsupported JSON Schema keyword: ${keyword}` );
-            }
-        }
-
         if( Array.isArray( subSchema.type ))
         {
-            throw new Error( 'Unsupported JSON Schema keyword: type arrays' );
+            const types = subSchema.type;
+
+            for( const t of types )
+            {
+                if( ![ 'string', 'number', 'integer', 'boolean', 'null', 'array', 'object' ].includes( t ))
+                {
+                    throw new Error( `Unsupported JSON Schema type: ${t}` );
+                }
+            }
+
+            const { type : _type, ...rest } = subSchema;
+
+            return maybeWrapDynamicAnchor( build({
+                ...rest,
+                anyOf : types.map( t => ({ ...rest, type : t }))
+            }), subSchema );
         }
 
         if( typeof subSchema.type === 'string' &&
@@ -2303,104 +3120,90 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
             throw new Error( `Unsupported JSON Schema type: ${subSchema.type}` );
         }
 
-        if( subSchema.$ref ) 
+        if( !opts?.skipPeel && schemaHasCombinator( subSchema ) && schemaHasSignificantSibling( subSchema ))
         {
-            const refPath = subSchema.$ref;
-
-            if( compiledDefs.has( refPath )) 
-            {
-                return ( v, path, ctx ) => compiledDefs.get( refPath )( v, path, ctx );
-            }
-
-            const parts = refPath.split( '/' );
-            const defName = parts[parts.length - 1];
-            const targetSchema = rootDefs[defName];
-
-            if( !targetSchema ) 
-            {
-                throw new Error( `Schema reference not found: ${refPath}` );
-            }
-
-            let resolved: any = null;
-            const proxy = ( v: any, path: string, ctx: any ) => 
-            {
-                if( !resolved ) 
-                {
-                    resolved = build( targetSchema );
-                }
-
-                return resolved( v, path, ctx );
-            };
-
-            compiledDefs.set( refPath, proxy );
-
-            return proxy;
+            return maybeWrapDynamicAnchor( peelCombinators( subSchema ), subSchema );
         }
 
-        if( subSchema['x-typescript-type'] === 'Date' ) 
+        if( subSchema.$ref )
         {
-            return ( v, path, ctx ) => validators.date( v, path, ctx );
+            return maybeWrapDynamicAnchor( buildRefValidator( subSchema.$ref ), subSchema );
         }
 
-        if( subSchema['x-typescript-type'] === 'RegExp' ) 
+        if( subSchema.$dynamicRef )
         {
-            return ( v, path, ctx ) => validators.regexp( v, path, ctx );
+            return maybeWrapDynamicAnchor( buildDynamicRefValidator( subSchema.$dynamicRef ), subSchema );
         }
 
-        if( subSchema['x-typescript-type'] === 'bigint' ) 
+        if( subSchema.$recursiveRef )
         {
-            return ( v, path, ctx ) => validators.bigint( v, path, ctx );
+            return maybeWrapDynamicAnchor( buildDynamicRefValidator( subSchema.$recursiveRef ), subSchema );
         }
 
-        if( subSchema['x-typescript-type'] === 'undefined' ) 
+        if( subSchema['x-typescript-type'] === 'Date' )
         {
-            return ( v, path, ctx ) => validators.undefined( v, path, ctx );
+            return finalize(( v, path, ctx ) => validators.date( v, path, ctx ), subSchema );
         }
 
-        if( subSchema['x-typescript-type'] === 'Set' ) 
+        if( subSchema['x-typescript-type'] === 'RegExp' )
         {
-            const child = build( subSchema.items || {});
-
-            return ( v, path, ctx ) => validators.set( v, path, ctx, child );
+            return finalize(( v, path, ctx ) => validators.regexp( v, path, ctx ), subSchema );
         }
 
-        if( subSchema['x-typescript-type'] === 'Map' ) 
+        if( subSchema['x-typescript-type'] === 'bigint' )
+        {
+            return finalize(( v, path, ctx ) => validators.bigint( v, path, ctx ), subSchema );
+        }
+
+        if( subSchema['x-typescript-type'] === 'undefined' )
+        {
+            return finalize(( v, path, ctx ) => validators.undefined( v, path, ctx ), subSchema );
+        }
+
+        if( subSchema['x-typescript-type'] === 'Set' )
+        {
+            const child = build( subSchema.items && !Array.isArray( subSchema.items ) ? subSchema.items : {});
+
+            return finalize(( v, path, ctx ) => validators.set( v, path, ctx, child ), subSchema );
+        }
+
+        if( subSchema['x-typescript-type'] === 'Map' )
         {
             const keyCheck = build( subSchema.key || { type : 'string' });
             const valueCheck = build( subSchema.value || {});
 
-            return ( v, path, ctx ) => validators.map( v, path, ctx, keyCheck, valueCheck );
+            return finalize(( v, path, ctx ) => validators.map( v, path, ctx, keyCheck, valueCheck ), subSchema );
         }
 
-        if( subSchema['x-typescript-type'] === 'Promise' ) 
+        if( subSchema['x-typescript-type'] === 'Promise' )
         {
-            return ( v, path, ctx ) => 
+            return finalize(( v, path, ctx ) =>
             {
-                if( !( v instanceof Promise )) 
+                if( !( v instanceof Promise ))
                 {
                     report( ctx, path, 'Type<Promise>', v );
                 }
 
                 return v;
-            };
+            }, subSchema );
         }
 
         if( typeof subSchema['x-typescript-type'] === 'string' &&
-            ['Uint8Array', 'Uint16Array', 'Uint32Array', 'Int8Array', 'Int16Array', 'Int32Array', 'Float32Array', 'Float64Array', 'ArrayBuffer', 'SharedArrayBuffer', 'DataView', 'Buffer'].includes( subSchema['x-typescript-type'])) 
+            ['Uint8Array', 'Uint16Array', 'Uint32Array', 'Int8Array', 'Int16Array', 'Int32Array', 'Float32Array', 'Float64Array', 'ArrayBuffer', 'SharedArrayBuffer', 'DataView', 'Buffer'].includes( subSchema['x-typescript-type']))
         {
-            const typeName = subSchema['x-typescript-type'] as string;
+            const typeName = subSchema['x-typescript-type'];
 
-            return ( v, path, ctx ) => 
+            return finalize(( v, path, ctx ) =>
             {
                 const ctor = ( globalThis as any )[typeName];
 
-                if( !ctor || !( v instanceof ctor )) 
+                if( !ctor || !( v instanceof ctor ))
                 {
                     report( ctx, path, `Type<${typeName}>`, v );
                 }
 
                 return v;
-            };
+            }, subSchema );
         }
 
         if( 'x-typescript-type' in subSchema )
@@ -2408,41 +3211,60 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
             throw new Error( `Unsupported x-typescript-type: ${subSchema['x-typescript-type']}` );
         }
 
-        if( subSchema.allOf ) 
+        if( subSchema.allOf )
         {
-            const checks = subSchema.allOf.map(( s: any ) => build( s ));
-            const mergeKeys = subSchema.allOf.map(( s: any ) =>
+            const openedMembers = subSchema.allOf.map(( s ) => openAllOfMemberRoot( s ));
+            const checks = openedMembers.map(( s ) => build( s ));
+            const mergeKeys = openedMembers.map(( s ) =>
             {
-                if( s?.type !== 'object' ||
-                    ( 'additionalProperties' in s && s.additionalProperties !== false ))
+                if( typeof s !== 'object' || s === null || s.type !== 'object' )
+                {
+                    return undefined;
+                }
+
+                // Synthetic opens / explicit additionalProperties:true — only declared props merge;
+                // extras stay on the instance for parent unevaluated* or combinedKeys.
+                if( allofOpenedRoots.has( s ))
+                {
+                    return new Set<string>( Object.keys( s.properties || {}));
+                }
+
+                if( 'additionalProperties' in s && s.additionalProperties !== false )
                 {
                     return undefined;
                 }
 
                 return new Set<string>( Object.keys( s.properties || {}));
             });
-            const allObjectSchemas = subSchema.allOf.length > 0 &&
-                subSchema.allOf.every(( s: any ) => s?.type === 'object' );
-            const allowsAdditional = !allObjectSchemas ||
-                subSchema.allOf.some(( s: any ) =>
-                    'additionalProperties' in s && s.additionalProperties !== false
+            const allOriginallyClosedObjects = subSchema.allOf.length > 0 &&
+                subSchema.allOf.every(( s ) =>
+                    typeof s === 'object' && s !== null && s.type === 'object' &&
+                    !( 'additionalProperties' in s && s.additionalProperties !== false )
                 );
+            // Parent `unevaluatedProperties` owns unknown-key policy. Otherwise closed allOf
+            // still rejects undeclared extras via combinedKeys after members succeed.
+            const allowsAdditional = ( 'unevaluatedProperties' in subSchema ) ||
+                !allOriginallyClosedObjects;
             const combinedKeys = allowsAdditional
                 ? undefined
-                : new Set<string>( subSchema.allOf.flatMap(( s: any ) => Object.keys( s.properties || {})));
+                : new Set<string>( subSchema.allOf.flatMap(( s ) =>
+                    typeof s === 'object' && s !== null ? Object.keys( s.properties || {}) : []
+                ));
 
-            return ( v, path, ctx ) => 
+            return maybeWrapDynamicAnchor( finalize(( v, path, ctx ) =>
             {
                 const errors: IValidationError[] = [];
                 let data: any = undefined;
                 const subCtx: ValidationContext =
                 {
-                    success : true,
-                    errors  : [],
-                    mode    : 'relaxed',
-                    from    : ctx.from,
-                    mutate  : false,
-                    root    : ctx.root
+                    success         : true,
+                    errors          : [],
+                    mode            : ctx.mode,
+                    from            : ctx.from,
+                    mutate          : false,
+                    root            : ctx.root,
+                    annotations     : emptyAnnotations(),
+                    dynamicAnchors  : ctx.dynamicAnchors
                 };
 
                 for( let i = 0; i < checks.length; i++ )
@@ -2452,9 +3274,16 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
                     subCtx.errors.length = 0;
                     subCtx.from = ctx.from;
                     subCtx.root = ctx.root;
+                    subCtx.annotations = emptyAnnotations();
+                    subCtx.dynamicAnchors = ctx.dynamicAnchors;
                     const val = check( v, path, subCtx );
 
                     errors.push( ...subCtx.errors );
+
+                    if( subCtx.success )
+                    {
+                        mergeAnnotations( ensureAnnotations( ctx ), subCtx.annotations );
+                    }
 
                     if( data === undefined )
                     {
@@ -2498,6 +3327,31 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
                         {
                             delete data[key];
                         }
+                        else if( ctx.mode === 'relaxed' )
+                        {
+                            setOwnProperty( data, key, v[key]);
+                        }
+                    }
+                }
+                else if( ( 'unevaluatedProperties' in subSchema ) && isPlainObject( v ) && isPlainObject( data ))
+                {
+                    // Member merges only copy evaluated keys; keep unevaluated extras on the
+                    // result so finalize's unevaluatedProperties can see them.
+                    for( const key of Object.keys( v ))
+                    {
+                        if( Object.hasOwn( data, key )){ continue }
+
+                        setOwnProperty( data, key, v[key]);
+                    }
+                }
+
+                if( ( 'unevaluatedItems' in subSchema ) && Array.isArray( v ) && Array.isArray( data ))
+                {
+                    for( let i = 0; i < v.length; i++ )
+                    {
+                        if( Object.hasOwn( data, i )){ continue }
+
+                        setOwnProperty( data, i, v[i]);
                     }
                 }
 
@@ -2506,36 +3360,169 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
                 if( shouldMutate( ctx ) && commitContainer( v, data )){ return v }
 
                 return data === undefined ? v : data;
-            };
+            }, subSchema ), subSchema );
         }
 
-        if( subSchema.type === 'string' ) 
+        if( subSchema.oneOf )
+        {
+            const checks = subSchema.oneOf.map(( s ) => build( s ));
+
+            return maybeWrapDynamicAnchor( finalize(( v, path, ctx ) =>
+            {
+                const matches: any[] = [];
+                const matchAnnotations: SchemaAnnotationFrame[] = [];
+                const armErrors: IValidationError[] = [];
+                const subCtx: ValidationContext =
+                {
+                    success         : true,
+                    errors          : [],
+                    mode            : ctx.mode,
+                    from            : undefined,
+                    mutate          : false,
+                    root            : ctx.root,
+                    annotations     : emptyAnnotations(),
+                    dynamicAnchors  : ctx.dynamicAnchors
+                };
+
+                const runPass = ( from: ValidationContext['from']) =>
+                {
+                    matches.length = 0;
+                    matchAnnotations.length = 0;
+                    armErrors.length = 0;
+
+                    for( const check of checks )
+                    {
+                        subCtx.success = true;
+                        subCtx.errors.length = 0;
+                        subCtx.from = from;
+                        subCtx.root = ctx.root;
+                        subCtx.annotations = emptyAnnotations();
+                        subCtx.dynamicAnchors = ctx.dynamicAnchors;
+                        const val = check( v, path, subCtx );
+
+                        if( subCtx.success )
+                        {
+                            matches.push( val );
+                            matchAnnotations.push( subCtx.annotations ?? emptyAnnotations());
+                        }
+                        else
+                        {
+                            armErrors.push( ...subCtx.errors );
+                        }
+                    }
+                };
+
+                runPass( undefined );
+
+                if( matches.length === 0 && ctx.from )
+                {
+                    runPass( ctx.from );
+                }
+
+                if( matches.length === 1 )
+                {
+                    mergeAnnotations( ensureAnnotations( ctx ), matchAnnotations[0]);
+                    const val = matches[0];
+
+                    if( shouldMutate( ctx ) && commitContainer( v, val )){ return v }
+
+                    return val;
+                }
+
+                ctx.success = false;
+                ctx.errors.push({
+                    path,
+                    value  : v,
+                    error  : matches.length === 0 ? 'Type<OneOf>' : 'Type<OneOf:multiple>',
+                    issues : armErrors.length > 0 ? armErrors : undefined
+                });
+
+                return v;
+            }, subSchema ), subSchema );
+        }
+
+        if( subSchema.type === 'string' )
         {
             const minLength = subSchema.minLength;
             const maxLength = subSchema.maxLength;
             const pattern = subSchema.pattern ? createSafeRegex( subSchema.pattern ) : undefined;
             const patternStr = subSchema.pattern;
             const format = subSchema.format;
+            const contentEncoding = subSchema.contentEncoding;
+            const contentMediaType = subSchema.contentMediaType;
+            const contentSchemaCheck = subSchema.contentSchema !== undefined
+                ? build( subSchema.contentSchema )
+                : undefined;
 
-            return ( v, path, ctx ) => 
+            return maybeWrapDynamicAnchor( finalize(( v, path, ctx ) =>
             {
                 v = validators.string( v, path, ctx );
 
-                if( v === undefined || v === null ) { return v }
+                if( v === undefined || v === null ){ return v }
 
-                if( minLength !== undefined ) { validators.minLength( v, path, ctx, minLength ) }
+                if( minLength !== undefined ){ validators.minLength( v, path, ctx, minLength ) }
 
-                if( maxLength !== undefined ) { validators.maxLength( v, path, ctx, maxLength ) }
+                if( maxLength !== undefined ){ validators.maxLength( v, path, ctx, maxLength ) }
 
-                if( pattern !== undefined ) { validators.pattern( v, path, ctx, pattern, patternStr ) }
+                if( pattern !== undefined && patternStr !== undefined )
+                {
+                    validators.pattern( v, path, ctx, pattern, patternStr );
+                }
 
-                if( format !== undefined ) { v = validators.format( v, path, ctx, format ) }
+                if( format !== undefined ){ v = validators.format( v, path, ctx, format ) }
+
+                if( typeof v === 'string' &&
+                    ( contentEncoding !== undefined || contentMediaType !== undefined || contentSchemaCheck ))
+                {
+                    let decoded: Buffer | string = v;
+
+                    if( contentEncoding !== undefined )
+                    {
+                        const result = decodeContentEncoding( v, contentEncoding );
+
+                        if( result === undefined )
+                        {
+                            report( ctx, path, 'ContentEncoding', v );
+
+                            return v;
+                        }
+
+                        decoded = result;
+                    }
+
+                    if( contentMediaType === 'application/json' )
+                    {
+                        let parsed: any;
+
+                        try
+                        {
+                            const text = typeof decoded === 'string' ? decoded : decoded.toString( 'utf8' );
+                            parsed = JSON.parse( text );
+                        }
+                        catch
+                        {
+                            report( ctx, path, 'ContentMediaType', v );
+
+                            return v;
+                        }
+
+                        if( contentSchemaCheck )
+                        {
+                            runNested( contentSchemaCheck, parsed, path, ctx );
+                        }
+                    }
+                    else if( contentSchemaCheck )
+                    {
+                        const text = typeof decoded === 'string' ? decoded : decoded.toString( 'utf8' );
+                        runNested( contentSchemaCheck, text, path, ctx );
+                    }
+                }
 
                 return v;
-            };
+            }, subSchema ), subSchema );
         }
 
-        if( subSchema.type === 'number' || subSchema.type === 'integer' ) 
+        if( subSchema.type === 'number' || subSchema.type === 'integer' )
         {
             const isInt = subSchema.type === 'integer';
             const minimum = subSchema.minimum;
@@ -2544,140 +3531,752 @@ export function compileSchema( schema: any ): ( v: any, path: string, ctx: any )
             const exclusiveMaximum = subSchema.exclusiveMaximum;
             const multipleOf = subSchema.multipleOf;
 
-            return ( v, path, ctx ) => 
+            return maybeWrapDynamicAnchor( finalize(( v, path, ctx ) =>
             {
                 v = validators.number( v, path, ctx );
 
-                if( v === undefined || v === null ) { return v }
+                if( v === undefined || v === null ){ return v }
 
-                if( isInt && typeof v === 'number' && !Number.isInteger( v )) 
+                if( isInt && typeof v === 'number' && !Number.isInteger( v ))
                 {
                     report( ctx, path, 'Type<integer>', v );
                 }
 
-                if( minimum !== undefined ) { validators.minimum( v, path, ctx, minimum ) }
+                if( typeof exclusiveMinimum === 'boolean' )
+                {
+                    if( exclusiveMinimum === true && minimum !== undefined )
+                    {
+                        validators.exclusiveMinimum( v, path, ctx, minimum );
+                    }
+                    else if( minimum !== undefined )
+                    {
+                        validators.minimum( v, path, ctx, minimum );
+                    }
+                }
+                else
+                {
+                    if( minimum !== undefined ){ validators.minimum( v, path, ctx, minimum ) }
 
-                if( maximum !== undefined ) { validators.maximum( v, path, ctx, maximum ) }
+                    if( exclusiveMinimum !== undefined )
+                    {
+                        validators.exclusiveMinimum( v, path, ctx, exclusiveMinimum );
+                    }
+                }
 
-                if( exclusiveMinimum !== undefined ) { validators.exclusiveMinimum( v, path, ctx, exclusiveMinimum ) }
+                if( typeof exclusiveMaximum === 'boolean' )
+                {
+                    if( exclusiveMaximum === true && maximum !== undefined )
+                    {
+                        validators.exclusiveMaximum( v, path, ctx, maximum );
+                    }
+                    else if( maximum !== undefined )
+                    {
+                        validators.maximum( v, path, ctx, maximum );
+                    }
+                }
+                else
+                {
+                    if( maximum !== undefined ){ validators.maximum( v, path, ctx, maximum ) }
 
-                if( exclusiveMaximum !== undefined ) { validators.exclusiveMaximum( v, path, ctx, exclusiveMaximum ) }
+                    if( exclusiveMaximum !== undefined )
+                    {
+                        validators.exclusiveMaximum( v, path, ctx, exclusiveMaximum );
+                    }
+                }
 
-                if( multipleOf !== undefined ) { validators.multipleOf( v, path, ctx, multipleOf ) }
+                if( multipleOf !== undefined ){ validators.multipleOf( v, path, ctx, multipleOf ) }
 
                 return v;
-            };
+            }, subSchema ), subSchema );
         }
 
-        if( subSchema.type === 'boolean' ) 
+        if( subSchema.type === 'boolean' )
         {
-            return ( v, path, ctx ) => validators.boolean( v, path, ctx );
+            return maybeWrapDynamicAnchor(
+                finalize(( v, path, ctx ) => validators.boolean( v, path, ctx ), subSchema ),
+                subSchema
+            );
         }
 
-        if( subSchema.type === 'null' ) 
+        if( subSchema.type === 'null' )
         {
-            return ( v, path, ctx ) => validators.null( v, path, ctx );
+            return maybeWrapDynamicAnchor(
+                finalize(( v, path, ctx ) => validators.null( v, path, ctx ), subSchema ),
+                subSchema
+            );
         }
 
-        if( subSchema.anyOf ) 
+        if( subSchema.anyOf )
         {
-            const checks = subSchema.anyOf.map(( s: any ) => build( s ));
+            const checks = subSchema.anyOf.map(( s ) => build( s ));
 
-            return ( v, path, ctx ) => validators.union( v, path, ctx, checks );
-        }
-
-        if( subSchema.type === 'array' ) 
-        {
-            if( Array.isArray( subSchema.items )) 
+            return maybeWrapDynamicAnchor( finalize(( v, path, ctx ) =>
             {
-                const checks = subSchema.items.map(( s: any ) => build( s ));
-
-                return ( v, path, ctx ) => validators.tuple( v, path, ctx, checks );
-            }
-            else 
-            {
-                const check = build( subSchema.items );
-                const minItems = subSchema.minItems;
-                const maxItems = subSchema.maxItems;
-                const uniqueItems = subSchema.uniqueItems;
-
-                return ( v, path, ctx ) => 
+                const successes: any[] = [];
+                const successAnnotations: SchemaAnnotationFrame[] = [];
+                const unionErrors: IValidationError[] = [];
+                const subCtx: ValidationContext =
                 {
-                    v = validators.array( v, path, ctx, check );
+                    success         : true,
+                    errors          : [],
+                    mode            : ctx.mode,
+                    from            : undefined,
+                    mutate          : false,
+                    root            : ctx.root,
+                    annotations     : emptyAnnotations(),
+                    dynamicAnchors  : ctx.dynamicAnchors
+                };
 
-                    if( Array.isArray( v )) 
+                const runPass = ( from: ValidationContext['from']) =>
+                {
+                    successes.length = 0;
+                    successAnnotations.length = 0;
+                    unionErrors.length = 0;
+
+                    for( const check of checks )
                     {
-                        if( minItems !== undefined ) { validators.minItems( v, path, ctx, minItems ) }
+                        subCtx.success = true;
+                        subCtx.errors.length = 0;
+                        subCtx.from = from;
+                        subCtx.root = ctx.root;
+                        subCtx.annotations = emptyAnnotations();
+                        subCtx.dynamicAnchors = ctx.dynamicAnchors;
+                        const val = check( v, path, subCtx );
 
-                        if( maxItems !== undefined ) { validators.maxItems( v, path, ctx, maxItems ) }
+                        if( subCtx.success )
+                        {
+                            successes.push( val );
+                            successAnnotations.push( subCtx.annotations ?? emptyAnnotations());
+                        }
+                        else
+                        {
+                            unionErrors.push( ...subCtx.errors );
+                        }
+                    }
+                };
 
-                        if( uniqueItems ) { validators.uniqueItems( v, path, ctx ) }
+                runPass( undefined );
+
+                if( successes.length === 0 && ctx.from )
+                {
+                    runPass( ctx.from );
+                }
+
+                if( successes.length > 0 )
+                {
+                    for( const ann of successAnnotations )
+                    {
+                        mergeAnnotations( ensureAnnotations( ctx ), ann );
                     }
 
-                    return v;
-                };
-            }
+                    const val = successes[0];
+
+                    if( shouldMutate( ctx ) && commitContainer( v, val )){ return v }
+
+                    return val;
+                }
+
+                ctx.success = false;
+                ctx.errors.push({
+                    path,
+                    value  : v,
+                    error  : 'Type<Union>',
+                    issues : unionErrors.length > 0 ? unionErrors : undefined
+                });
+
+                return v;
+            }, subSchema ), subSchema );
         }
 
-        if( subSchema.type === 'object' ) 
+        if( subSchema.type === 'array' )
         {
-            const props = Object.entries( subSchema.properties || {});
-            const required = subSchema.required || [];
-            const propVals = props.map(([key, s]: [string, any]) => 
+            const draft7Tuple = !!( !subSchema.prefixItems && Array.isArray( subSchema.items ));
+            const prefixSchemas = subSchema.prefixItems
+                ?? ( draft7Tuple ? subSchema.items as ( JsonSchema | boolean )[] : undefined );
+            const prefixChecks = prefixSchemas ? prefixSchemas.map(( s ) => build( s )) : undefined;
+
+            // Draft-07 tuple uses `additionalItems` (default true). Draft 2020-12 uses `items`
+            // after `prefixItems`; omitting it leaves trailing items unevaluated.
+            let restSchema: boolean | JsonSchema | undefined;
+            let restAllowsWithoutEvaluating = false;
+
+            if( draft7Tuple )
             {
-                const isOptional = !required.includes( key );
-                const check = build( s );
-
-                return [key, isOptional, check] as [string, boolean, any];
-            });
-
-            const knownKeys = new Set<string>( Object.keys( subSchema.properties || {}));
-            const additional = 'additionalProperties' in subSchema
-                ? subSchema.additionalProperties
-                : false;
-            const strictKeys = additional === false ? knownKeys : undefined;
-            const additionalCheck = additional && typeof additional === 'object' ? build( additional ) : undefined;
-            // `additionalProperties: true` keeps unknown keys without validating them, so only then does
-            // the shell have to carry them over.
-            const closedShape = additional === false || !!additionalCheck;
-
-            return ( v, path, ctx ) => 
+                restSchema = 'additionalItems' in subSchema ? subSchema.additionalItems : true;
+            }
+            else if( 'prefixItems' in subSchema )
             {
-                const obj = validators.object( v, path, ctx, strictKeys, 'Object' );
-
-                if( obj === false ){ return v }
-                const data = validators.objectShell( obj, ctx, closedShape );
-                validators.props( obj, data, path, ctx, propVals );
-
-                if( additionalCheck ) 
+                if( 'items' in subSchema && subSchema.items !== undefined )
                 {
-                    validators.additionalProps( obj, data, path, ctx, knownKeys, additionalCheck );
+                    restSchema = subSchema.items as boolean | JsonSchema | undefined;
                 }
-                else if( additional === false ) 
+                else
                 {
-                    validators.stripExtras( data, ctx, knownKeys );
+                    restAllowsWithoutEvaluating = true;
+                    restSchema = undefined;
+                }
+            }
+            else
+            {
+                restSchema = subSchema.items as boolean | JsonSchema | undefined;
+            }
+
+            const restCheck = restSchema !== undefined && restSchema !== true && restSchema !== false
+                ? build( restSchema )
+                : undefined;
+            const rejectAllItems = !prefixChecks && restSchema === false;
+            // When there is no prefix, `restAllowsWithoutEvaluating` is unreachable (it only
+            // applies after `prefixItems`), so plain `items`-less arrays allow every element.
+            const allowAllItems = !prefixChecks && ( restSchema === true ||
+                ( restSchema === undefined &&
+                    !( 'unevaluatedItems' in subSchema ) &&
+                    !( 'contains' in subSchema )));
+            const minItems = subSchema.minItems;
+            const maxItems = subSchema.maxItems;
+            const uniqueItems = subSchema.uniqueItems;
+            const containsCheck = 'contains' in subSchema ? build( subSchema.contains ) : undefined;
+            const minContains = subSchema.minContains ?? ( containsCheck ? 1 : undefined );
+            const maxContains = subSchema.maxContains;
+
+            return maybeWrapDynamicAnchor( finalize(( v, path, ctx ) =>
+            {
+                if( !Array.isArray( v ))
+                {
+                    v = validators.array( v, path, ctx, ( x: any ) => x );
+
+                    if( !Array.isArray( v )){ return v }
+                }
+
+                const data = shouldMutate( ctx ) ? v : v.slice();
+
+                if( prefixChecks )
+                {
+                    for( let i = 0; i < prefixChecks.length; i++ )
+                    {
+                        if( i >= v.length ){ break }
+
+                        setOwnProperty(
+                            data,
+                            i,
+                            runNested( prefixChecks[i], v[i], indexPath( path, i ), ctx )
+                        );
+                        markItem( ctx, i );
+                    }
+
+                    for( let i = prefixChecks.length; i < v.length; i++ )
+                    {
+                        if( restSchema === false )
+                        {
+                            report( ctx, path, `AdditionalItem<${i}>`, v[i]);
+                            markItem( ctx, i );
+                        }
+                        else if( restCheck )
+                        {
+                            setOwnProperty(
+                                data,
+                                i,
+                                runNested( restCheck, v[i], indexPath( path, i ), ctx )
+                            );
+                            markItem( ctx, i );
+                        }
+                        else if( restAllowsWithoutEvaluating )
+                        {
+                            setOwnProperty( data, i, v[i]);
+                        }
+                        else
+                        {
+                            setOwnProperty( data, i, v[i]);
+                            markItem( ctx, i );
+                        }
+                    }
+                }
+                else if( rejectAllItems )
+                {
+                    for( let i = 0; i < v.length; i++ )
+                    {
+                        report( ctx, path, `AdditionalItem<${i}>`, v[i]);
+                        markItem( ctx, i );
+                    }
+                }
+                else if( restCheck )
+                {
+                    for( let i = 0; i < v.length; i++ )
+                    {
+                        setOwnProperty(
+                            data,
+                            i,
+                            runNested( restCheck, v[i], indexPath( path, i ), ctx )
+                        );
+                    }
+
+                    markAllItems( ctx );
+                }
+                else if( allowAllItems )
+                {
+                    for( let i = 0; i < v.length; i++ )
+                    {
+                        setOwnProperty( data, i, v[i]);
+                    }
+
+                    if( restSchema === true ){ markAllItems( ctx ) }
+                    else
+                    {
+                        for( let i = 0; i < v.length; i++ ){ markItem( ctx, i ) }
+                    }
+                }
+                else
+                {
+                    for( let i = 0; i < v.length; i++ )
+                    {
+                        setOwnProperty( data, i, v[i]);
+                    }
+                }
+
+                if( minItems !== undefined ){ validators.minItems( data, path, ctx, minItems ) }
+
+                if( maxItems !== undefined ){ validators.maxItems( data, path, ctx, maxItems ) }
+
+                if( uniqueItems ){ validators.uniqueItems( data, path, ctx ) }
+
+                if( containsCheck )
+                {
+                    let count = 0;
+
+                    for( let i = 0; i < v.length; i++ )
+                    {
+                        const probe: ValidationContext =
+                        {
+                            success         : true,
+                            errors          : [],
+                            mode            : ctx.mode,
+                            from            : ctx.from,
+                            mutate          : false,
+                            root            : ctx.root,
+                            dynamicAnchors  : ctx.dynamicAnchors
+                        };
+                        containsCheck( v[i], indexPath( path, i ), probe );
+
+                        if( probe.success )
+                        {
+                            count++;
+                            markItem( ctx, i );
+                        }
+                    }
+
+                    if( minContains !== undefined && count < minContains )
+                    {
+                        report( ctx, path, `Contains<min:${minContains}>`, v );
+                    }
+
+                    if( maxContains !== undefined && count > maxContains )
+                    {
+                        report( ctx, path, `Contains<max:${maxContains}>`, v );
+                    }
                 }
 
                 return data;
-            };
+            }, subSchema ), subSchema );
         }
 
-        if( subSchema.const !== undefined ) 
+        if( subSchema.type === 'object' )
         {
-            const expected = subSchema.const;
-
-            return ( v, path, ctx ) => 
+            const properties = subSchema.properties || {};
+            const required = subSchema.required || [];
+            const propVals: [string, boolean, SchemaValidator][] = Object.entries( properties ).map(([ key, s ]) =>
             {
-                if( v !== expected ) 
+                const isOptional = !required.includes( key );
+                const inner = build( s );
+                const check: SchemaValidator = ( val, p, c ) => runNested( inner, val, p, c );
+
+                return [ key, isOptional, check ];
+            });
+
+            for( const key of required )
+            {
+                if( Object.hasOwn( properties, key )){ continue }
+
+                propVals.push([
+                    key,
+                    false,
+                    ( val, path, ctx ) =>
+                    {
+                        if( val === undefined )
+                        {
+                            report( ctx, path, `Required<${key}>`, val );
+                        }
+
+                        return val;
+                    }
+                ]);
+            }
+
+            const patternEntries = Object.entries( subSchema.patternProperties || {}).map(([ pattern, schema ]) =>
+                ({
+                    regex : createSafeRegex( pattern ),
+                    check : build( schema )
+                }));
+            const propertyNamesCheck = 'propertyNames' in subSchema
+                ? build( subSchema.propertyNames )
+                : undefined;
+            const hasUnevaluatedProps = 'unevaluatedProperties' in subSchema;
+            // Omit `additionalProperties` when only `unevaluatedProperties` is present (or when the
+            // object was inferred from a typeless schema) so unknown keys stay unevaluated.
+            // Explicit `type: 'object'` still defaults to closed otherwise.
+            const additional = 'additionalProperties' in subSchema
+                ? subSchema.additionalProperties
+                : ( hasUnevaluatedProps || typelessInferredObjects.has( subSchema ) ? undefined : false );
+            const additionalCheck = additional && typeof additional === 'object' ? build( additional ) : undefined;
+            // Synthetic allOf opens allow extras without evaluating them for unevaluated*.
+            const allowWithoutEvaluating = additional === true && allofOpenedRoots.has( subSchema );
+            const knownPropKeys = new Set<string>([ ...Object.keys( properties ), ...required ]);
+            const canUseStrictKeys = additional === false &&
+                patternEntries.length === 0 &&
+                !hasUnevaluatedProps;
+            const closedShape = additional === false ||
+                !!additionalCheck ||
+                patternEntries.length > 0 ||
+                hasUnevaluatedProps;
+            const minProperties = subSchema.minProperties;
+            const maxProperties = subSchema.maxProperties;
+            const dependentRequired = subSchema.dependentRequired || {};
+            const dependentSchemas = Object.entries( subSchema.dependentSchemas || {}).map(([ key, schema ]) =>
+                ({ key, check : build( openAllOfMemberRoot( schema ))}));
+            const dependencies = Object.entries( subSchema.dependencies || {}).map(([ key, dep ]) =>
+            {
+                if( Array.isArray( dep ))
                 {
-                    report( ctx, path, `Const<${JSON.stringify( expected )}>`, v );
+                    return { key, required : dep as string[], check : undefined as SchemaValidator | undefined };
                 }
 
-                return v;
-            };
+                return { key, required : undefined as string[] | undefined, check : build( openAllOfMemberRoot( dep )) };
+            });
+
+            return maybeWrapDynamicAnchor( finalize(( v, path, ctx ) =>
+            {
+                const obj = validators.object(
+                    v,
+                    path,
+                    ctx,
+                    canUseStrictKeys ? knownPropKeys : undefined,
+                    'Object'
+                );
+
+                if( obj === false ){ return v }
+
+                const data = validators.objectShell( obj, ctx, closedShape );
+                const evaluated = new Set<string>();
+
+                if( propertyNamesCheck )
+                {
+                    for( const key of Object.keys( obj ))
+                    {
+                        runNested( propertyNamesCheck, key, childPath( path, key ), ctx );
+                    }
+                }
+
+                validators.props( obj, data, path, ctx, propVals );
+
+                for( const key of Object.keys( properties ))
+                {
+                    if( !Object.hasOwn( obj, key )){ continue }
+
+                    evaluated.add( key );
+                    markProperty( ctx, key );
+                }
+
+                for( const key of Object.keys( obj ))
+                {
+                    for( const entry of patternEntries )
+                    {
+                        if( !testRegex( entry.regex, key )){ continue }
+
+                        evaluated.add( key );
+                        markProperty( ctx, key );
+                        setOwnProperty(
+                            data,
+                            key,
+                            runNested( entry.check, obj[key], childPath( path, key ), ctx )
+                        );
+                    }
+                }
+
+                const forAdditional = Object.keys( obj ).filter( key =>
+                {
+                    if( Object.hasOwn( properties, key )){ return false }
+
+                    if( patternEntries.some( entry => testRegex( entry.regex, key ))){ return false }
+
+                    return true;
+                });
+
+                if( additionalCheck )
+                {
+                    for( const key of forAdditional )
+                    {
+                        evaluated.add( key );
+                        markProperty( ctx, key );
+                        setOwnProperty(
+                            data,
+                            key,
+                            runNested( additionalCheck, obj[key], childPath( path, key ), ctx )
+                        );
+                    }
+                }
+                else if( additional === true )
+                {
+                    for( const key of forAdditional )
+                    {
+                        setOwnProperty( data, key, obj[key]);
+
+                        if( allowWithoutEvaluating ){ continue }
+
+                        evaluated.add( key );
+                        markProperty( ctx, key );
+                    }
+                }
+                else if( additional === false )
+                {
+                    for( const key of forAdditional )
+                    {
+                        if( ctx.mode === 'strict' )
+                        {
+                            report( ctx, path, `PropertyNotAllowed<${key}>`, obj[key]);
+                        }
+                        else if( ctx.mode === 'strip' )
+                        {
+                            delete data[key];
+                        }
+                        else
+                        {
+                            setOwnProperty( data, key, obj[key]);
+                        }
+                    }
+                }
+                else
+                {
+                    // `additionalProperties` absent (typically with `unevaluatedProperties`): keep
+                    // values on the shell but leave them unevaluated.
+                    for( const key of forAdditional )
+                    {
+                        setOwnProperty( data, key, obj[key]);
+                    }
+                }
+
+                if( additional === false && !hasUnevaluatedProps )
+                {
+                    validators.stripExtras( data, ctx, new Set([ ...evaluated, ...knownPropKeys ]));
+                }
+
+                if( minProperties !== undefined ){ validators.minProperties( data, path, ctx, minProperties ) }
+
+                if( maxProperties !== undefined ){ validators.maxProperties( data, path, ctx, maxProperties ) }
+
+                for( const [ key, deps ] of Object.entries( dependentRequired ))
+                {
+                    if( !Object.hasOwn( obj, key )){ continue }
+
+                    for( const dep of deps )
+                    {
+                        if( !Object.hasOwn( obj, dep ))
+                        {
+                            report( ctx, childPath( path, dep ), `Required<${dep}>`, undefined );
+                        }
+                    }
+                }
+
+                for( const entry of dependentSchemas )
+                {
+                    if( !Object.hasOwn( obj, entry.key )){ continue }
+
+                    const next = runInPlace( entry.check, obj, path, ctx );
+
+                    if( isPlainObject( next ) && isPlainObject( data ))
+                    {
+                        assignOwnProperties( data, next );
+                    }
+                }
+
+                for( const entry of dependencies )
+                {
+                    if( !Object.hasOwn( obj, entry.key )){ continue }
+
+                    if( entry.required )
+                    {
+                        for( const dep of entry.required )
+                        {
+                            if( !Object.hasOwn( obj, dep ))
+                            {
+                                report( ctx, childPath( path, dep ), `Required<${dep}>`, undefined );
+                            }
+                        }
+                    }
+                    else if( entry.check )
+                    {
+                        const next = runInPlace( entry.check, obj, path, ctx );
+
+                        if( isPlainObject( next ) && isPlainObject( data ))
+                        {
+                            assignOwnProperties( data, next );
+                        }
+                    }
+                }
+
+                return data;
+            }, subSchema ), subSchema );
         }
 
-        return ( v ) => v;
+        // Typeless schemas: JSON Schema applies type-specific keywords only when the instance
+        // already has that type. Explicit `type: 'object'` still defaults additionalProperties to
+        // false (TS closed shapes); inferred object schemas default to true.
+        if( subSchema.type === undefined )
+        {
+            const hasStringKeywords = subSchema.minLength !== undefined ||
+                subSchema.maxLength !== undefined ||
+                subSchema.pattern !== undefined ||
+                subSchema.format !== undefined ||
+                subSchema.contentEncoding !== undefined ||
+                subSchema.contentMediaType !== undefined ||
+                subSchema.contentSchema !== undefined;
+            const hasNumberKeywords = subSchema.minimum !== undefined ||
+                subSchema.maximum !== undefined ||
+                subSchema.exclusiveMinimum !== undefined ||
+                subSchema.exclusiveMaximum !== undefined ||
+                subSchema.multipleOf !== undefined;
+            const hasArrayKeywords = subSchema.items !== undefined ||
+                subSchema.prefixItems !== undefined ||
+                'additionalItems' in subSchema ||
+                subSchema.minItems !== undefined ||
+                subSchema.maxItems !== undefined ||
+                subSchema.uniqueItems === true ||
+                'contains' in subSchema ||
+                subSchema.minContains !== undefined ||
+                subSchema.maxContains !== undefined ||
+                'unevaluatedItems' in subSchema;
+            const hasObjectKeywords = subSchema.properties !== undefined ||
+                subSchema.patternProperties !== undefined ||
+                'propertyNames' in subSchema ||
+                subSchema.required !== undefined ||
+                'additionalProperties' in subSchema ||
+                'unevaluatedProperties' in subSchema ||
+                subSchema.dependencies !== undefined ||
+                subSchema.dependentRequired !== undefined ||
+                subSchema.dependentSchemas !== undefined ||
+                subSchema.minProperties !== undefined ||
+                subSchema.maxProperties !== undefined;
+
+            if( hasStringKeywords || hasNumberKeywords || hasArrayKeywords || hasObjectKeywords )
+            {
+                const stringCheck = hasStringKeywords
+                    ? build({
+                        type             : 'string',
+                        minLength        : subSchema.minLength,
+                        maxLength        : subSchema.maxLength,
+                        pattern          : subSchema.pattern,
+                        format           : subSchema.format,
+                        contentEncoding  : subSchema.contentEncoding,
+                        contentMediaType : subSchema.contentMediaType,
+                        contentSchema    : subSchema.contentSchema
+                    })
+                    : undefined;
+                const numberCheck = hasNumberKeywords
+                    ? build({
+                        type             : 'number',
+                        minimum          : subSchema.minimum,
+                        maximum          : subSchema.maximum,
+                        exclusiveMinimum : subSchema.exclusiveMinimum,
+                        exclusiveMaximum : subSchema.exclusiveMaximum,
+                        multipleOf       : subSchema.multipleOf
+                    })
+                    : undefined;
+                const arrayCheck = hasArrayKeywords
+                    ? build({
+                        type : 'array',
+                        ...( subSchema.items !== undefined ? { items : subSchema.items } : {}),
+                        ...( subSchema.prefixItems !== undefined
+                            ? { prefixItems : subSchema.prefixItems }
+                            : {}),
+                        ...( 'additionalItems' in subSchema
+                            ? { additionalItems : subSchema.additionalItems }
+                            : {}),
+                        ...( subSchema.minItems !== undefined ? { minItems : subSchema.minItems } : {}),
+                        ...( subSchema.maxItems !== undefined ? { maxItems : subSchema.maxItems } : {}),
+                        ...( subSchema.uniqueItems === true ? { uniqueItems : true } : {}),
+                        ...( 'contains' in subSchema ? { contains : subSchema.contains } : {}),
+                        ...( subSchema.minContains !== undefined
+                            ? { minContains : subSchema.minContains }
+                            : {}),
+                        ...( subSchema.maxContains !== undefined
+                            ? { maxContains : subSchema.maxContains }
+                            : {}),
+                        ...( 'unevaluatedItems' in subSchema
+                            ? { unevaluatedItems : subSchema.unevaluatedItems }
+                            : {})
+                    })
+                    : undefined;
+                const objectCheck = hasObjectKeywords
+                    ? build((() =>
+                    {
+                        const inferred: JsonSchemaObject =
+                        {
+                            type : 'object',
+                            ...( subSchema.properties !== undefined
+                                ? { properties : subSchema.properties }
+                                : {}),
+                            ...( subSchema.patternProperties !== undefined
+                                ? { patternProperties : subSchema.patternProperties }
+                                : {}),
+                            ...( 'propertyNames' in subSchema
+                                ? { propertyNames : subSchema.propertyNames }
+                                : {}),
+                            ...( subSchema.required !== undefined ? { required : subSchema.required } : {}),
+                            ...( 'additionalProperties' in subSchema
+                                ? { additionalProperties : subSchema.additionalProperties }
+                                : {}),
+                            ...( 'unevaluatedProperties' in subSchema
+                                ? { unevaluatedProperties : subSchema.unevaluatedProperties }
+                                : {}),
+                            ...( subSchema.dependencies !== undefined
+                                ? { dependencies : subSchema.dependencies }
+                                : {}),
+                            ...( subSchema.dependentRequired !== undefined
+                                ? { dependentRequired : subSchema.dependentRequired }
+                                : {}),
+                            ...( subSchema.dependentSchemas !== undefined
+                                ? { dependentSchemas : subSchema.dependentSchemas }
+                                : {}),
+                            ...( subSchema.minProperties !== undefined
+                                ? { minProperties : subSchema.minProperties }
+                                : {}),
+                            ...( subSchema.maxProperties !== undefined
+                                ? { maxProperties : subSchema.maxProperties }
+                                : {})
+                        };
+
+                        if( !( 'additionalProperties' in subSchema ))
+                        {
+                            typelessInferredObjects.add( inferred );
+                        }
+
+                        return inferred;
+                    })())
+                    : undefined;
+
+                return maybeWrapDynamicAnchor( finalize(( v, path, ctx ) =>
+                {
+                    if( typeof v === 'string' && stringCheck ){ return stringCheck( v, path, ctx ) }
+
+                    if( typeof v === 'number' && numberCheck ){ return numberCheck( v, path, ctx ) }
+
+                    if( Array.isArray( v ) && arrayCheck ){ return arrayCheck( v, path, ctx ) }
+
+                    if( isPlainObject( v ) && objectCheck ){ return objectCheck( v, path, ctx ) }
+
+                    return v;
+                }, subSchema ), subSchema );
+            }
+        }
+
+        return maybeWrapDynamicAnchor( finalize(( v ) => v, subSchema ), subSchema );
     }
 
     return build( schema );

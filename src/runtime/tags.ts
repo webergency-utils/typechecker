@@ -28,6 +28,10 @@ export interface ITypeConstraints
     minItems?         : number
     maxItems?         : number
     uniqueItems?      : boolean
+    minProperties?    : number
+    maxProperties?    : number
+    minContains?      : number
+    maxContains?      : number
     custom?           : string
     default?          : string | number | boolean | null
 }

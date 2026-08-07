@@ -13,7 +13,8 @@ export interface IStaticConstraint
 const STATICALLY_CHECKED: ReadonlySet<string> = new Set<TagName>([
     'minLength', 'maxLength',
     'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf',
-    'minItems', 'maxItems', 'uniqueItems'
+    'minItems', 'maxItems', 'uniqueItems',
+    'minProperties', 'maxProperties'
 ]);
 
 /**
@@ -53,7 +54,8 @@ function getSymbolType( checker: ts.TypeChecker, symbol: ts.Symbol ): ts.Type | 
 type ConstantValue =
     | { kind : 'number', value : number | bigint }
     | { kind : 'string', value : string }
-    | { kind : 'array', value : any[] };
+    | { kind : 'array', value : any[] }
+    | { kind : 'object', keyCount : number };
 
 function unwrapExpression( expr: ts.Expression ): ts.Expression
 {
@@ -121,6 +123,27 @@ export function tryGetConstantValue( expr: ts.Expression ): ConstantValue | unde
         }
 
         return { kind : 'array', value : items };
+    }
+
+    if( ts.isObjectLiteralExpression( expr ))
+    {
+        let keyCount = 0;
+
+        for( const prop of expr.properties )
+        {
+            if( ts.isSpreadAssignment( prop )){ return undefined }
+
+            if( ts.isPropertyAssignment( prop ) ||
+                ts.isShorthandPropertyAssignment( prop ) ||
+                ts.isMethodDeclaration( prop ) ||
+                ts.isGetAccessorDeclaration( prop ) ||
+                ts.isSetAccessorDeclaration( prop ))
+            {
+                keyCount++;
+            }
+        }
+
+        return { kind : 'object', keyCount };
     }
 
     return undefined;
@@ -229,6 +252,26 @@ export function evaluateStaticConstraints(
                 seen.add( key );
             }
         }
+        else if( c.type === 'minProperties' && constant.kind === 'object' )
+        {
+            if( constant.keyCount < c.value )
+            {
+                errors.push(
+                    c.message ||
+                    `Object key count ${constant.keyCount} does not satisfy MinProperties<${c.value}>`
+                );
+            }
+        }
+        else if( c.type === 'maxProperties' && constant.kind === 'object' )
+        {
+            if( constant.keyCount > c.value )
+            {
+                errors.push(
+                    c.message ||
+                    `Object key count ${constant.keyCount} does not satisfy MaxProperties<${c.value}>`
+                );
+            }
+        }
     }
 
     return errors;
@@ -272,19 +315,19 @@ function checkExpressionAgainstType(
 
     const constant = tryGetConstantValue( expr );
 
-    if( !constant )
+    if( constant )
     {
-        if( ts.isObjectLiteralExpression( unwrapExpression( expr )))
+        for( const msg of evaluateStaticConstraints( constant, constraints ))
         {
-            checkObjectLiteral( unwrapExpression( expr ) as ts.ObjectLiteralExpression, type, checker, diagnostics );
+            diagnostics.push( createDiagnostic( expr, msg ));
         }
 
-        return;
+        if( constant.kind !== 'object' ){ return }
     }
 
-    for( const msg of evaluateStaticConstraints( constant, constraints ))
+    if( ts.isObjectLiteralExpression( unwrapExpression( expr )))
     {
-        diagnostics.push( createDiagnostic( expr, msg ));
+        checkObjectLiteral( unwrapExpression( expr ) as ts.ObjectLiteralExpression, type, checker, diagnostics );
     }
 }
 

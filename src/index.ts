@@ -12,10 +12,12 @@ import type {
     GuardOptions,
     AssertGuardOptions,
     ValidationOptions,
-    AssertOptions
+    AssertOptions,
+    JsonSchema
 } from './runtime/validators.js';
 
-export interface IValidation<T> {
+export interface IValidation<T>
+{
     success : boolean
     data?   : T
     errors? : IValidationError[]
@@ -47,31 +49,31 @@ export function validate<T>( _input: unknown, _options?: ValidationMode | Valida
     throw new Error( TRANSFORMER_MISSING );
 }
 
-export function jsonSchema<T>(): any
+export function jsonSchema<T>(): JsonSchema
 {
     throw new Error( TRANSFORMER_MISSING );
 }
 
 /** Schema type-predicate. Mutates in place; root-level coercion that replaces the value fails. */
-export function isSchema( schema: any, input: unknown, options?: ValidationMode | GuardOptions ): boolean
+export function isSchema( schema: JsonSchema, input: unknown, options?: ValidationMode | GuardOptions ): boolean
 {
     return runIs( getOrCompileSchema( schema ), input, options );
 }
 
 /** Validates `input` against a JSON Schema value and returns the (possibly coerced) data. */
-export function assertSchema<T = any>( schema: any, input: unknown, options?: ValidationMode | AssertOptions ): T
+export function assertSchema<T = unknown>( schema: JsonSchema, input: unknown, options?: ValidationMode | AssertOptions ): T
 {
     return runAssert( getOrCompileSchema( schema ), input, options );
 }
 
 /** Schema assertion guard. Mutates in place; root-level coercion that replaces the value throws. */
-export function assertGuardSchema( schema: any, input: unknown, options?: ValidationMode | AssertGuardOptions ): void
+export function assertGuardSchema( schema: JsonSchema, input: unknown, options?: ValidationMode | AssertGuardOptions ): void
 {
     runAssertGuard( getOrCompileSchema( schema ), input, options );
 }
 
 /** Validates `input` against a JSON Schema value. */
-export function validateSchema<T = any>( schema: any, input: unknown, options?: ValidationMode | ValidationOptions ): IValidation<T>
+export function validateSchema<T = unknown>( schema: JsonSchema, input: unknown, options?: ValidationMode | ValidationOptions ): IValidation<T>
 {
     return runValidate( getOrCompileSchema( schema ), input, options );
 }
@@ -98,7 +100,13 @@ export type {
     ValidationContext,
     FromCoercionContext,
     CoercionKind,
-    PathContext
+    PathContext,
+    JsonSchema,
+    JsonSchemaObject,
+    JsonSchemaType,
+    JsonSchemaTypescriptType,
+    SchemaValidator,
+    SchemaAnnotationFrame
 } from './runtime/validators.js';
 export * from './runtime/tags.js';
 export * from './runtime/casing.js';

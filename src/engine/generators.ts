@@ -104,6 +104,9 @@ export function createConstrainedPrimitiveCheck( baseType: string, constraints: 
     const remainingConstraints = constraints.filter( c => c.type !== 'default' && c.type !== 'transform' && c.type !== 'transform_custom' && c.type !== 'message' );
     
     const fallbackMsg = messageConstraint?.value;
+    const minContains = remainingConstraints.find( c => c.type === 'minContains' )?.value as number | undefined;
+    const maxContains = remainingConstraints.find( c => c.type === 'maxContains' )?.value as number | undefined;
+    const nestedReplacements: Record<string, ts.Expression> = {};
     const constraintCode = remainingConstraints.map( c => 
     {
         const valStr = typeof c.value === 'bigint' ? `${c.value}n` : ( typeof c.value === 'string' ? `"${c.value}"` : `${c.value}` );
@@ -133,6 +136,32 @@ export function createConstrainedPrimitiveCheck( baseType: string, constraints: 
         if( c.type === 'maxItems' ) { return `validators.maxItems(v, path, ctx, ${valStr}${msgArg})` }
 
         if( c.type === 'uniqueItems' ) { return `validators.uniqueItems(v, path, ctx${msgArg})` }
+
+        if( c.type === 'minProperties' ) { return `validators.minProperties(v, path, ctx, ${valStr}${msgArg})` }
+
+        if( c.type === 'maxProperties' ) { return `validators.maxProperties(v, path, ctx, ${valStr}${msgArg})` }
+
+        if( c.type === 'minContains' || c.type === 'maxContains' ){ return '' }
+
+        if( c.type === 'contains' )
+        {
+            if( !c.nestedCheck ){ return '' }
+
+            nestedReplacements.__CONTAINS_CHECK__ = c.nestedCheck;
+            const minStr = minContains !== undefined ? String( minContains ) : '1';
+            const maxStr = maxContains !== undefined ? String( maxContains ) : 'undefined';
+
+            return `validators.contains(v, path, ctx, __CONTAINS_CHECK__, ${minStr}, ${maxStr}${msgArg})`;
+        }
+
+        if( c.type === 'propertyNames' )
+        {
+            if( !c.nestedCheck ){ return '' }
+
+            nestedReplacements.__PROPERTY_NAMES_CHECK__ = c.nestedCheck;
+
+            return `validators.propertyNames(v, path, ctx, __PROPERTY_NAMES_CHECK__${msgArg})`;
+        }
 
         if( c.type === 'custom' ) { return `validators.custom(v, path, ctx, ${c.value}${msgArg})` }
 
@@ -223,7 +252,7 @@ export function createConstrainedPrimitiveCheck( baseType: string, constraints: 
         [ts.factory.createIdentifier( 'v' ), ts.factory.createIdentifier( 'path' ), ts.factory.createIdentifier( 'ctx' )]
     );
     
-    return injectNodes( templateToAst( tpl ), { '__BASE_CHECK__' : baseCheck });
+    return injectNodes( templateToAst( tpl ), { '__BASE_CHECK__' : baseCheck, ...nestedReplacements });
 }
 
 export function createLiteralCheck( value: string | number | boolean | ts.PseudoBigInt ): ts.Expression 

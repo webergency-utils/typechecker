@@ -455,6 +455,22 @@ export function applyParseConstraints(
                 throw new ParseError( path, msg || `MaxItems<${c.value}>` );
             }
         }
+        else if( c.type === 'minProperties' )
+        {
+            if( v !== null && typeof v === 'object' && !Array.isArray( v ) &&
+                Object.keys( v ).length < c.value )
+            {
+                throw new ParseError( path, msg || `MinProperties<${c.value}>` );
+            }
+        }
+        else if( c.type === 'maxProperties' )
+        {
+            if( v !== null && typeof v === 'object' && !Array.isArray( v ) &&
+                Object.keys( v ).length > c.value )
+            {
+                throw new ParseError( path, msg || `MaxProperties<${c.value}>` );
+            }
+        }
         else if( c.type === 'format' )
         {
             const ctx =
@@ -502,6 +518,76 @@ export function applyParseConstraints(
                     seen.add( key );
                 }
             }
+        }
+    }
+
+    return v;
+}
+
+export function applyContains(
+    v           : any,
+    path        : string,
+    itemParse   : ( item: any, itemPath: string ) => any,
+    minContains : number = 1,
+    maxContains?: number,
+    message?    : string
+): any
+{
+    if( !Array.isArray( v )){ return v }
+
+    let count = 0;
+
+    for( let i = 0; i < v.length; i++ )
+    {
+        try
+        {
+            itemParse( v[i], path + '[' + i + ']' );
+            count++;
+        }
+        catch( e )
+        {
+            if( !( e instanceof ParseError )){ throw e }
+        }
+    }
+
+    if( count < minContains )
+    {
+        throw new ParseError( path, message || `Contains<min:${minContains}>` );
+    }
+
+    if( maxContains !== undefined && count > maxContains )
+    {
+        throw new ParseError( path, message || `Contains<max:${maxContains}>` );
+    }
+
+    return v;
+}
+
+export function applyPropertyNames(
+    v        : any,
+    path     : string,
+    keyParse : ( key: any, keyPath: string ) => any,
+    message? : string
+): any
+{
+    if( v === null || typeof v !== 'object' || Array.isArray( v )){ return v }
+
+    for( const key of Object.keys( v ))
+    {
+        const keyPath = path ? path + '.' + key : key;
+
+        try
+        {
+            keyParse( key, keyPath );
+        }
+        catch( e )
+        {
+            if( e instanceof ParseError )
+            {
+                throw new ParseError( e.path, message || parseErrorCode( e ));
+            }
+
+            throw e;
         }
     }
 

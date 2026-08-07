@@ -10,9 +10,13 @@ export const BUFFER_LIKE: ReadonlySet<string> = new Set([
 
 export type ParsedConstraint =
     {
-        type     : string
-        value?   : any
-        message? : string
+        type         : string
+        value?       : any
+        message?     : string
+        /** Nested schema type for `contains` / `propertyNames`. */
+        nestedType?  : ts.Type
+        /** AOT validator expression attached by the resolver before emit. */
+        nestedCheck? : ts.Expression
     };
 
 /** No-op scope for codegen unit tests that never hit Custom tags. */
@@ -464,6 +468,18 @@ export function collectConstraintsFromProps(
 
         if( pName === '__uniqueItems' ){ constraints.push({ type : 'uniqueItems', value : true, message : constraintMsg }); continue }
 
+        if( pName === '__contains' )
+        {
+            constraints.push({ type : 'contains', nestedType : actualType, message : constraintMsg });
+            continue;
+        }
+
+        if( pName === '__propertyNames' )
+        {
+            constraints.push({ type : 'propertyNames', nestedType : actualType, message : constraintMsg });
+            continue;
+        }
+
         if( pName === '__requires' )
         {
             let reqVal: string | string[];
@@ -500,7 +516,11 @@ export function collectConstraintsFromProps(
             __pattern          : 'pattern',
             __format           : 'format',
             __minItems         : 'minItems',
-            __maxItems         : 'maxItems'
+            __maxItems         : 'maxItems',
+            __minProperties    : 'minProperties',
+            __maxProperties    : 'maxProperties',
+            __minContains      : 'minContains',
+            __maxContains      : 'maxContains'
         };
 
         const mapped = map[pName];

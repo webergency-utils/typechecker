@@ -11,6 +11,9 @@ const VALUE_TAG_NAMES =
     'minLength', 'maxLength', 'pattern', 'format',
     'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf',
     'minItems', 'maxItems', 'uniqueItems',
+    'minProperties', 'maxProperties',
+    'contains', 'minContains', 'maxContains',
+    'propertyNames',
     'custom', 'requires'
 ] as const;
 

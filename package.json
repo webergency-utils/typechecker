@@ -1,7 +1,6 @@
 {
   "name": "@webergency-utils/typechecker",
-  "version": "1.0.0",
-
+  "version": "0.6.0",
   "type": "module",
   "description": "TypeScript compiler plugin for runtime validation",
   "author": "radixxko",
@@ -121,12 +120,12 @@
     "lint": "eslint .",
     "test": "npm run build && vitest run",
     "bench": "npm run build && node scripts/perf-microbench.mjs",
-    "fuzz": "npm run build:fuzz && jazzer fuzz_typechecker.cjs",
+    "fuzz": "npm run build:fuzz && jazzer fuzz/typechecker.cjs",
     "coverage": "npm run build && vitest run --coverage",
     "clean": "rm -rf ./dist ./dist-fuzz",
     "reset": "npm run clean && rm -rf node_modules package-lock.json && npm i",
     "build": "npm run clean && tsup",
-    "build:fuzz": "esbuild src/fuzz-runtime.ts --bundle --platform=node --format=cjs --outfile=dist-fuzz/runtime.cjs",
+    "build:fuzz": "esbuild fuzz/runtime.ts --bundle --platform=node --format=cjs --outfile=dist-fuzz/runtime.cjs",
     "commit": "node -e \"const version = require('./package.json').version.trim(); require('child_process').execSync('git add . && git commit -m \\\"Version ' + version + '\\\"');\"",
     "version": "npm run build && npm publish --access public && npm run commit && git push"
   },
@@ -151,7 +150,7 @@
     "esbuild": "^0.28.1",
     "eslint": "^10.4.1",
     "tsup": "^8.5.1",
-    "typescript": "^5.7.0",
+    "typescript": "~5.7.0",
     "typescript-eslint": "^8.60.0",
     "vitest": "^4.1.6"
   }

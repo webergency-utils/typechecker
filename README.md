@@ -213,23 +213,31 @@ An assertion guard for type `T`. Always mutates in place (no `mutate` option). `
   assertGuard<User>(data);
   ```
 
-#### `jsonSchema<T>(): any`
+#### `jsonSchema<T>(): JsonSchema`
 
 Generates a raw JSON Schema draft-07 object matching type `T` at compile time.
 
-- **Returns**: `any` (a JSON Schema object).
+- **Returns**: `JsonSchema` (a JSON Schema object).
 - **Example**:
   ```typescript
   const userSchema = jsonSchema<User>();
   ```
 
-#### `validateSchema<T = any>(schema: any, input: unknown, options?: ValidationMode | ValidationOptions): IValidation<T>`
+#### `validateSchema<T = unknown>(schema: JsonSchema, input: unknown, options?: ValidationMode | ValidationOptions): IValidation<T>`
 
 Validates `input` against a **runtime JSON Schema** value (not a TypeScript generic).
 
-Only the documented schema subset is compiled. Recognized validation keywords that are not implemented
-(for example `enum`, `oneOf`, and `not`) throw during schema compilation instead of silently accepting data.
+Only the documented schema subset is compiled. Supported keywords include core types and constraints,
+`allOf` / `anyOf` / `oneOf` / `not` / `enum` / `if`/`then`/`else`, local `$ref` / `$anchor` /
+`$dynamicRef` / `$dynamicAnchor` / `$recursiveRef` / `$recursiveAnchor`, `const`, type arrays,
+`patternProperties`, `propertyNames`, `dependencies` / `dependentRequired` / `dependentSchemas`,
+`contains` / `minContains` / `maxContains`, `prefixItems` / `additionalItems`,
+`unevaluatedProperties` / `unevaluatedItems` (draft 2019-09 / 2020-12 annotation collection across
+in-place applicators including sibling `allOf` arms), `minProperties` / `maxProperties`,
+`contentEncoding` / `contentMediaType` / `contentSchema`, and draft-04 boolean
+`exclusiveMinimum` / `exclusiveMaximum`. Remote `http(s)` `$ref` values are rejected.
 Schema `pattern` values are rejected when they exceed the safety limit or contain common catastrophic-backtracking constructs.
+Arrays are not valid schemas.
 
 - **Parameters**:
   - `schema`: JSON Schema object.
@@ -240,15 +248,15 @@ Schema `pattern` values are rejected when they exceed the safety limit or contai
   const result = validateSchema({ type: 'string', minLength: 2 }, name);
   ```
 
-#### `isSchema(schema: any, input: unknown, options?: ValidationMode | GuardOptions): boolean`
+#### `isSchema(schema: JsonSchema, input: unknown, options?: ValidationMode | GuardOptions): boolean`
 
 Schema type-predicate. Always mutates in place; root replacement fails the guard.
 
-#### `assertSchema<T = any>(schema: any, input: unknown, options?: ValidationMode | AssertOptions): T`
+#### `assertSchema<T = unknown>(schema: JsonSchema, input: unknown, options?: ValidationMode | AssertOptions): T`
 
 Like `assert`, but against a JSON Schema value.
 
-#### `assertGuardSchema(schema: any, input: unknown, options?: ValidationMode | AssertGuardOptions): void`
+#### `assertGuardSchema(schema: JsonSchema, input: unknown, options?: ValidationMode | AssertGuardOptions): void`
 
 Like `assertGuard`, but against a JSON Schema value. Root replacement throws.
 
@@ -460,9 +468,80 @@ Used to apply value constraints to types.
 | `constraint.MinItems<N, Msg?>` | Restricts array length to $\ge N$. |
 | `constraint.MaxItems<N, Msg?>` | Restricts array length to $\le N$. |
 | `constraint.UniqueItems<Msg?>` | Restricts arrays to deeply unique items. |
+| `constraint.MinProperties<N, Msg?>` | Restricts object own-key count to $\ge N$. |
+| `constraint.MaxProperties<N, Msg?>` | Restricts object own-key count to $\le N$. |
+| `constraint.PropertiesRange<Min, Max>` | Shorthand for `MinProperties<Min> & MaxProperties<Max>`. |
+| `constraint.Contains<T, Msg?>` | Array must contain ≥1 element matching nested type `T` (JSON Schema `contains`). Pair with `MinContains` / `MaxContains` for counts. |
+| `constraint.MinContains<N, Msg?>` | Minimum number of `contains` matches (requires `Contains`). |
+| `constraint.MaxContains<N, Msg?>` | Maximum number of `contains` matches (requires `Contains`). |
+| `constraint.PropertyNames<T, Msg?>` | Every own key must satisfy nested type `T` (JSON Schema `propertyNames`). |
 | `constraint.Custom<Fn, Msg?>` | Runs a custom validation function: `(val, PathContext) => boolean` (`key`, `path`, `parent`, `root`, optional `index`). |
 | `constraint.Requires<Path | [Paths], Msg?>` | Enforces that other object property paths exist. |
 | `constraint.Message<Msg>` | Fallback custom error message. |
+
+**Object / array cardinality cookbook**
+
+`MinProperties` / `MaxProperties` / `PropertiesRange` count **own enumerable keys** (not array length — use `MinItems` / `MaxItems` for that). `Contains` probes array elements without requiring every element to match. `PropertyNames` validates each key string.
+
+```typescript
+import { assert, jsonSchema, constraint } from '@webergency-utils/typechecker';
+
+// Own-key count on open objects
+type Bag = Record<string, number> & constraint.PropertiesRange<2, 5>;
+
+assert<Bag>({ a: 1, b: 2 });
+// assert<Bag>({ a: 1 });           // → MinProperties<2>
+// assert<Bag>({ a:1,b:2,c:3,d:4,e:5,f:6 }); // → MaxProperties<5>
+
+// At least two string elements with length ≥ 2 (other elements may be numbers)
+type Tags = (string | number)[] &
+  constraint.Contains<string & constraint.MinLength<2>> &
+  constraint.MinContains<2> &
+  constraint.MaxContains<4>;
+
+assert<Tags>(['ab', 1, 'cd']);
+// assert<Tags>(['ab', 1]);          // → Contains<min:2>
+// assert<Tags>(['ab', 'cd', 'ef', 'gh', 'ij']); // → Contains<max:4>
+
+// Every own key must be lowercase letters
+type Named = Record<string, number> &
+  constraint.PropertyNames<string & constraint.Pattern<'^[a-z]+$'>>;
+
+assert<Named>({ aa: 1, bb: 2 });
+// assert<Named>({ AA: 1 });         // key fails Pattern
+
+// Optional custom messages (second type argument)
+type NeedTwo = Record<string, unknown> &
+  constraint.MinProperties<2, 'need at least two fields'>;
+```
+
+**Tag → JSON Schema**
+
+`jsonSchema<T>()` writes the matching draft keywords onto the peeled base schema:
+
+| TypeScript tag | JSON Schema keyword(s) |
+| :--- | :--- |
+| `MinLength` / `MaxLength` / `Length` | `minLength` / `maxLength` |
+| `Minimum` / `Maximum` / `Range` | `minimum` / `maximum` |
+| `ExclusiveMinimum` / `ExclusiveMaximum` | `exclusiveMinimum` / `exclusiveMaximum` |
+| `MultipleOf` | `multipleOf` |
+| `Pattern` | `pattern` |
+| `Format` | `format` |
+| `MinItems` / `MaxItems` | `minItems` / `maxItems` |
+| `UniqueItems` | `uniqueItems: true` |
+| `MinProperties` / `MaxProperties` / `PropertiesRange` | `minProperties` / `maxProperties` |
+| `Contains<T>` | `contains` ← nested `jsonSchema` of `T` |
+| `MinContains` / `MaxContains` | `minContains` / `maxContains` |
+| `PropertyNames<T>` | `propertyNames` ← nested `jsonSchema` of `T` |
+| `Requires` | `requires` (library extension) |
+| `tag.Default` | `default` |
+
+```typescript
+type Bag = Record<string, number> & constraint.PropertiesRange<2, 5>;
+const schema = jsonSchema<Bag>();
+// → { type: 'object', additionalProperties: { type: 'number' },
+//     minProperties: 2, maxProperties: 5 }
+```
 
 #### `format` Namespace
 

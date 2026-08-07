@@ -136,6 +136,77 @@ export type UniqueItems<Msg extends string = string> =
         readonly __uniqueItems_message? : Msg
     };
 
+// Object Constraints
+export type MinProperties
+<
+    N   extends number,
+    Msg extends string = string
+>
+    =
+        {
+            readonly __minProperties?         : N
+            readonly __minProperties_message? : Msg
+        };
+
+export type MaxProperties
+<
+    N   extends number,
+    Msg extends string = string
+>
+    =
+        {
+            readonly __maxProperties?         : N
+            readonly __maxProperties_message? : Msg
+        };
+
+export type PropertiesRange<Min extends number, Max extends number> =
+    MinProperties<Min> & MaxProperties<Max>;
+
+// Array `contains` / object `propertyNames` (nested schema tags)
+export type Contains
+<
+    T,
+    Msg extends string = string
+>
+    =
+        {
+            readonly __contains?         : T
+            readonly __contains_message? : Msg
+        };
+
+export type MinContains
+<
+    N   extends number,
+    Msg extends string = string
+>
+    =
+        {
+            readonly __minContains?         : N
+            readonly __minContains_message? : Msg
+        };
+
+export type MaxContains
+<
+    N   extends number,
+    Msg extends string = string
+>
+    =
+        {
+            readonly __maxContains?         : N
+            readonly __maxContains_message? : Msg
+        };
+
+export type PropertyNames
+<
+    T,
+    Msg extends string = string
+>
+    =
+        {
+            readonly __propertyNames?         : T
+            readonly __propertyNames_message? : Msg
+        };
+
 // Custom Validation function link
 export type Custom
 <

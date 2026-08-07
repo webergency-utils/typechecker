@@ -213,7 +213,10 @@ function wrapConstraints(
     varName      : string,
     pathExpr     : string,
     from         : ParseSource,
-    rootExpr     : string
+    rootExpr     : string,
+    checker      : ts.TypeChecker,
+    mode         : ValidationMode,
+    scope        : ICustomFunctionScope
 ): string
 {
     if( constraints.length === 0 )
@@ -228,9 +231,17 @@ function wrapConstraints(
         c.type !== 'transform' &&
         c.type !== 'transform_custom' &&
         c.type !== 'message' &&
-        c.type !== 'custom'
+        c.type !== 'custom' &&
+        c.type !== 'contains' &&
+        c.type !== 'propertyNames' &&
+        c.type !== 'minContains' &&
+        c.type !== 'maxContains'
     );
     const customConstraints = constraints.filter( c => c.type === 'custom' );
+    const containsC = constraints.find( c => c.type === 'contains' );
+    const propertyNamesC = constraints.find( c => c.type === 'propertyNames' );
+    const minContains = constraints.find( c => c.type === 'minContains' )?.value as number | undefined;
+    const maxContains = constraints.find( c => c.type === 'maxContains' )?.value as number | undefined;
     const inner = innerFactory( '__v', 'p' );
 
     let customTransformCode = '';
@@ -255,7 +266,33 @@ function wrapConstraints(
         customConstraintCode = `if( __v !== undefined && __v !== null ){ ${stmts} } `;
     }
 
-    return `( function( raw, p, root ){ let __v = __tcRuntime.applyParseConstraints( raw, p, ${JSON.stringify( early )}, ${JSON.stringify( from )} ); ${customTransformCode}__v = ${inner}; __v = __tcRuntime.applyParseConstraints( __v, p, ${JSON.stringify( late )}, ${JSON.stringify( from )} ); ${customConstraintCode}return __v; })( ${varName}, ${pathExpr || '""'}, ${rootExpr} )`;
+    let nestedConstraintCode = '';
+
+    if( containsC?.nestedType )
+    {
+        const itemBody = buildValidation(
+            containsC.nestedType, checker, mode, from, 'item', 'itemP', rootExpr, scope
+        );
+        const minStr = minContains !== undefined ? String( minContains ) : '1';
+        const maxStr = maxContains !== undefined ? String( maxContains ) : 'undefined';
+        const msgArg = containsC.message !== undefined ? `, ${JSON.stringify( containsC.message )}` : '';
+        nestedConstraintCode +=
+            `__v = __tcRuntime.applyContains(__v, p, (item, itemP) => ${itemBody}, ${minStr}, ${maxStr}${msgArg}); `;
+    }
+
+    if( propertyNamesC?.nestedType )
+    {
+        const keyBody = buildValidation(
+            propertyNamesC.nestedType, checker, mode, from, 'key', 'keyP', rootExpr, scope
+        );
+        const msgArg = propertyNamesC.message !== undefined
+            ? `, ${JSON.stringify( propertyNamesC.message )}`
+            : '';
+        nestedConstraintCode +=
+            `__v = __tcRuntime.applyPropertyNames(__v, p, (key, keyP) => ${keyBody}${msgArg}); `;
+    }
+
+    return `( function( raw, p, root ){ let __v = __tcRuntime.applyParseConstraints( raw, p, ${JSON.stringify( early )}, ${JSON.stringify( from )} ); ${customTransformCode}__v = ${inner}; __v = __tcRuntime.applyParseConstraints( __v, p, ${JSON.stringify( late )}, ${JSON.stringify( from )} ); ${nestedConstraintCode}${customConstraintCode}return __v; })( ${varName}, ${pathExpr || '""'}, ${rootExpr} )`;
 }
 
 function buildValidation(
@@ -302,7 +339,10 @@ function buildValidation(
                         varName,
                         pathExpr,
                         from,
-                        rootExpr
+                        rootExpr,
+                        checker,
+                        mode,
+                        scope
                     );
                 }
             }
@@ -324,7 +364,10 @@ function buildValidation(
         varName,
         pathExpr,
         from,
-        rootExpr
+        rootExpr,
+        checker,
+        mode,
+        scope
     );
 }
 
