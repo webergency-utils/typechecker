@@ -1,6 +1,25 @@
 const { FuzzedDataProvider } = require( '@jazzer.js/core' );
 const runtime = require( '../dist-fuzz/runtime.cjs' );
 
+function isExpectedFuzzError( e )
+{
+    if( e instanceof RangeError || e instanceof TypeError ){ return true }
+
+    if( runtime.ParseError && e instanceof runtime.ParseError ){ return true }
+
+    if( runtime.SerializationError && e instanceof runtime.SerializationError ){ return true }
+
+    // Intentional API: colliding keys under a target casing throw a plain Error.
+    if( e instanceof Error &&
+        typeof e.message === 'string' &&
+        e.message.startsWith( 'Casing conversion collision:' ))
+    {
+        return true;
+    }
+
+    return false;
+}
+
 function createFuzzedInput( provider, depth = 0, maxDepth = 3 )
 {
     if( depth >= maxDepth )
@@ -159,11 +178,7 @@ module.exports.fuzz = function( data )
         }
         catch( e )
         {
-            if( !( e instanceof ParseError ) && !( e instanceof SerializationError ) &&
-                !( e instanceof RangeError ) && !( e instanceof TypeError ))
-            {
-                throw e;
-            }
+            if( !isExpectedFuzzError( e )){ throw e }
         }
 
         const ctx = { success : true, errors : [], mode, from, mutate : provider.consumeBoolean() };
@@ -189,9 +204,16 @@ module.exports.fuzz = function( data )
 
         if( input && typeof input === 'object' && !Array.isArray( input ))
         {
-            convertPropertyCasing( input, provider.pickValue([
-                'snake_case', 'camelCase', 'PascalCase', 'kebab-case', 'dot.case'
-            ]));
+            try
+            {
+                convertPropertyCasing( input, provider.pickValue([
+                    'snake_case', 'camelCase', 'PascalCase', 'kebab-case', 'dot.case'
+                ]));
+            }
+            catch( e )
+            {
+                if( !isExpectedFuzzError( e )){ throw e }
+            }
         }
 
         if( ctx.errors.length )
@@ -204,12 +226,7 @@ module.exports.fuzz = function( data )
     }
     catch( e )
     {
-        if( e instanceof RangeError || e instanceof TypeError ||
-            ( runtime.ParseError && e instanceof runtime.ParseError ) ||
-            ( runtime.SerializationError && e instanceof runtime.SerializationError ))
-        {
-            return;
-        }
+        if( isExpectedFuzzError( e )){ return }
 
         throw e;
     }
