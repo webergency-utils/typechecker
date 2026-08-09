@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: npm
     permissions:
-      contents: read
+      contents: write
       id-token: write
 
     steps:
@@ -35,3 +35,41 @@ jobs:
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
+
+      - name: Attach SLSA provenance to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PKG="$(node -p "require('./package.json').name")"
+          VER="$(node -p "require('./package.json').version")"
+          TAG="${{ github.event.release.tag_name }}"
+          OUT="attestation.intoto.jsonl"
+
+          echo "Waiting for npm attestations for ${PKG}@${VER}..."
+          URL=""
+          for i in $(seq 1 30); do
+            URL="$(npm view "${PKG}@${VER}" dist.attestations.url 2>/dev/null || true)"
+            if [ -n "${URL}" ] && [ "${URL}" != "undefined" ]; then
+              break
+            fi
+            sleep 5
+          done
+
+          if [ -z "${URL}" ] || [ "${URL}" = "undefined" ]; then
+            echo "Timed out waiting for npm attestations URL"
+            exit 1
+          fi
+
+          echo "Fetching attestations from ${URL}"
+          curl -fsSL "${URL}" \
+            | jq -c '.attestations[].bundle.dsseEnvelope' \
+            > "${OUT}"
+
+          if [ ! -s "${OUT}" ]; then
+            echo "No DSSE envelopes found in attestations response"
+            exit 1
+          fi
+
+          echo "Uploading ${OUT} to release ${TAG}"
+          gh release upload "${TAG}" "${OUT}" --clobber
