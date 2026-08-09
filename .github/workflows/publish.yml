@@ -32,19 +32,15 @@ jobs:
         run: npm run build
 
       - name: Publish
-        run: |
-          # setup-node writes //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}.
-          # When the secret is unset, an empty token breaks OIDC Trusted Publishing
-          # and npm reports it as E404 for scoped packages.
-          npm config delete //registry.npmjs.org/:_authToken || true
-          npm publish --provenance --access public
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
 
       - name: Attach SLSA provenance to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          PKG="$(node -p "require('./package.json').name")"
           VER="$(node -p "require('./package.json').version")"
           TAG="${{ github.event.release.tag_name }}"
           OUT="attestation.intoto.jsonl"
