@@ -15,6 +15,7 @@ import type {
     AssertOptions,
     JsonSchema
 } from './runtime/validators.js';
+import type { JsonReviver, JsonReplacer, TransformFn } from './runtime/transform.js';
 
 export interface IValidation<T>
 {
@@ -113,21 +114,27 @@ export * from './runtime/casing.js';
 export * from './runtime/serializer-runtime.js';
 export * from './runtime/parse-runtime.js';
 
+export type { JsonReviver, JsonReplacer, TransformFn, TransformContext } from './runtime/transform.js';
+
 export type SerializationMode = ValidationMode;
 export type SerializeFormat = 'json' | 'query';
 export type ParseSource = 'json' | 'query' | 'string';
 
 export interface SerializerOptions
 {
-    mode?   : SerializationMode
-    format? : SerializeFormat
-    to?     : SerializeFormat
+    mode?      : SerializationMode
+    format?    : SerializeFormat
+    to?        : SerializeFormat
+    replacer?  : JsonReplacer
+    transform? : TransformFn | TransformFn[]
 }
 
 export interface ParseOptions
 {
-    mode? : ValidationMode
-    from? : ParseSource
+    mode?      : ValidationMode
+    from?      : ParseSource
+    reviver?   : JsonReviver
+    transform? : TransformFn | TransformFn[]
 }
 
 /** AOT Macro: Compiles a fast serializer function for type `T`. */
@@ -143,7 +150,7 @@ export function stringify<T>( _input: T, _options?: ValidationMode | SerializerO
 }
 
 /** AOT Macro: Single-pass parses and validates `input` into type `T`. */
-export function parse<T>( _input: unknown, _options?: ValidationMode | ParseOptions ): ResolveDefaults<T>
+export function parse<T>( _input: string, _options?: ValidationMode | ParseOptions ): ResolveDefaults<T>
 {
     throw new Error( TRANSFORMER_MISSING );
 }

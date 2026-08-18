@@ -133,6 +133,8 @@ describe( 'Parse', () =>
             expect( parseQueryString( 'active&debug=true' )).toEqual({ active : true, debug : 'true' });
             expect( parseQueryString( '' )).toEqual({});
             expect( parseQueryString( '&&&a=1&&b=&c&&' )).toEqual({ a : '1', b : '', c : true });
+            expect(() => parseQueryString( '?id=123' )).toThrow( /Invalid query/ );
+            expect(() => parseQueryString( '?' )).toThrow( /Invalid query/ );
         });
 
         it( 'covers ParseError root path formatting', () =>
@@ -440,6 +442,10 @@ describe( 'Parse', () =>
 
             expect( code ).toContain( 'expectString' );
             expect( code ).toContain( 'JSON.parse' );
+            expect( code ).toContain( 'reviveTree' );
+            expect( code ).toContain( 'applyParseTransform' );
+            expect( code ).not.toContain( 'URLSearchParams' );
+            expect( code ).not.toContain( 'startsWith' );
         });
 
         it( 'emits a passthrough body for any and unknown', () =>
@@ -451,9 +457,16 @@ describe( 'Parse', () =>
                 const query = generateParseCode( dummyType, {} as any, { from : 'query' });
 
                 expect( json ).toContain( 'JSON.parse' );
+                expect( json ).toContain( 'expectString' );
                 expect( json ).not.toContain( 'expectObject' );
+                expect( json ).not.toContain( 'URLSearchParams' );
                 expect( query ).toContain( 'parseQueryString' );
+                expect( query ).not.toContain( 'stripQueryPrefix' );
+                expect( query ).toContain( 'reviveTree' );
+                expect( query ).toContain( 'expectString' );
                 expect( query ).not.toContain( 'expectObject' );
+                expect( query ).not.toContain( 'URLSearchParams' );
+                expect( query ).not.toContain( '[=%&]' );
             }
         });
 
@@ -476,8 +489,10 @@ describe( 'Parse', () =>
             const code = generateParseCode( dummyType, {} as any, { from : 'string' });
 
             expect( code ).toContain( 'expectString' );
+            expect( code ).toContain( 'function( raw, options )' );
             expect( code ).not.toContain( 'parseQueryString' );
             expect( code ).not.toContain( 'JSON.parse' );
+            expect( code ).not.toContain( 'reviver' );
         });
 
         it( 'rejects non-scalar roots for from:string at codegen', () =>
@@ -561,7 +576,7 @@ describe( 'Parse', () =>
             ` )).toContain( 'expectArray' );
         });
 
-        it( 'compiles query parsers with coercions and URLSearchParams branch', () =>
+        it( 'compiles query parsers with coercions and no leading ?', () =>
         {
             const code = compile( `
                 import { parse } from './src/index.js';
@@ -569,15 +584,12 @@ describe( 'Parse', () =>
                 export function run( qs: string ) { return parse<SearchQuery>( qs, { from: 'query', mode: 'strict' } ); }
             ` );
             expect( code ).toContain( '__tcRuntime.parseQueryString' );
+            expect( code ).not.toContain( 'stripQueryPrefix' );
+            expect( code ).toContain( '__tcRuntime.expectString' );
             expect( code ).toContain( '__tcRuntime.coerceNumber' );
             expect( code ).toContain( '__tcRuntime.coerceBoolean' );
-
-            const usp = compile( `
-                import { parse } from './src/index.js';
-                interface Params { id: number }
-                export function run( searchParams: URLSearchParams ) { return parse<Params>( searchParams, { from: 'query' } ); }
-            ` );
-            expect( usp ).toContain( 'instanceof URLSearchParams' );
+            expect( code ).not.toContain( 'URLSearchParams' );
+            expect( code ).not.toContain( '[=%&]' );
 
             expect( compile( `
                 import { parse } from './src/index.js';
@@ -590,9 +602,9 @@ describe( 'Parse', () =>
         {
             const code = compile( `
                 import { parse } from './src/index.js';
-                export function asString( v: unknown ) { return parse<string>( v, { from: 'string' } ); }
-                export function asNumber( v: unknown ) { return parse<number>( v, { from: 'string' } ); }
-                export function asBool( v: unknown ) { return parse<boolean>( v, { from: 'string' } ); }
+                export function asString( v: string ) { return parse<string>( v, { from: 'string' } ); }
+                export function asNumber( v: string ) { return parse<number>( v, { from: 'string' } ); }
+                export function asBool( v: string ) { return parse<boolean>( v, { from: 'string' } ); }
             ` );
             expect( code ).toContain( '__tcRuntime.expectString' );
             expect( code ).toContain( '__tcRuntime.coerceNumber' );
@@ -602,7 +614,7 @@ describe( 'Parse', () =>
             expect(() => compile( `
                 import { parse } from './src/index.js';
                 interface Bag { a: string }
-                export function run( v: unknown ) { return parse<Bag>( v, { from: 'string' } ); }
+                export function run( v: string ) { return parse<Bag>( v, { from: 'string' } ); }
             ` )).toThrow( /from: 'string' only supports basic scalar types/ );
         });
 
@@ -638,11 +650,11 @@ describe( 'Parse', () =>
             `, 'temp_parse_e2e_json' );
 
             expect( mod.parseUser( '{"id":"1","age":30}' )).toEqual({ id : '1', age : 30 });
-            expect( mod.parseUser({ id : '1', age : 30, email : 'a@b.c', drop : true })).toEqual({
+            expect( mod.parseUser( JSON.stringify({ id : '1', age : 30, email : 'a@b.c', drop : true }))).toEqual({
                 id : '1', age : 30, email : 'a@b.c'
             });
-            expect(() => mod.parseStrict({ id : '1', age : 30, drop : true })).toThrow( /PropertyNotAllowed<drop>/ );
-            expect( mod.parseRelaxed({ id : '1', age : 30, drop : true }).drop ).toBe( true );
+            expect(() => mod.parseStrict( JSON.stringify({ id : '1', age : 30, drop : true }))).toThrow( /PropertyNotAllowed<drop>/ );
+            expect( mod.parseRelaxed( JSON.stringify({ id : '1', age : 30, drop : true })).drop ).toBe( true );
             expect( mod.parseOrder( '{"id":"o1","items":[{"id":1},{"id":2}]}' )).toEqual({
                 id : 'o1', items : [{ id : 1 }, { id : 2 }]
             });
@@ -660,24 +672,22 @@ describe( 'Parse', () =>
                 export const parseFile = ( input: unknown ) => parse<FileMeta>( input );
             `, 'temp_parse_e2e_exotic' );
 
-            const result = mod.parseFile({
+            const result = mod.parseFile( JSON.stringify({
                 createdAt : '2026-01-01T00:00:00.000Z',
                 blob      : 'aGVsbG8='
-            });
+            }));
             expect( result.createdAt.toISOString()).toBe( '2026-01-01T00:00:00.000Z' );
             expect( result.blob.toString()).toBe( 'hello' );
         });
 
-        it( 'parses query strings with coercions and URLSearchParams', async() =>
+        it( 'parses query strings with coercions and rejects a leading ?', async() =>
         {
             const mod = await emitAndImport<{
-                parseQs  : ( input: unknown ) => any
-                parseUsp : ( input: unknown ) => any
+                parseQs : ( input: unknown ) => any
             }>( `
                 import { parse } from '../src/index.js';
                 interface SearchQuery { page: number; active: boolean; tag?: string; tags?: string[] }
                 export const parseQs = ( input: unknown ) => parse<SearchQuery>( input, { from: 'query', mode: 'strict' } );
-                export const parseUsp = ( input: unknown ) => parse<SearchQuery>( input, { from: 'query' } );
             `, 'temp_parse_e2e_query' );
 
             expect( mod.parseQs( 'page=2&active=true&tag=books' )).toEqual({
@@ -686,10 +696,9 @@ describe( 'Parse', () =>
             expect( mod.parseQs( 'page=1&active=0&tags[]=a&tags[]=b' )).toEqual({
                 page : 1, active : false, tags : [ 'a', 'b' ]
             });
+            expect(() => mod.parseQs( '?page=3&active=1' )).toThrow( /Invalid query/ );
             expect(() => mod.parseQs( 'page=1&active=true&rogue=1' )).toThrow( /PropertyNotAllowed<rogue>/ );
-
-            const usp = new URLSearchParams({ page : '3', active : '1' });
-            expect( mod.parseUsp( usp )).toEqual({ page : 3, active : true });
+            expect(() => mod.parseQs({ page : '3', active : '1' })).toThrow( /Type<string>/ );
         });
 
         it( 'parses from:string scalars without querystring splitting', async() =>
@@ -718,6 +727,7 @@ describe( 'Parse', () =>
             expect( mod.asDate( '2026-01-01T00:00:00.000Z' ).toISOString()).toBe( '2026-01-01T00:00:00.000Z' );
             expect( mod.asRegex( 'foo.*bar' )).toEqual( /foo.*bar/ );
             expect(() => mod.asNumber( 'nope' )).toThrow( /Type<number>/ );
+            expect(() => mod.asNumber( 42 )).toThrow( /Type<string>/ );
         });
 
         it( 'round-trips stringify(json) → parse and stringify(query) → parse', async() =>
@@ -774,12 +784,12 @@ describe( 'Parse', () =>
             expect(() => mod.parseLit( '"maybe"' )).toThrow();
             expect( mod.parseTup( '["a",1]' )).toEqual([ 'a', 1 ]);
             expect(() => mod.parseTup( '["a"]' )).toThrow( /Tuple<2>/ );
-            expect( mod.parseTag({ kind : 'square', s : 4 })).toEqual({ kind : 'square', s : 4 });
-            expect(() => mod.parseTag({ kind : 'triangle' })).toThrow();
-            expect( mod.parseRec({ x : 1, y : 2 })).toEqual({ x : 1, y : 2 });
+            expect( mod.parseTag( JSON.stringify({ kind : 'square', s : 4 }))).toEqual({ kind : 'square', s : 4 });
+            expect(() => mod.parseTag( JSON.stringify({ kind : 'triangle' }))).toThrow();
+            expect( mod.parseRec( JSON.stringify({ x : 1, y : 2 }))).toEqual({ x : 1, y : 2 });
             expect( mod.parseBrand( '"uid"' )).toBe( 'uid' );
             expect( mod.parseBig( '"42"' )).toBe( 42n );
-            expect( mod.parseBig( 7 )).toBe( 7n );
+            expect( mod.parseBig( '7' )).toBe( 7n );
         });
 
         it( 'applies defaults, transforms, and constraints on parse', async() =>
@@ -796,11 +806,11 @@ describe( 'Parse', () =>
                 export const parseUser = ( v: unknown ) => parse<User>( v );
             `, 'temp_parse_e2e_tags' );
 
-            expect( mod.parseUser({ name : '  ab  ', age : 20 })).toEqual({
+            expect( mod.parseUser( JSON.stringify({ name : '  ab  ', age : 20 }))).toEqual({
                 name : 'ab', age : 20, role : 'guest'
             });
-            expect(() => mod.parseUser({ name : 'x', age : 20 })).toThrow( /minLength/i );
-            expect(() => mod.parseUser({ name : 'ab', age : 10 })).toThrow( /minimum/i );
+            expect(() => mod.parseUser( JSON.stringify({ name : 'x', age : 20 }))).toThrow( /minLength/i );
+            expect(() => mod.parseUser( JSON.stringify({ name : 'ab', age : 10 }))).toThrow( /minimum/i );
         });
 
         it( 'applies transform.Custom and constraint.Custom like assert', async() =>
@@ -818,13 +828,13 @@ describe( 'Parse', () =>
                 export const parseRow = ( v: unknown ) => parse<Row>( v );
             `, 'temp_parse_e2e_custom' );
 
-            expect( mod.parseRow({ code : 'abc', key : 'web_ok' })).toEqual({
+            expect( mod.parseRow( JSON.stringify({ code : 'abc', key : 'web_ok' }))).toEqual({
                 code : 'web_abc', key : 'web_ok'
             });
-            expect(() => mod.parseRow({ code : 'abc', key : 'bad' })).toThrow( /Custom/ );
+            expect(() => mod.parseRow( JSON.stringify({ code : 'abc', key : 'bad' }))).toThrow( /Custom/ );
         });
 
-        it( 'rejects Infinity from query numbers and accepts JSON Infinity', async() =>
+        it( 'rejects Infinity from query numbers; JSON text cannot carry Infinity', async() =>
         {
             const mod = await emitAndImport<{
                 parseQ : ( v: unknown ) => any
@@ -836,8 +846,8 @@ describe( 'Parse', () =>
             `, 'temp_parse_e2e_nan' );
 
             expect(() => mod.parseQ( 'n=Infinity' )).toThrow( /number/ );
-            expect( mod.parseJ({ n : Infinity })).toEqual({ n : Infinity });
-            expect(() => mod.parseJ({ n : NaN })).toThrow( /number/ );
+            expect( JSON.stringify({ n : Infinity })).toBe( '{"n":null}' );
+            expect(() => mod.parseJ( '{"n":null}' )).toThrow( /number/ );
         });
 
         it( 'passes through any and unknown after json/query decode', async() =>
@@ -854,16 +864,18 @@ describe( 'Parse', () =>
             `, 'temp_parse_e2e_any' );
 
             expect( mod.parseAnyJson( '{"a":1,"b":"x"}' )).toEqual({ a : 1, b : 'x' });
-            expect( mod.parseAnyJson({ keep : true, nested : { n : 2 } })).toEqual({ keep : true, nested : { n : 2 } });
-            expect( mod.parseAnyJson( 42 )).toBe( 42 );
-            expect( mod.parseAnyJson( 'plain' )).toBe( 'plain' );
+            expect( mod.parseAnyJson( JSON.stringify({ keep : true, nested : { n : 2 } }))).toEqual({ keep : true, nested : { n : 2 } });
+            expect( mod.parseAnyJson( '42' )).toBe( 42 );
+            expect( mod.parseAnyJson( '"plain"' )).toBe( 'plain' );
+            expect(() => mod.parseAnyJson( 42 )).toThrow( /Type<string>/ );
+            expect(() => mod.parseAnyJson( 'plain' )).toThrow( /Invalid JSON/ );
 
             expect( mod.parseUnknownJson( '{"ok":true}' )).toEqual({ ok : true });
-            expect( mod.parseUnknownJson([ 1, 2 ])).toEqual([ 1, 2 ]);
+            expect( mod.parseUnknownJson( '[1,2]' )).toEqual([ 1, 2 ]);
 
             expect( mod.parseAnyQuery( 'a=1&b=two' )).toEqual({ a : '1', b : 'two' });
-            expect( mod.parseAnyQuery({ already : 'parsed' })).toEqual({ already : 'parsed' });
-            expect( mod.parseAnyQuery( 'bare' )).toBe( 'bare' );
+            expect(() => mod.parseAnyQuery({ already : 'parsed' })).toThrow( /Type<string>/ );
+            expect(() => mod.parseAnyQuery( '?a=1' )).toThrow( /Invalid query/ );
         });
     });
 });

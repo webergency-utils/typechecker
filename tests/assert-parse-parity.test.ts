@@ -11,8 +11,9 @@ type ValidateResult =
 type ParityFns =
     {
         assert   : ( value: unknown ) => unknown
-        parse    : ( value: unknown ) => unknown
+        parse    : ( value: string ) => unknown
         validate : ( value: unknown ) => ValidateResult
+        wire     : 'json' | 'query'
     };
 
 type CanonicalFailure =
@@ -99,10 +100,48 @@ function failureFromParse( err: unknown ): CanonicalFailure
     return canonicalizeFailure( pe.path, body );
 }
 
+function objectToQuery( input: unknown ): string
+{
+    if( typeof input !== 'object' || input === null || Array.isArray( input ))
+    {
+        throw new Error( 'objectToQuery expects a flat object' );
+    }
+
+    const parts: string[] = [];
+
+    for( const [ key, value ] of Object.entries( input as Record<string, unknown> ))
+    {
+        if( value === undefined ){ continue }
+
+        if( Array.isArray( value ))
+        {
+            for( const item of value )
+            {
+                parts.push( `${encodeURIComponent( key )}=${encodeURIComponent( String( item ))}` );
+            }
+
+            continue;
+        }
+
+        parts.push( `${encodeURIComponent( key )}=${encodeURIComponent( String( value ))}` );
+    }
+
+    return parts.join( '&' );
+}
+
+function toParseWire( input: unknown, wire: 'json' | 'query' ): string
+{
+    if( typeof input === 'string' ){ return input }
+
+    if( wire === 'query' ){ return objectToQuery( input ) }
+
+    return JSON.stringify( input );
+}
+
 function expectParitySuccess( fns: ParityFns, input: unknown )
 {
     const asserted = fns.assert( input );
-    const parsed = fns.parse( input );
+    const parsed = fns.parse( toParseWire( input, fns.wire ));
 
     expect( parsed ).toEqual( asserted );
     expect( fns.validate( input )).toMatchObject({ success : true, data : asserted });
@@ -119,7 +158,7 @@ function expectParityThrow( fns: ParityFns, input: unknown, expected?: Partial<C
 
     try
     {
-        fns.parse( input );
+        fns.parse( toParseWire( input, fns.wire ));
         expect.unreachable( 'parse should throw' );
     }
     catch( e )
@@ -325,11 +364,12 @@ describe( 'assert ↔ parse parity', () =>
 
             function wrap(
                 a: ( v: unknown ) => unknown,
-                p: ( v: unknown ) => unknown,
-                v: ( v: unknown ) => VR
+                p: ( v: string ) => unknown,
+                v: ( v: unknown ) => VR,
+                wire: 'json' | 'query' = 'json'
             )
             {
-                return { assert: a, parse: p, validate: v };
+                return { assert: a, parse: p, validate: v, wire };
             }
 
             export const userStrip = wrap(
@@ -359,7 +399,8 @@ describe( 'assert ↔ parse parity', () =>
             export const customQuery = wrap(
                 ( v ) => assert<CustomRow>( v, { mode: 'strip', from: 'query' } ),
                 ( v ) => parse<CustomRow>( v, { mode: 'strip', from: 'query' } ),
-                ( v ) => validate<CustomRow>( v, { mode: 'strip', from: 'query' } )
+                ( v ) => validate<CustomRow>( v, { mode: 'strip', from: 'query' } ),
+                'query'
             );
 
             export const taggedStrip = wrap(
@@ -371,7 +412,8 @@ describe( 'assert ↔ parse parity', () =>
             export const taggedQuery = wrap(
                 ( v ) => assert<Shape>( v, { mode: 'strip', from: 'query' } ),
                 ( v ) => parse<Shape>( v, { mode: 'strip', from: 'query' } ),
-                ( v ) => validate<Shape>( v, { mode: 'strip', from: 'query' } )
+                ( v ) => validate<Shape>( v, { mode: 'strip', from: 'query' } ),
+                'query'
             );
 
             export const plainUnion = wrap(
@@ -383,7 +425,8 @@ describe( 'assert ↔ parse parity', () =>
             export const queryRow = wrap(
                 ( v ) => assert<QueryRow>( v, { mode: 'strip', from: 'query' } ),
                 ( v ) => parse<QueryRow>( v, { mode: 'strip', from: 'query' } ),
-                ( v ) => validate<QueryRow>( v, { mode: 'strip', from: 'query' } )
+                ( v ) => validate<QueryRow>( v, { mode: 'strip', from: 'query' } ),
+                'query'
             );
 
             export const defaults = wrap(
@@ -419,7 +462,8 @@ describe( 'assert ↔ parse parity', () =>
             export const bigintQuery = wrap(
                 ( v ) => assert<BigRow>( v, { mode: 'strip', from: 'query' } ),
                 ( v ) => parse<BigRow>( v, { mode: 'strip', from: 'query' } ),
-                ( v ) => validate<BigRow>( v, { mode: 'strip', from: 'query' } )
+                ( v ) => validate<BigRow>( v, { mode: 'strip', from: 'query' } ),
+                'query'
             );
 
             export const recordStrip = wrap(
@@ -479,7 +523,8 @@ describe( 'assert ↔ parse parity', () =>
             export const queryDefaults = wrap(
                 ( v ) => assert<QueryDefaultsRow>( v, { mode: 'strip', from: 'query' } ),
                 ( v ) => parse<QueryDefaultsRow>( v, { mode: 'strip', from: 'query' } ),
-                ( v ) => validate<QueryDefaultsRow>( v, { mode: 'strip', from: 'query' } )
+                ( v ) => validate<QueryDefaultsRow>( v, { mode: 'strip', from: 'query' } ),
+                'query'
             );
 
             export const nestedCustom = wrap(
@@ -941,7 +986,7 @@ describe( 'assert ↔ parse parity', () =>
         it( 'intersection missing prop', () =>
         {
             expect(() => mod.intersectionObjs.assert({ a : 'x' })).toThrow( /Validation Error/ );
-            expect(() => mod.intersectionObjs.parse({ a : 'x' })).toThrow( /Parse error/ );
+            expect(() => mod.intersectionObjs.parse( JSON.stringify({ a : 'x' }))).toThrow( /Parse error/ );
         });
     });
 });

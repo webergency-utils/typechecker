@@ -690,7 +690,8 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( new Set( names ).size ).toBe( names.length );
         expect( compiled ).toContain( 'function validators()' );
         expect( compiled ).toMatch( /const validators_1 = __tcRuntime\.validators/ );
-        expect( compiled ).toMatch( /const __val_[a-f0-9]+ = validators_1\./ );
+        expect( compiled ).toMatch( /validators_1\.number/ );
+        expect( compiled ).toMatch( /const __val_[a-f0-9]+ = / );
     });
 
     it( 'should not redeclare a validators name imported from another module', () =>

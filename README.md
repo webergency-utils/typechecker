@@ -107,7 +107,7 @@ graph TD
     G --> H[Emit optimized JavaScript files]
 ```
 
-1. **Build-Time Transformation**: The compiler transformer intercepts typed helper calls (`validate`, `is`, `assert`, `assertGuard`, `jsonSchema`). Schema helpers (`validateSchema`, `isSchema`, `assertSchema`, `assertGuardSchema`) are plain runtime APIs and do not require transformation.
+1. **Build-Time Transformation**: The compiler transformer intercepts typed helper calls (`validate`, `is`, `assert`, `assertGuard`, `jsonSchema`, `parse`, `stringify`, `serializer`). Schema helpers (`validateSchema`, `isSchema`, `assertSchema`, `assertGuardSchema`) are plain runtime APIs and do not require transformation.
 2. **Type Extraction & Analysis**: It parses the target TS type structure, extracting intersection constraints, formats, transforms, and defaults recursively.
 3. **File-local validators**: The transformer generates highly optimized JavaScript validator functions for each resolved type shape, names them with a structural hash (`__val_<hash>` / `__schema_<hash>`), and hoists them in the same file.
 4. **Call Replacement**: Typed calls are rewritten to `__tcRuntime.validate(__val_<hash>, …)` (and the matching `is` / `assert` / `assertGuard` helpers) with no global registry lookup.
@@ -138,10 +138,13 @@ const age: number & constraint.Minimum<18> = 5;
 - [`is`](src/index.ts): A type guard for `T`. Always mutates in place; `from` may coerce nested fields. Root replacement fails the guard.
 - [`assert`](src/index.ts): Validates a value and returns it, throwing a validation error on failure (supports `from` coercion).
 - [`assertGuard`](src/index.ts): Asserts a value is `T`. Always mutates in place; `from` may coerce nested fields. Root replacement throws.
-- [`serializer`](src/index.ts): AOT macro that compiles a zero-allocation `(input: T) => string` serializer for JSON or query strings.
-- [`stringify`](src/index.ts): AOT macro that validates and serializes a value as type `T` to a JSON or query string.
-- [`parse`](src/index.ts): AOT macro that single-pass parses JSON or query input into `ResolveDefaults<T>` (defaults, transforms, and constraints applied).
-- [`jsonSchema`](src/index.ts): Generates and returns a JSON Schema representation matching a TypeScript type at compile time (draft-07 shaped, with `x-typescript-type` for Date/RegExp/Set/Map/bigint/etc.).
+- [`serializer`](src/index.ts): AOT macro that compiles a `(input: T) => string` serializer for JSON or query strings. `transform` / `replacer` are closed over at create time.
+- [`stringify`](src/index.ts): AOT macro that validates and serializes a value as type `T`. `transform` / `replacer` are per-call.
+- [`parse`](src/index.ts): AOT macro that parses **wire text** (`from: 'json' | 'query' | 'string'`) into `ResolveDefaults<T>`. Input is always a `string`. Optional `reviver` and `transform`.
+- [`TransformFn`](src/runtime/transform.ts) / [`TransformContext`](src/runtime/transform.ts): Typed per-node rewrite on `parse` / `stringify` / `assert` / `validate` (`ctx.type`, `ctx.path`, `ctx.tags`). Not used by `is` / `assertGuard`.
+- [`JsonReviver`](src/runtime/transform.ts) / [`JsonReplacer`](src/runtime/transform.ts): `JSON.parse` / `JSON.stringify` callbacks. Reviver also walks decoded query objects. Replacer is JSON stringify only.
+- [`tag`](src/runtime/tags/tag.ts): Named metadata (`tag<'html'>`) peeled into `ctx.tags` and JSON Schema `x-tags`. `tag.Default` fills missing properties.
+- [`jsonSchema`](src/index.ts): Generates and returns a JSON Schema representation matching a TypeScript type at compile time (draft-07 shaped, with `x-typescript-type` for Date/RegExp/Set/Map/bigint/etc. and `x-tags` for `tag<'html'>`).
 - [`validateSchema`](src/index.ts) / [`isSchema`](src/index.ts) / [`assertSchema`](src/index.ts) / [`assertGuardSchema`](src/index.ts): Same entrypoints against a runtime JSON Schema value instead of a TypeScript generic.
 - [`WithModifiers`](src/runtime/tags.ts): A utility type that applies constraint, format, or transformation tags to properties of deeply nested or external types using dot-separated path mappings.
 - [`ResolveDefaults`](src/runtime/tags.ts): A helper type that removes the optional flag (`?`) from properties that have defined default values.
@@ -163,7 +166,7 @@ Validates input data against type `T` and returns a structured validation result
 
 - **Parameters**:
   - `input`: The value to validate.
-  - `options` (optional): Either a `ValidationMode` string ('strict' | 'relaxed' | 'strip') or a `ValidationOptions` object.
+  - `options` (optional): Either a `ValidationMode` string (`'strict' | 'relaxed' | 'strip'`) or a `ValidationOptions` object (`transform` is opt-in; not used by `is` / `assertGuard`).
 - **Returns**: `IValidation<ResolveDefaults<T>>` containing validation status, converted/stripped data, and error details.
 - **Example**:
   ```typescript
@@ -191,7 +194,7 @@ Validates input data and returns it, throwing a validation error on failure.
 
 - **Parameters**:
   - `input`: The value to validate.
-  - `options` (optional): Either a `ValidationMode` string or an `AssertOptions` object.
+  - `options` (optional): Either a `ValidationMode` string or an `AssertOptions` object (`transform` is opt-in; not used by `is` / `assertGuard`).
 - **Returns**: `ResolveDefaults<T>` (the validated value with defaults resolved).
 - **Throws**: `Error` containing a list of path and constraint failures, or a custom error via `options.errorFactory`.
 - **Example**:
@@ -273,34 +276,60 @@ Compiles a reusable serializer for `T`.
 - **Options**:
   - `mode`: `'strict' | 'relaxed' | 'strip'` (default `'strip'`) — extra property handling when no index signature is present.
   - `format` / `to`: `'json'` (default) or `'query'`.
+  - `transform`: `TransformFn | TransformFn[]` — typed per-leaf rewrite before encode (`ctx.type`, `ctx.path`, `ctx.tags`). Closed over at create time.
+  - `replacer`: JSON.stringify-style replacer (JSON format only). Runs after encode, so `Date`s are ISO strings — offset dates in `transform`, not here.
 - **Encodings**: `Date` → ISO-8601; `Buffer`/`Uint8Array` → base64; `bigint` → decimal digits; tuples fixed-length; tagged unions by discriminant; `Record`/index signatures serialize extra keys with the value type.
 - **Example**:
   ```typescript
   const serializeUser = serializer<User>({ mode: 'strict' });
   const json = serializeUser(user);
+
+  const dump = serializer<User>({
+    transform: (value, ctx) => (ctx.type === 'string' ? String(value) + '!' : value),
+  });
   ```
 
 #### `stringify<T>(input: T, options?: ValidationMode | SerializerOptions): string`
 
-Same codegen as `serializer`, invoked immediately on `input`.
+Same codegen as `serializer`, invoked immediately on `input`. `transform` / `replacer` are per-call.
 
-#### `parse<T>(input: unknown, options?: ValidationMode | ParseOptions): ResolveDefaults<T>`
+- **Example**:
+  ```typescript
+  const json = stringify<User>(user);
+  const qs = stringify<Search>(search, { format: 'query' });
+  ```
 
-Single-pass parse + validate into `T`.
+#### `parse<T>(input: string, options?: ValidationMode | ParseOptions): ResolveDefaults<T>`
+
+Single-pass parse + validate into `T`. Every `parse` entry requires a **string**. Already-parsed JSON objects, query bags, and `URLSearchParams` are not accepted — use `assert` / `validate` for those.
 
 - **Options**:
   - `mode`: `'strict' | 'relaxed' | 'strip'` (default `'strip'`).
   - `from`:
-    - `'json'` (default) — JSON text / values; revives Date/RegExp/etc.
-    - `'query'` — raw query/form text, `URLSearchParams`, or already-parsed bags; runs `parseQueryString` when the root is encoded text; coerces numbers/booleans/dates.
-    - `'string'` — a single already-decoded scalar (path/header/cookie values). Same coercions as `'query'`, but **never** runs `parseQueryString`. Only basic scalar types (`string`, `number`, `boolean`, `bigint`, `Date`, `RegExp`, literals, enums, and unions of these).
-- **Behavior**: Applies `tag.Default`, `transform.*`, and `constraint.*` / `format.*` (parity with `validate`). Rejects `NaN`; JSON allows `±Infinity`; query/string numbers must be finite. Throws `ParseError`.
+    - `'json'` (default) — JSON text only. Always `JSON.parse`; unquoted scalars (`'hello'`) are Invalid JSON (`'"hello"'` is a JSON string). Revives Date/RegExp/etc. after decode.
+    - `'query'` — query/form text that never starts with `?` (`url.search.slice(1)`, form body). Always `parseQueryString`; `'42'` is a flag-key `{ 42: true }`, not a number. Coerces numbers/booleans/dates. Scalars belong on `'string'`.
+    - `'string'` — a single already-decoded scalar (path/header/cookie values). Same coercions as `'query'`, but **never** runs `JSON.parse` / `parseQueryString`. Reviver is ignored. Only basic scalar types (`string`, `number`, `boolean`, `bigint`, `Date`, `RegExp`, literals, enums, and unions of these).
+  - `reviver`: same contract as `JSON.parse` (bottom-up, root `key === ''`, `undefined` deletes). Runs on decoded JSON values and decoded query objects. Ignored for `from: 'string'`.
+  - `transform`: `TransformFn | TransformFn[]` — typed rewrite after revival / `transform.*` tags (`ctx.type`, `ctx.path`, `ctx.tags` from `tag<'html'>`). `fn[]` pipes left to right. Throws become `ParseError` with `ctx.path`. Skip `undefined`/`null` so `tag.Default` still fills.
+- **Behavior**: Applies `tag.Default`, `transform.*`, and `constraint.*` / `format.*` (parity with `validate`). Rejects `NaN`; JSON numbers that survive `JSON.parse` may be `±Infinity`, but `JSON.stringify(Infinity)` is `null` so Infinity cannot round-trip through JSON text. Query/string numbers must be finite. Throws `ParseError`.
 - **Example**:
   ```typescript
-  const user = parse<User>(req.body);
-  const q = parse<Search>(req.url.search, { from: 'query', mode: 'strict' });
+  import { parse, stringify, type TransformContext } from '@webergency-utils/typechecker';
+
+  const user = parse<User>(req.body); // raw body string, not a parsed object
+  const q = parse<Search>(req.url.search.slice(1), { from: 'query', mode: 'strict' });
   const id = parse<string>('jpUllytbmQ=', { from: 'string' }); // stays the string (no querystring parse)
   const n = parse<number>('42', { from: 'string' }); // → 42
+
+  const shift = (delta: number) => (value: unknown, ctx: TransformContext) => {
+    if (ctx.type === 'Date' && value instanceof Date) {
+      return new Date(value.getTime() + delta);
+    }
+    return value;
+  };
+
+  const event = parse<Event>(json, { transform: shift(+ms) });
+  const out = stringify<Event>(event, { transform: shift(-ms) });
   ```
 
 #### Errors
@@ -405,6 +434,7 @@ Extends `GuardOptions` for `validate` / `validateSchema` (adds `mutate`; no `err
 | `mode` | `ValidationMode` | `'strict'` | Unknown-key policy (`strict` / `relaxed` / `strip`). Not coercion — see `ValidationMode` above. |
 | `from` | `'json' \| 'query' \| 'string' \| ((val, ctx) => any)` | `undefined` | Input conversion mode. `'json'` revives JSON-impossible types. `'query'` also coerces querystring shapes (and may `parseQueryString`). `'string'` coerces a single already-decoded scalar like `'query'` but never parses a querystring. A custom function is `(val, { key, path, parent, root, index?, kind }) => any` and runs only on type mismatch. `kind` is a `CoercionKind` dispatch tag (not `typeof` / a TS type). `key` is the nearest named path segment (for `[n]` leaves, the closest named key above). |
 | `mutate` | `boolean` | `false` | `true`: write in place while validating (half-changed input on failure is allowed; union arms still use a side tree). `false`: always allocate new containers. |
+| `transform` | `TransformFn \| TransformFn[]` | `undefined` | Opt-in typed rewrite after revival / `transform.*` tags. Same contract as `parse`. Not copied onto `is` / `assertGuard`. |
 
 #### `interface AssertOptions`
 
@@ -419,6 +449,50 @@ Extends `ValidationOptions` for `assert` / `assertSchema`.
 - `CoercionKind`: expected runtime kind for custom `from` (`'Date' \| 'Array' \| …`) — a dispatch tag, not `typeof`.
 - `PathContext`: `{ key, path, parent, root, index? }` shared by `constraint.Custom` and custom `from`.
 - `FromCoercionContext`: `PathContext & { kind: CoercionKind }`.
+
+#### `interface ParseOptions`
+
+Compile-time `mode` / `from` stay object literals (distinct `__parse_*` hoists). `reviver` / `transform` are runtime and forwarded into the hoisted parser.
+
+| Property | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `mode` | `ValidationMode` | `'strip'` | Unknown-key policy. |
+| `from` | `ParseSource` (`'json' \| 'query' \| 'string'`) | `'json'` | Wire decoder. See `parse`. |
+| `reviver` | `JsonReviver` | `undefined` | After `JSON.parse` / `parseQueryString`. Ignored for `'string'`. |
+| `transform` | `TransformFn \| TransformFn[]` | `undefined` | Typed rewrite after revival / `transform.*` tags. |
+
+#### `interface SerializerOptions`
+
+Compile-time `mode` / `format` stay object literals. `transform` / `replacer` are runtime. `serializer<T>(options)` closes over them; `stringify` takes them per call.
+
+| Property | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `mode` | `SerializationMode` | `'strip'` | Extra-property handling when no index signature is present. |
+| `format` / `to` | `SerializeFormat` (`'json' \| 'query'`) | `'json'` | Output encoding. |
+| `transform` | `TransformFn \| TransformFn[]` | `undefined` | Per-leaf rewrite **before** encode (`Date`s are still `Date`s). |
+| `replacer` | `JsonReplacer` | `undefined` | JSON only. Runs after encode (`JSON.stringify(JSON.parse(out), replacer)`), so `Date`s are ISO strings. |
+
+#### `type TransformFn` / `interface TransformContext`
+
+```typescript
+type TransformFn = (value: unknown, ctx: TransformContext) => unknown;
+
+interface TransformContext {
+  key: string;
+  path: string;
+  parent: any;
+  root: any;
+  index?: number;
+  tags: string[];     // from tag<'html'>, else []
+  type: CoercionKind; // 'Date' | 'string' | … ; unions / any are best-effort
+}
+```
+
+Returned value **replaces** the node. Returning `undefined` sets undefined (does not mean “skip”). Identity is `return value`. `fn[]` pipes left to right. Throws become `ParseError` / `SerializationError` with `ctx.path` (or `''` at root). `is` / `assertGuard` never apply it.
+
+#### `type JsonReviver` / `type JsonReplacer`
+
+Same contracts as `JSON.parse` / `JSON.stringify`: `(this: any, key: string, value: any) => any`. Bottom-up, root `key === ''`, `this` is the parent. Reviver `undefined` **deletes** the property (JSON spec). Replacer `undefined` omits the property. Query stringify has no replacer.
 
 #### `interface IValidation<T>`
 
@@ -535,6 +609,7 @@ type NeedTwo = Record<string, unknown> &
 | `PropertyNames<T>` | `propertyNames` ← nested `jsonSchema` of `T` |
 | `Requires` | `requires` (library extension) |
 | `tag.Default` | `default` |
+| `tag<'html'>` / `tag<'html' \| 'basic'>` | `x-tags` (sorted unique names) |
 
 ```typescript
 type Bag = Record<string, number> & constraint.PropertiesRange<2, 5>;
@@ -587,12 +662,29 @@ Sanitizes and converts input values during validation.
 #### `tag` Namespace
 
 - `tag.Default<Value>`: Injects `Value` when a property is undefined. Removes the optional modifier (`?`) when resolved with `ResolveDefaults<T>`.
+- `tag<'html'>` / `tag<'html' | 'basic'>` (and `tag<'html'> & tag<'basic'>`): named metadata on an optional `__tags` bag. Peeled at compile time; no handler class or global registry. Runtime behaviour is the `transform` option (`ctx.tags`, sorted). `jsonSchema<T>()` emits `x-tags`. `__tags` is reserved like `__default`.
+
+```typescript
+import { parse, tag } from '@webergency-utils/typechecker';
+
+interface Article {
+  title: string;
+  body: string & tag<'html' | 'basic'>;
+}
+
+parse<Article>(json, {
+  transform: (value, ctx) => {
+    // ctx.tags: title → [] ; body → ['basic', 'html']
+    return value;
+  },
+});
+```
 
 ---
 
 ## Troubleshooting
 
-### `validate`, `is`, or `assert` throw “transformer was not applied”
+### `validate`, `is`, `assert`, `parse`, or `stringify` throw “transformer was not applied”
 - **Cause**: The compiler transformer did not rewrite the call at build time. Untransformed stubs always throw.
 - **Diagnostics Check**: Inspect your built `.js` output. If it still contains `validate(...)` / `is(...)` / `assert(...)` as package imports rather than `__tcRuntime.validate(...)` (etc.), the transformer did not run.
 - **Fix**:

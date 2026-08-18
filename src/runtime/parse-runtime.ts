@@ -1,5 +1,15 @@
 import { validators } from './validators.js';
 import { getCachedPattern } from './regex.js';
+import type { CoercionKind } from './validators.js';
+import
+{
+    applyNodeTransform,
+    reviveTree as walkRevive,
+    TransformWalkError,
+    type JsonReviver,
+    type TransformFn
+}
+    from './transform.js';
 
 export class ParseError extends Error
 {
@@ -134,12 +144,15 @@ function safeDecodeURIComponent( value: string ): string
 /**
  * Parses a URL query string or x-www-form-urlencoded string into a nested JavaScript object structure,
  * handling bracket notation like user[name]=Alice, tags[]=a, and items[0]=b matching server QueryParser.
+ * The string must not start with `?` (`url.search.slice(1)` / form body).
  */
 export function parseQueryString( querystring: string ): Record<string, any>
 {
     const query: any = createPlainObject();
 
     if( !querystring ){ return query }
+
+    if( querystring.charAt( 0 ) === '?' ){ throw new ParseError( '', 'Invalid query' ) }
 
     const assign = ( key: string | number, value: any ) =>
     {
@@ -273,7 +286,7 @@ export function coerceBoolean( val: any, path: string ): boolean
 
         if( s === 'false' || s === '0' || s === 'no' || s === 'off' ){ return false }
 
-        // Bare query flags (`?active`) often arrive as empty string.
+        // Flag keys (`active` with no `=`) often arrive as empty string.
         if( s === '' ){ return true }
     }
 
@@ -615,4 +628,41 @@ export function applyPropertyNames(
     }
 
     return v;
+}
+
+export function reviveTree( value: any, reviver: JsonReviver ): any
+{
+    try
+    {
+        return walkRevive( value, reviver );
+    }
+    catch( e )
+    {
+        if( e instanceof ParseError ){ throw e }
+
+        const path = e instanceof TransformWalkError ? e.path : '';
+
+        throw new ParseError( path, e instanceof Error ? e.message : String( e ));
+    }
+}
+
+export function applyParseTransform(
+    value     : any,
+    path      : string,
+    transform : TransformFn | TransformFn[] | undefined,
+    kind      : CoercionKind,
+    tags      : string[],
+    root      : any
+): any
+{
+    try
+    {
+        return applyNodeTransform( value, path, transform, kind, tags, root );
+    }
+    catch( e )
+    {
+        if( e instanceof ParseError ){ throw e }
+
+        throw new ParseError( path, e instanceof Error ? e.message : String( e ));
+    }
 }

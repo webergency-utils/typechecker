@@ -18,6 +18,7 @@ import {
     createRegExpCheck,
     createTemplateLiteralCheck,
     createConstrainedPrimitiveCheck,
+    wrapOptionTransform,
     createSetCheck,
     createMapCheck,
     createInstanceOfCheck
@@ -97,6 +98,13 @@ function applyConstraintsToJsonSchema(
                 c.nestedType, checker, defs, visited, counts, circularHashes
             );
         }
+        else if( c.type === 'tags' && Array.isArray( c.value ))
+        {
+            const prev = Array.isArray( target['x-tags'] ) ? target['x-tags'] as string[] : [];
+            const merged = new Set<string>([ ...prev, ...c.value.filter( ( n ): n is string => typeof n === 'string' ) ]);
+
+            target['x-tags'] = [ ...merged ].sort();
+        }
     }
 }
 
@@ -140,7 +148,7 @@ function buildEnumValidator(
 
     if( checks.length === 0 )
     {
-        return createPrimitiveCheck( 'any' );
+        return wrapOptionTransform( createPrimitiveCheck( 'any' ), 'Object' );
     }
 
     if( checks.length === 1 ){ return checks[0] }
@@ -425,11 +433,11 @@ function buildValidatorScoped(
     }
     else if( type.getSymbol()?.name === 'Date' ) 
     {
-        result = createDateCheck();
+        result = wrapOptionTransform( createDateCheck(), 'Date' );
     }
     else if( type.getSymbol()?.name === 'RegExp' ) 
     {
-        result = createRegExpCheck();
+        result = wrapOptionTransform( createRegExpCheck(), 'RegExp' );
     }
     else if( type.getSymbol()?.name === 'Set' ) 
     {
@@ -447,11 +455,11 @@ function buildValidatorScoped(
     }
     else if( type.getSymbol()?.name === 'Promise' ) 
     {
-        result = createInstanceOfCheck( 'Promise' );
+        result = wrapOptionTransform( createInstanceOfCheck( 'Promise' ), 'instance' );
     }
     else if( type.getSymbol()?.name && BUFFER_LIKE.has( type.getSymbol()!.name )) 
     {
-        result = createInstanceOfCheck( type.getSymbol()!.name );
+        result = wrapOptionTransform( createInstanceOfCheck( type.getSymbol()!.name ), 'instance' );
     }
     else if( flags & ts.TypeFlags.Null ) 
     {
@@ -463,27 +471,27 @@ function buildValidatorScoped(
     }
     else if( flags & ts.TypeFlags.String ) 
     {
-        result = createPrimitiveCheck( 'string' );
+        result = wrapOptionTransform( createPrimitiveCheck( 'string' ), 'string' );
     }
     else if( flags & ts.TypeFlags.Number ) 
     {
-        result = createPrimitiveCheck( 'number' );
+        result = wrapOptionTransform( createPrimitiveCheck( 'number' ), 'number' );
     }
     else if( flags & ts.TypeFlags.BigInt ) 
     {
-        result = createPrimitiveCheck( 'bigint' );
+        result = wrapOptionTransform( createPrimitiveCheck( 'bigint' ), 'bigint' );
     }
     else if( flags & ts.TypeFlags.Boolean ) 
     {
-        result = createPrimitiveCheck( 'boolean' );
+        result = wrapOptionTransform( createPrimitiveCheck( 'boolean' ), 'boolean' );
     }
     else if( flags & ts.TypeFlags.Never ) 
     {
-        result = createPrimitiveCheck( 'never' );
+        result = wrapOptionTransform( createPrimitiveCheck( 'never' ), 'never' );
     }
     else if( flags & ts.TypeFlags.ESSymbol || flags & ts.TypeFlags.UniqueESSymbol || ( type as any ).intrinsicName === 'symbol' ) 
     {
-        result = createPrimitiveCheck( 'symbol' );
+        result = wrapOptionTransform( createPrimitiveCheck( 'symbol' ), 'symbol' );
     }
     else if( flags & ts.TypeFlags.TemplateLiteral ) 
     {
@@ -507,23 +515,23 @@ function buildValidatorScoped(
             }
         }
         regexStr += '$';
-        result = createTemplateLiteralCheck( regexStr, checker.typeToString( type ));
+        result = wrapOptionTransform( createTemplateLiteralCheck( regexStr, checker.typeToString( type )), 'string' );
     }
     else if( type.isStringLiteral()) 
     {
-        result = createLiteralCheck( type.value );
+        result = wrapOptionTransform( createLiteralCheck( type.value ), 'literal' );
     }
     else if( type.isNumberLiteral()) 
     {
-        result = createLiteralCheck( type.value );
+        result = wrapOptionTransform( createLiteralCheck( type.value ), 'literal' );
     }
     else if( flags & ts.TypeFlags.BooleanLiteral ) 
     {
-        result = createLiteralCheck(( type as any ).intrinsicName === 'true' );
+        result = wrapOptionTransform( createLiteralCheck(( type as any ).intrinsicName === 'true' ), 'literal' );
     }
     else if( flags & ts.TypeFlags.BigIntLiteral ) 
     {
-        result = createLiteralCheck(( type as ts.BigIntLiteralType ).value );
+        result = wrapOptionTransform( createLiteralCheck(( type as ts.BigIntLiteralType ).value ), 'literal' );
     }
     else if( checker.isTupleType( type )) 
     {
@@ -537,7 +545,7 @@ function buildValidatorScoped(
     }
     else if( type.getCallSignatures().length > 0 && type.getConstructSignatures().length === 0 ) 
     {
-        result = createPrimitiveCheck( 'function' );
+        result = wrapOptionTransform( createPrimitiveCheck( 'function' ), 'function' );
     }
     else if( isNativeEnumType( type )) 
     {
@@ -556,13 +564,13 @@ function buildValidatorScoped(
 
             if( fromAmbientGlobal || !declaration )
             {
-                result = createInstanceOfCheck( classIdentity.name );
+                result = wrapOptionTransform( createInstanceOfCheck( classIdentity.name ), 'instance' );
             }
             else
             {
                 const localName = scope.bind( classIdentity );
 
-                result = createInstanceOfCheck( ts.factory.createIdentifier( localName ));
+                result = wrapOptionTransform( createInstanceOfCheck( ts.factory.createIdentifier( localName )), 'instance' );
             }
         }
         else
@@ -594,7 +602,7 @@ function buildValidatorScoped(
             }
             else
             {
-                result = createPrimitiveCheck( 'any' );
+                result = wrapOptionTransform( createPrimitiveCheck( 'any' ), 'Object' );
             }
         }
     }

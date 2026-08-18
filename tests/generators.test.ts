@@ -20,7 +20,8 @@ import
     createIntersectionCheck,
     createSetCheck,
     createMapCheck,
-    createInstanceOfCheck
+    createInstanceOfCheck,
+    wrapOptionTransform
 } 
     from '../src/engine/generators.js';
 
@@ -106,6 +107,10 @@ describe( 'generators', () =>
             expect( printExpr( createRegExpCheck())).toBe( 'validators.regexp' );
             expect( printExpr( createNullCheck())).toBe( 'validators.null' );
             expect( printExpr( createUndefinedCheck())).toBe( 'validators.undefined' );
+            expect( printExpr( wrapOptionTransform( createPrimitiveCheck( 'string' ), 'string', ['html'])))
+                .toContain( 'applyOptionTransform' );
+            expect( printExpr( wrapOptionTransform( createDateCheck(), 'Date' )))
+                .toContain( '"Date"' );
         });
 
         it( 'should emit literal checks for string number boolean and bigint', () => 
@@ -263,6 +268,19 @@ describe( 'generators', () =>
             expect( code ).toContain( 'validators.custom' );
             expect( code ).toContain( 'validators.requires' );
             expect( code ).toContain( 'startsWithWeb' );
+            expect( code ).toContain( 'applyOptionTransform' );
+        });
+
+        it( 'should emit Date kind and tags for constrained date checks', () =>
+        {
+            // Arrange / Act
+            const code = printExpr( createConstrainedPrimitiveCheck( 'date', [{ type : 'tags', value : ['html'] }]));
+            const arrayCode = printExpr( createConstrainedPrimitiveCheck( 'array', [], createPrimitiveCheck( 'any' )));
+
+            // Assert
+            expect( code ).toContain( '"Date"' );
+            expect( code ).toContain( '"html"' );
+            expect( arrayCode ).toContain( '"Array"' );
         });
 
         it( 'should use a provided baseValidator when composing constrained checks', () => 

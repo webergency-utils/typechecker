@@ -72,7 +72,8 @@ describe( 'Nominal class types', () =>
             expect( compiled ).toContain( 'validators.instanceOf(v, path, ctx, Mailer)' );
             expect( compiled ).toContain( 'validators.instanceOf(v, path, ctx, Logger)' );
 
-            const ids = [...compiled.matchAll( /const (__val_[0-9a-f]+) = \(v, path, ctx\) => validators\.instanceOf\(v, path, ctx, (Mailer|Logger)\)/g )];
+            const ids = [...compiled.matchAll( /const (__val_[0-9a-f]+) =[\s\S]*?instanceOf\(v, path, ctx, (Mailer|Logger)\)/g )];
+
             expect( ids ).toHaveLength( 2 );
             expect( ids[0][1]).not.toBe( ids[1][1]);
             expect( new Set( ids.map( m => m[2]))).toEqual( new Set([ 'Mailer', 'Logger' ]));

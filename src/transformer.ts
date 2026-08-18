@@ -28,7 +28,11 @@ export function buildSerializer(
     if( !map.has( resolvedHash ))
     {
         const codeStr = generateSerializerCode( type, checker, { mode, format });
-        const ast = templateToAst( `( function( input ){ return ${codeStr}; })` );
+        const ast = format === 'query'
+            ? templateToAst( `( function( input, options ){ const transform = options && options.transform; return ${codeStr}; })` )
+            : templateToAst(
+                `( function( input, options ){ const transform = options && options.transform; const replacer = options && options.replacer; const out = ${codeStr}; if( replacer ){ try { return JSON.stringify( JSON.parse( out ), replacer ); } catch( e ){ throw new __tcRuntime.SerializationError( "", e && e.message ? e.message : String( e ) ); } } return out; })`
+            );
         map.set( resolvedHash, ast );
     }
 
@@ -240,10 +244,23 @@ export default function transformer( program: ts.Program )
                                 const optsArg = fnName === 'serializer' ? node.arguments[0] : node.arguments[1];
                                 const options = parseSerializerOptions( optsArg );
                                 const serRef = buildSerializer( type, checker, serializerCache, hash, options );
+                                const visitedOpts = optsArg
+                                    ? ts.visitNode( optsArg, visitor ) as ts.Expression
+                                    : ts.factory.createIdentifier( 'undefined' );
 
                                 if( fnName === 'serializer' )
                                 {
-                                    return serRef;
+                                    return ts.factory.createArrowFunction(
+                                        undefined,
+                                        undefined,
+                                        [ts.factory.createParameterDeclaration( undefined, undefined, 'input' )],
+                                        undefined,
+                                        ts.factory.createToken( ts.SyntaxKind.EqualsGreaterThanToken ),
+                                        ts.factory.createCallExpression( serRef, undefined, [
+                                            ts.factory.createIdentifier( 'input' ),
+                                            visitedOpts
+                                        ])
+                                    );
                                 }
 
                                 const inputArg = node.arguments[0];
@@ -252,7 +269,7 @@ export default function transformer( program: ts.Program )
                                 {
                                     const inputVisitorResult = ts.visitNode( inputArg, visitor ) as ts.Expression;
 
-                                    return ts.factory.createCallExpression( serRef, undefined, [inputVisitorResult]);
+                                    return ts.factory.createCallExpression( serRef, undefined, [inputVisitorResult, visitedOpts]);
                                 }
                             }
 
@@ -261,12 +278,15 @@ export default function transformer( program: ts.Program )
                                 const options = parseParseOptions( node.arguments[1]);
                                 const parseRef = buildParser( type, checker, parserCache, hash, options, customFns );
                                 const inputArg = node.arguments[0];
+                                const visitedOpts = node.arguments[1]
+                                    ? ts.visitNode( node.arguments[1], visitor ) as ts.Expression
+                                    : ts.factory.createIdentifier( 'undefined' );
 
                                 if( inputArg )
                                 {
                                     const inputVisitorResult = ts.visitNode( inputArg, visitor ) as ts.Expression;
 
-                                    return ts.factory.createCallExpression( parseRef, undefined, [inputVisitorResult]);
+                                    return ts.factory.createCallExpression( parseRef, undefined, [inputVisitorResult, visitedOpts]);
                                 }
                             }
 

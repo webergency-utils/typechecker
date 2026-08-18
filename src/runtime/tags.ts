@@ -9,7 +9,7 @@ export * from './tags/constraint.js';
 
 // Export namespace-like modules
 export * as constraint from './tags/constraint.js';
-export * as tag from './tags/tag.js';
+export * from './tags/tag.js';
 export * as format from './tags/format.js';
 export * as transform from './tags/transform.js';
 
@@ -34,6 +34,7 @@ export interface ITypeConstraints
     maxContains?      : number
     custom?           : string
     default?          : string | number | boolean | null
+    tags?             : string[]
 }
 
 type Split<S extends string, D extends string> =

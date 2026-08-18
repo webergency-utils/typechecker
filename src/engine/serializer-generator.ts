@@ -3,6 +3,7 @@ import { ValidationMode } from '../runtime/validators.js';
 import
 {
     BUFFER_LIKE,
+    constraintTagNames,
     enumMemberTypes,
     isNativeEnumType,
     mapStructuralProps,
@@ -58,6 +59,28 @@ function unionExpectedLabel( type: ts.Type, checker: ts.TypeChecker ): string
     }
 }
 
+function bindTransformed(
+    varName  : string,
+    pathExpr : string,
+    kind     : string,
+    tags     : string[],
+    body     : ( v: string ) => string
+): string
+{
+    return `( function(){ const __sv = __tcRuntime.applySerializeTransform( ${varName}, ${pathExpr}, transform, ${JSON.stringify( kind )}, ${JSON.stringify( tags )}, input ); return ${body( '__sv' )}; })()`;
+}
+
+function bindTransformedStmt(
+    varName  : string,
+    pathExpr : string,
+    kind     : string,
+    tags     : string[],
+    stmt     : ( v: string ) => string
+): string
+{
+    return `{ const __sv = __tcRuntime.applySerializeTransform( ${varName}, ${pathExpr}, transform, ${JSON.stringify( kind )}, ${JSON.stringify( tags )}, input ); ${stmt( '__sv' )} }`;
+}
+
 export function generateSerializerCode(
     type        : ts.Type,
     checker     : ts.TypeChecker,
@@ -69,7 +92,7 @@ export function generateSerializerCode(
 
     if( format === 'query' )
     {
-        return `( function( input ){ const params = []; ${buildQuerySerializer( type, checker, mode, 'input', '""' )} return params.join( "&" ); })( input )`;
+        return `( function(){ const params = []; ${buildQuerySerializer( type, checker, mode, 'input', '""' )} return params.join( "&" ); })()`;
     }
 
     return buildJsonSerializer( type, checker, mode, '', 'input' );
@@ -83,7 +106,9 @@ function buildJsonSerializer(
     varName : string
 ): string
 {
-    // Peel brands/tags — serialize ignores constraints, walks base
+    // Peel brands/tags — serialize ignores constraints, walks base; tags feed ctx.tags.
+    let tags: string[] = [];
+
     if( typeof type.isIntersection === 'function' && type.isIntersection())
     {
         const peeled = peelTaggedIntersection( type, checker );
@@ -94,7 +119,11 @@ function buildJsonSerializer(
             return buildObjectSerializer( merged.props, merged.indexType, checker, mode, path, varName );
         }
 
-        if( peeled ){ type = peeled.base }
+        if( peeled )
+        {
+            tags = constraintTagNames( peeled.constraints );
+            type = peeled.base;
+        }
     }
 
     const flags = typeof type.getFlags === 'function' ? type.getFlags() : ts.TypeFlags.Any;
@@ -103,7 +132,7 @@ function buildJsonSerializer(
     // Match validators.any / parse passthrough — emit JSON for whatever value is there.
     if( flags & ts.TypeFlags.Any || flags & ts.TypeFlags.Unknown )
     {
-        return `__tcRuntime.serializeAny( ${varName} )`;
+        return bindTransformed( varName, pathLiteral, 'Object', tags, v => `__tcRuntime.serializeAny( ${v} )` );
     }
 
     if( typeof type.isStringLiteral === 'function' && type.isStringLiteral())
@@ -111,14 +140,18 @@ function buildJsonSerializer(
         const expected = JSON.stringify( type.value );
         const litCode = `Literal<'${String( type.value ).replace( /\\/g, '\\\\' ).replace( /'/g, "\\'" )}'>`;
 
-        return `( ${varName} === ${expected} ? ${JSON.stringify( JSON.stringify( type.value ))} : ( function(){ throw new __tcRuntime.SerializationError( ${pathLiteral}, ${JSON.stringify( litCode )} ); })() )`;
+        return bindTransformed( varName, pathLiteral, 'literal', tags, v =>
+            `( ${v} === ${expected} ? ${JSON.stringify( JSON.stringify( type.value ))} : ( function(){ throw new __tcRuntime.SerializationError( ${pathLiteral}, ${JSON.stringify( litCode )} ); })() )`
+        );
     }
 
     if( typeof type.isNumberLiteral === 'function' && type.isNumberLiteral())
     {
         const litCode = `Literal<${type.value}>`;
 
-        return `( ${varName} === ${type.value} ? ${JSON.stringify( String( type.value ))} : ( function(){ throw new __tcRuntime.SerializationError( ${pathLiteral}, ${JSON.stringify( litCode )} ); })() )`;
+        return bindTransformed( varName, pathLiteral, 'literal', tags, v =>
+            `( ${v} === ${type.value} ? ${JSON.stringify( String( type.value ))} : ( function(){ throw new __tcRuntime.SerializationError( ${pathLiteral}, ${JSON.stringify( litCode )} ); })() )`
+        );
     }
 
     if( flags & ts.TypeFlags.BooleanLiteral )
@@ -126,7 +159,9 @@ function buildJsonSerializer(
         const expected = ( type as any ).intrinsicName === 'true';
         const litCode = `Literal<${expected}>`;
 
-        return `( ${varName} === ${expected} ? ${JSON.stringify( String( expected ))} : ( function(){ throw new __tcRuntime.SerializationError( ${pathLiteral}, ${JSON.stringify( litCode )} ); })() )`;
+        return bindTransformed( varName, pathLiteral, 'literal', tags, v =>
+            `( ${v} === ${expected} ? ${JSON.stringify( String( expected ))} : ( function(){ throw new __tcRuntime.SerializationError( ${pathLiteral}, ${JSON.stringify( litCode )} ); })() )`
+        );
     }
 
     if( flags & ts.TypeFlags.BigIntLiteral )
@@ -139,22 +174,28 @@ function buildJsonSerializer(
 
     if( flags & ts.TypeFlags.String || flags & ts.TypeFlags.TemplateLiteral )
     {
-        return `__tcRuntime.serializeString( ${varName}, ${pathLiteral} )`;
+        return bindTransformed( varName, pathLiteral, 'string', tags, v => `__tcRuntime.serializeString( ${v}, ${pathLiteral} )` );
     }
 
     if( flags & ts.TypeFlags.Number )
     {
-        return `( typeof ${varName} === 'number' && !Number.isNaN( ${varName} ) ? String( ${varName} ) : ( function(){ throw new __tcRuntime.SerializationError( ${pathLiteral}, "Type<number>" ); })() )`;
+        return bindTransformed( varName, pathLiteral, 'number', tags, v =>
+            `( typeof ${v} === 'number' && !Number.isNaN( ${v} ) ? String( ${v} ) : ( function(){ throw new __tcRuntime.SerializationError( ${pathLiteral}, "Type<number>" ); })() )`
+        );
     }
 
     if( flags & ts.TypeFlags.Boolean )
     {
-        return `( typeof ${varName} === 'boolean' ? ( ${varName} ? 'true' : 'false' ) : ( function(){ throw new __tcRuntime.SerializationError( ${pathLiteral}, "Type<boolean>" ); })() )`;
+        return bindTransformed( varName, pathLiteral, 'boolean', tags, v =>
+            `( typeof ${v} === 'boolean' ? ( ${v} ? 'true' : 'false' ) : ( function(){ throw new __tcRuntime.SerializationError( ${pathLiteral}, "Type<boolean>" ); })() )`
+        );
     }
 
     if( flags & ts.TypeFlags.BigInt )
     {
-        return `( typeof ${varName} === 'bigint' ? String( ${varName} ) : ( function(){ throw new __tcRuntime.SerializationError( ${pathLiteral}, "Type<bigint>" ); })() )`;
+        return bindTransformed( varName, pathLiteral, 'bigint', tags, v =>
+            `( typeof ${v} === 'bigint' ? String( ${v} ) : ( function(){ throw new __tcRuntime.SerializationError( ${pathLiteral}, "Type<bigint>" ); })() )`
+        );
     }
 
     if( flags & ts.TypeFlags.Undefined )
@@ -187,12 +228,12 @@ function buildJsonSerializer(
 
     if( symbolName === 'Date' )
     {
-        return `__tcRuntime.serializeDate( ${varName}, ${pathLiteral} )`;
+        return bindTransformed( varName, pathLiteral, 'Date', tags, v => `__tcRuntime.serializeDate( ${v}, ${pathLiteral} )` );
     }
 
     if( symbolName && BUFFER_LIKE.has( symbolName ))
     {
-        return `__tcRuntime.serializeBuffer( ${varName}, ${pathLiteral} )`;
+        return bindTransformed( varName, pathLiteral, 'instance', tags, v => `__tcRuntime.serializeBuffer( ${v}, ${pathLiteral} )` );
     }
 
     if( typeof checker.isTupleType === 'function' && checker.isTupleType( type ))
@@ -310,6 +351,8 @@ function buildQuerySerializer(
     prefixExpr : string
 ): string
 {
+    let tags: string[] = [];
+
     if( typeof type.isIntersection === 'function' && type.isIntersection())
     {
         const peeled = peelTaggedIntersection( type, checker );
@@ -320,14 +363,18 @@ function buildQuerySerializer(
             return buildQueryObject( merged.props, merged.indexType, checker, mode, varName, prefixExpr );
         }
 
-        if( peeled ){ type = peeled.base }
+        if( peeled )
+        {
+            tags = constraintTagNames( peeled.constraints );
+            type = peeled.base;
+        }
     }
 
     const flags = typeof type.getFlags === 'function' ? type.getFlags() : ts.TypeFlags.Any;
 
     if( flags & ts.TypeFlags.Any || flags & ts.TypeFlags.Unknown )
     {
-        return `__tcRuntime.appendQueryAny( params, ${varName}, ${prefixExpr} );`;
+        return bindTransformedStmt( varName, prefixExpr, 'Object', tags, v => `__tcRuntime.appendQueryAny( params, ${v}, ${prefixExpr} );` );
     }
 
     if( flags & ts.TypeFlags.Undefined )
@@ -343,19 +390,31 @@ function buildQuerySerializer(
     if( flags & ( ts.TypeFlags.String | ts.TypeFlags.Number | ts.TypeFlags.Boolean | ts.TypeFlags.BigInt |
         ts.TypeFlags.StringLiteral | ts.TypeFlags.NumberLiteral | ts.TypeFlags.BooleanLiteral | ts.TypeFlags.BigIntLiteral ))
     {
-        return `params.push( encodeURIComponent( ${prefixExpr} ) + "=" + ${leafQueryEncode( varName )} );`;
+        const kind = ( flags & ts.TypeFlags.Number || flags & ts.TypeFlags.NumberLiteral ) ? 'number'
+            : ( flags & ts.TypeFlags.Boolean || flags & ts.TypeFlags.BooleanLiteral ) ? 'boolean'
+                : ( flags & ts.TypeFlags.BigInt || flags & ts.TypeFlags.BigIntLiteral ) ? 'bigint'
+                    : ( flags & ts.TypeFlags.StringLiteral || flags & ts.TypeFlags.NumberLiteral ) ? 'literal'
+                        : 'string';
+
+        return bindTransformedStmt( varName, prefixExpr, kind, tags, v =>
+            `params.push( encodeURIComponent( ${prefixExpr} ) + "=" + ${leafQueryEncode( v )} );`
+        );
     }
 
     const symbolName = typeSymbolName( type );
 
     if( symbolName === 'Date' )
     {
-        return `params.push( encodeURIComponent( ${prefixExpr} ) + "=" + encodeURIComponent( ${varName} instanceof Date ? ${varName}.toISOString() : String( ${varName} ) ) );`;
+        return bindTransformedStmt( varName, prefixExpr, 'Date', tags, v =>
+            `params.push( encodeURIComponent( ${prefixExpr} ) + "=" + encodeURIComponent( ${v} instanceof Date ? ${v}.toISOString() : String( ${v} ) ) );`
+        );
     }
 
     if( symbolName && BUFFER_LIKE.has( symbolName ))
     {
-        return `params.push( encodeURIComponent( ${prefixExpr} ) + "=" + encodeURIComponent( Buffer.from( ${varName} ).toString( "base64" ) ) );`;
+        return bindTransformedStmt( varName, prefixExpr, 'instance', tags, v =>
+            `params.push( encodeURIComponent( ${prefixExpr} ) + "=" + encodeURIComponent( Buffer.from( ${v} ).toString( "base64" ) ) );`
+        );
     }
 
     if( typeof checker.isTupleType === 'function' && checker.isTupleType( type ))

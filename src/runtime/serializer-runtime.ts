@@ -1,3 +1,11 @@
+import
+{
+    applyNodeTransform,
+    type TransformFn
+}
+    from './transform.js';
+import type { CoercionKind } from './validators.js';
+
 export class SerializationError extends Error
 {
     constructor( public readonly path: string, message: string )
@@ -168,4 +176,25 @@ export function serializeUnion(
     if( last && serializationErrorCode( last ) === expected ){ throw last }
 
     throw new SerializationError( path, expected );
+}
+
+export function applySerializeTransform(
+    value     : any,
+    path      : string,
+    transform : TransformFn | TransformFn[] | undefined,
+    kind      : CoercionKind,
+    tags      : string[],
+    root      : any
+): any
+{
+    try
+    {
+        return applyNodeTransform( value, path, transform, kind, tags, root );
+    }
+    catch( e )
+    {
+        if( e instanceof SerializationError ){ throw e }
+
+        throw new SerializationError( path, e instanceof Error ? e.message : String( e ));
+    }
 }

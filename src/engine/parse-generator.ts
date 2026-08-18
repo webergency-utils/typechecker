@@ -1,9 +1,10 @@
 import ts from 'typescript';
-import { ValidationMode } from '../runtime/validators.js';
+import { ValidationMode, type CoercionKind } from '../runtime/validators.js';
 import { type ICustomFunctionScope } from './customFns.js';
 import
 {
     BUFFER_LIKE,
+    constraintTagNames,
     enumMemberTypes,
     getTypeProps,
     isNativeEnumType,
@@ -171,6 +172,74 @@ function joinPath( pathExpr: string, segment: string ): string
     return `( ${pathExpr} ) ? ( ${pathExpr} ) + "." + ${JSON.stringify( segment )} : ${JSON.stringify( segment )}`;
 }
 
+function coercionKindOf( type: ts.Type, checker: ts.TypeChecker ): CoercionKind
+{
+    const flags = typeof type.getFlags === 'function' ? type.getFlags() : 0;
+
+    if( flags & ( ts.TypeFlags.Any | ts.TypeFlags.Unknown )){ return 'Object' }
+
+    if( flags & ts.TypeFlags.String || flags & ts.TypeFlags.TemplateLiteral ){ return 'string' }
+
+    if( flags & ts.TypeFlags.Number ){ return 'number' }
+
+    if( flags & ts.TypeFlags.BigInt || flags & ts.TypeFlags.BigIntLiteral ){ return 'bigint' }
+
+    if( flags & ts.TypeFlags.Boolean || flags & ts.TypeFlags.BooleanLiteral ){ return 'boolean' }
+
+    if( flags & ts.TypeFlags.Null ){ return 'null' }
+
+    if( flags & ts.TypeFlags.Undefined || flags & ts.TypeFlags.Void ){ return 'undefined' }
+
+    if( typeof type.isStringLiteral === 'function' && type.isStringLiteral()){ return 'literal' }
+
+    if( typeof type.isNumberLiteral === 'function' && type.isNumberLiteral()){ return 'literal' }
+
+    const name = typeSymbolName( type );
+
+    if( name === 'Date' ){ return 'Date' }
+
+    if( name === 'RegExp' ){ return 'RegExp' }
+
+    if( name === 'Set' ){ return 'Set' }
+
+    if( name === 'Map' ){ return 'Map' }
+
+    if( name && BUFFER_LIKE.has( name )){ return 'instance' }
+
+    if( isNativeEnumType( type )){ return 'literal' }
+
+    if( typeof checker.isArrayType === 'function' && checker.isArrayType( type )){ return 'Array' }
+
+    if( typeof checker.isTupleType === 'function' && checker.isTupleType( type )){ return 'tuple' }
+
+    return 'Object';
+}
+
+function shouldApplyParseTransform( type: ts.Type, checker: ts.TypeChecker ): boolean
+{
+    if( typeof type.isUnion === 'function' && type.isUnion()){ return false }
+
+    if( typeof checker.isArrayType === 'function' && checker.isArrayType( type )){ return false }
+
+    if( typeof checker.isTupleType === 'function' && checker.isTupleType( type )){ return false }
+
+    const kind = coercionKindOf( type, checker );
+
+    if( kind === 'Array' || kind === 'tuple' || kind === 'Set' || kind === 'Map' || kind === 'null' || kind === 'undefined' )
+    {
+        return false;
+    }
+
+    if( kind === 'Object' )
+    {
+        const flags = typeof type.getFlags === 'function' ? type.getFlags() : 0;
+
+        return !!( flags & ( ts.TypeFlags.Any | ts.TypeFlags.Unknown ));
+    }
+
+    return true;
+}
+
 export function generateParseCode(
     type    : ts.Type,
     checker : ts.TypeChecker,
@@ -186,25 +255,22 @@ export function generateParseCode(
         assertStringSourceCompatible( type, checker, scope );
         const body = buildValidation( type, checker, mode, 'string', 'input', 'path', 'input', scope );
 
-        // Already-decoded scalar wire value — never parseQueryString / JSON.parse.
-        return `( function( input, path = "" ){ return ${body}; })`;
+        // Already-decoded scalar wire value — never parseQueryString / JSON.parse. Ignore reviver.
+        return `( function( raw, options ){ const path = ""; const transform = options && options.transform; const input = __tcRuntime.expectString( raw, path ); return ${body}; })`;
     }
 
     if( from === 'query' )
     {
         const body = buildValidation( type, checker, mode, 'query', 'rawQuery', 'path', 'rawQuery', scope );
 
-        // Named query/param/cookie values are scalars (or already-parsed objects/arrays). Only
-        // treat encoded query text and URLSearchParams as querystrings — bare values like "42"
-        // or string[] must not go through parseQueryString (arrays also have .entries()).
-        return `( function( input, path = "" ){ const rawQuery = ( typeof input === "string" ? ( /[=%&]/.test( input ) ? __tcRuntime.parseQueryString( input ) : input ) : ( typeof URLSearchParams !== "undefined" && input instanceof URLSearchParams ? __tcRuntime.parseQueryString( input.toString() ) : input ) ); return ${body}; })`;
+        // Query text only — never starts with `?` (`url.search.slice(1)` / form body). Flag-keys stay flag-keys.
+        return `( function( input, options ){ const path = ""; const reviver = options && options.reviver; const transform = options && options.transform; const text = __tcRuntime.expectString( input, path ); let rawQuery = __tcRuntime.parseQueryString( text ); if( reviver ){ rawQuery = __tcRuntime.reviveTree( rawQuery, reviver ); } return ${body}; })`;
     }
 
     const body = buildValidation( type, checker, mode, 'json', 'obj', 'path', 'obj', scope );
 
-    // Body values are often already JSON-parsed by the host. Only JSON.parse strings that
-    // look like JSON text; otherwise keep the string (already-decoded JSON string primitives).
-    return `( function( input, path = "" ){ let obj; if( typeof input === "string" ){ const t = input.trim(); if( t.startsWith( "{" ) || t.startsWith( "[" ) || t.startsWith( "\\"" ) || t === "true" || t === "false" || t === "null" || /^-?\\d+(\\.\\d+)?([eE][+-]?\\d+)?$/.test( t ) ){ try { obj = JSON.parse( input ); } catch( e ){ throw new __tcRuntime.ParseError( path, "Invalid JSON: " + e.message ); } } else { obj = input; } } else { obj = input; } return ${body}; })`;
+    // JSON text only — always JSON.parse. Unquoted scalars belong on from:'string'.
+    return `( function( input, options ){ const path = ""; const reviver = options && options.reviver; const transform = options && options.transform; const text = __tcRuntime.expectString( input, path ); let obj; try { obj = JSON.parse( text ); } catch( e ){ throw new __tcRuntime.ParseError( path, "Invalid JSON: " + e.message ); } if( reviver ){ obj = __tcRuntime.reviveTree( obj, reviver ); } return ${body}; })`;
 }
 
 function wrapConstraints(
@@ -216,12 +282,20 @@ function wrapConstraints(
     rootExpr     : string,
     checker      : ts.TypeChecker,
     mode         : ValidationMode,
-    scope        : ICustomFunctionScope
+    scope        : ICustomFunctionScope,
+    kind         : CoercionKind,
+    applyOption  : boolean
 ): string
 {
+    const tags = constraintTagNames( constraints );
+
     if( constraints.length === 0 )
     {
-        return innerFactory( varName, pathExpr );
+        const inner = innerFactory( varName, pathExpr );
+
+        if( !applyOption ){ return inner }
+
+        return `__tcRuntime.applyParseTransform( ${inner}, ${pathExpr || '""'}, transform, ${JSON.stringify( kind )}, ${JSON.stringify( tags )}, ${rootExpr} )`;
     }
 
     const early = constraints.filter( c => c.type === 'default' || c.type === 'transform' || c.type === 'message' );
@@ -231,6 +305,7 @@ function wrapConstraints(
         c.type !== 'transform' &&
         c.type !== 'transform_custom' &&
         c.type !== 'message' &&
+        c.type !== 'tags' &&
         c.type !== 'custom' &&
         c.type !== 'contains' &&
         c.type !== 'propertyNames' &&
@@ -292,7 +367,11 @@ function wrapConstraints(
             `__v = __tcRuntime.applyPropertyNames(__v, p, (key, keyP) => ${keyBody}${msgArg}); `;
     }
 
-    return `( function( raw, p, root ){ let __v = __tcRuntime.applyParseConstraints( raw, p, ${JSON.stringify( early )}, ${JSON.stringify( from )} ); ${customTransformCode}__v = ${inner}; __v = __tcRuntime.applyParseConstraints( __v, p, ${JSON.stringify( late )}, ${JSON.stringify( from )} ); ${nestedConstraintCode}${customConstraintCode}return __v; })( ${varName}, ${pathExpr || '""'}, ${rootExpr} )`;
+    const optionCode = applyOption
+        ? `__v = __tcRuntime.applyParseTransform( __v, p, transform, ${JSON.stringify( kind )}, ${JSON.stringify( tags )}, root ); `
+        : '';
+
+    return `( function( raw, p, root ){ let __v = __tcRuntime.applyParseConstraints( raw, p, ${JSON.stringify( early )}, ${JSON.stringify( from )} ); ${customTransformCode}__v = ${inner}; ${optionCode}__v = __tcRuntime.applyParseConstraints( __v, p, ${JSON.stringify( late )}, ${JSON.stringify( from )} ); ${nestedConstraintCode}${customConstraintCode}return __v; })( ${varName}, ${pathExpr || '""'}, ${rootExpr} )`;
 }
 
 function buildValidation(
@@ -342,7 +421,9 @@ function buildValidation(
                         rootExpr,
                         checker,
                         mode,
-                        scope
+                        scope,
+                        'Object',
+                        false
                     );
                 }
             }
@@ -367,7 +448,9 @@ function buildValidation(
         rootExpr,
         checker,
         mode,
-        scope
+        scope,
+        coercionKindOf( walkType, checker ),
+        shouldApplyParseTransform( walkType, checker )
     );
 }
 

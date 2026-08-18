@@ -426,6 +426,15 @@ export function collectConstraintsFromProps(
 
         if( pName === '__message' ){ constraints.push({ type : 'message', value : val }); continue }
 
+        if( pName === '__tags' )
+        {
+            const names = collectTagBagNames( actualType, checker );
+
+            if( names.length > 0 ){ constraints.push({ type : 'tags', value : names }) }
+
+            continue;
+        }
+
         if( pName === '__transform_lowercase' ){ constraints.push({ type : 'transform', value : 'lowercase' }); continue }
 
         if( pName === '__transform_uppercase' ){ constraints.push({ type : 'transform', value : 'uppercase' }); continue }
@@ -528,7 +537,80 @@ export function collectConstraintsFromProps(
         if( mapped ){ constraints.push({ type : mapped, value : val, message : constraintMsg }) }
     }
 
-    return constraints;
+    return mergeTagConstraints( constraints );
+}
+
+/** Keys of `{ html?: true, basic?: true }` from `tag<'html' | 'basic'>`. */
+export function collectTagBagNames( type: ts.Type, checker: ts.TypeChecker ): string[]
+{
+    const names = new Set<string>();
+
+    const visit = ( t: ts.Type ) =>
+    {
+        const actual = stripUndefinedFromType( t );
+
+        if( typeof actual.isIntersection === 'function' && actual.isIntersection())
+        {
+            for( const arm of actual.types ){ visit( arm ) }
+
+            return;
+        }
+
+        if( typeof actual.isUnion === 'function' && actual.isUnion())
+        {
+            for( const arm of actual.types ){ visit( arm ) }
+
+            return;
+        }
+
+        for( const prop of getTypeProps( actual, checker ))
+        {
+            const name = prop.getName();
+
+            if( !isTagKey( name )){ names.add( name ) }
+        }
+    };
+
+    visit( type );
+
+    return [ ...names ].sort();
+}
+
+export function constraintTagNames( constraints: ParsedConstraint[] ): string[]
+{
+    const found = constraints.find( c => c.type === 'tags' );
+
+    if( !found || !Array.isArray( found.value )){ return [] }
+
+    return found.value as string[];
+}
+
+/** Collapse every `tags` constraint into one sorted bag. */
+export function mergeTagConstraints( constraints: ParsedConstraint[] ): ParsedConstraint[]
+{
+    const names = new Set<string>();
+    const rest: ParsedConstraint[] = [];
+
+    for( const c of constraints )
+    {
+        if( c.type === 'tags' && Array.isArray( c.value ))
+        {
+            for( const name of c.value )
+            {
+                if( typeof name === 'string' && name.length > 0 ){ names.add( name ) }
+            }
+
+            continue;
+        }
+
+        rest.push( c );
+    }
+
+    if( names.size === 0 ){ return rest }
+
+    rest.push({ type : 'tags', value : [ ...names ].sort() });
+
+    return rest;
 }
 
 /**
@@ -604,7 +686,7 @@ export function peelTaggedIntersection(
         base = baseCandidates[0];
     }
 
-    return { base, constraints, hasTags : constraints.length > 0 };
+    return { base, constraints : mergeTagConstraints( constraints ), hasTags : constraints.length > 0 };
 }
 
 /** Resolve the effective type for walking: peel brands/tags to base when present. */

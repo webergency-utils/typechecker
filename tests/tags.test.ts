@@ -228,3 +228,42 @@ describe( 'constraint tag assignability', () =>
         expect( s ).toBe( 'a' );
     });
 });
+
+describe( 'tag bag assignability', () =>
+{
+    test( 'allows plain strings to assign to tag metadata (optional bag)', () =>
+    {
+        const html: string & tag<'html'> = '<p>hi</p>';
+        const both: string & tag<'html' | 'basic'> = '<p>hi</p>';
+        const intersected: string & tag<'html'> & tag<'basic'> = '<p>hi</p>';
+        const namespaced: string & tag.Tag<'html'> = '<p>hi</p>';
+
+        expect( html ).toBe( '<p>hi</p>' );
+        expect( both ).toBe( '<p>hi</p>' );
+        expect( intersected ).toBe( '<p>hi</p>' );
+        expect( namespaced ).toBe( '<p>hi</p>' );
+    });
+
+    test( 'keeps the root tag alias equivalent to tag.Tag', () =>
+    {
+        expectTypeOf<string & tag<'html' | 'basic'>>().toEqualTypeOf<string & tag.Tag<'html' | 'basic'>>();
+    });
+
+    test( 'merges intersected bags at the type level', () =>
+    {
+        type UnionBag = tag<'html' | 'basic'>;
+        type IntersectedBag = tag<'html'> & tag<'basic'>;
+
+        expectTypeOf<UnionBag['__tags']>().toMatchTypeOf<{ html? : true, basic? : true } | undefined>();
+        expectTypeOf<IntersectedBag['__tags']>().toMatchTypeOf<{ html? : true, basic? : true } | undefined>();
+    });
+
+    test( 'composes with constraint tags without blocking assignability', () =>
+    {
+        type Body = string & constraint.MinLength<1> & tag<'html'>;
+        const body: Body = '<p>x</p>';
+
+        expect( body ).toBe( '<p>x</p>' );
+        expectTypeOf<Body>().toMatchTypeOf<string>();
+    });
+});

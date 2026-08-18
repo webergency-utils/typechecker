@@ -1,5 +1,6 @@
 import { childPath, indexPath } from './path.js';
 import { createSafeRegex, isRegexSafe, testRegex } from './regex.js';
+import { applyNodeTransform, type TransformFn } from './transform.js';
 
 /** Controls unknown object keys only — not coercion. Use `from` for conversion. */
 export type ValidationMode = 'strict' | 'relaxed' | 'strip';
@@ -48,6 +49,8 @@ export interface ValidationContext {
     annotations? : SchemaAnnotationFrame
     /** Dynamic scope bindings for `$dynamicAnchor` / `$dynamicRef` (and 2019-09 recursive). */
     dynamicAnchors? : Map<string, JsonSchema | boolean>[]
+    /** Opt-in typed walk for `assert` / `validate`. Never set by `is` / `assertGuard`. */
+    transform? : TransformFn | TransformFn[]
 }
 
 /** Evaluated properties / items collected for `unevaluatedProperties` / `unevaluatedItems`. */
@@ -82,6 +85,8 @@ export interface AssertGuardOptions extends GuardOptions {
 export interface ValidationOptions extends GuardOptions {
     /** `true`: write in place while validating. `false` (default): allocate new containers. */
     mutate? : boolean
+    /** Opt-in typed rewrite after revival / `transform.*` tags. Not used by `is` / `assertGuard`. */
+    transform? : TransformFn | TransformFn[]
 }
 
 /** Options for `assert` / `assertSchema`. */
@@ -1073,6 +1078,21 @@ export const validators = {
     coerceQueryBoolean,
     coerceQueryDate,
     coerceJsonDate,
+    applyOptionTransform : ( v: any, path: string, ctx: ValidationContext, tags: string[], kind: CoercionKind ) =>
+    {
+        if( !ctx.transform || v === undefined || v === null ){ return v }
+
+        try
+        {
+            return applyNodeTransform( v, path, ctx.transform, kind, tags, ctx.root );
+        }
+        catch( e )
+        {
+            report( ctx, path, e instanceof Error ? e.message : String( e ), v );
+
+            return v;
+        }
+    },
     safeRegExp : createSafeRegex,
     assign     : ( target: any, source: any ) =>
     {
@@ -2518,7 +2538,8 @@ export function assert( validator: Function, value: any, options?: ValidationMod
     const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
     const from = typeof opt === 'object' ? opt?.from : undefined;
     const mutate = typeof opt === 'object' ? opt?.mutate === true : false;
-    const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate, root : value };
+    const transform = typeof opt === 'object' ? opt?.transform : undefined;
+    const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate, root : value, transform };
     const res = validator( value, '', ctx );
 
     if( !ctx.success )
@@ -2577,7 +2598,8 @@ export function validate( validator: Function, value: any, options?: ValidationM
     const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
     const from = typeof opt === 'object' ? opt?.from : undefined;
     const mutate = typeof opt === 'object' ? opt?.mutate === true : false;
-    const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate, root : value };
+    const transform = typeof opt === 'object' ? opt?.transform : undefined;
+    const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate, root : value, transform };
     const res = validator( value, '', ctx );
 
     if( !ctx.success ){ return { success : false, errors : ctx.errors } }

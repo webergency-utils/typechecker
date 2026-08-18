@@ -96,12 +96,35 @@ export function createPrimitiveCheck( type: string ): ts.Expression
     );
 }
 
+export function wrapOptionTransform( inner: ts.Expression, kind: string, tags: string[] = [] ): ts.Expression
+{
+    const tpl = '(v, path, ctx) => { v = __INNER__(v, path, ctx); if (ctx.success) v = validators.applyOptionTransform(v, path, ctx, __TAGS__, __KIND__); return v; }';
+
+    return injectNodes( templateToAst( tpl ), {
+        '__INNER__' : inner,
+        '__TAGS__'  : ts.factory.createArrayLiteralExpression( tags.map( t => ts.factory.createStringLiteral( t ))),
+        '__KIND__'  : ts.factory.createStringLiteral( kind )
+    });
+}
+
+function constrainedCoercionKind( baseType: string ): string
+{
+    if( baseType === 'date' ){ return 'Date' }
+
+    if( baseType === 'array' ){ return 'Array' }
+
+    return baseType;
+}
+
 export function createConstrainedPrimitiveCheck( baseType: string, constraints: any[], baseValidator?: ts.Expression ): ts.Expression 
 {
     const defaultConstraint = constraints.find( c => c.type === 'default' );
     const transformConstraints = constraints.filter( c => c.type === 'transform' || c.type === 'transform_custom' );
     const messageConstraint = constraints.find( c => c.type === 'message' );
-    const remainingConstraints = constraints.filter( c => c.type !== 'default' && c.type !== 'transform' && c.type !== 'transform_custom' && c.type !== 'message' );
+    const tagConstraint = constraints.find( c => c.type === 'tags' );
+    const remainingConstraints = constraints.filter( c => c.type !== 'default' && c.type !== 'transform' && c.type !== 'transform_custom' && c.type !== 'message' && c.type !== 'tags' );
+    const tags: string[] = Array.isArray( tagConstraint?.value ) ? tagConstraint.value : [];
+    const kind = constrainedCoercionKind( baseType );
     
     const fallbackMsg = messageConstraint?.value;
     const minContains = remainingConstraints.find( c => c.type === 'minContains' )?.value as number | undefined;
@@ -234,6 +257,7 @@ export function createConstrainedPrimitiveCheck( baseType: string, constraints: 
         const _s = ctx.success;
         ctx.success = true;
         ${defaultInit}${transformInit}v = __BASE_CHECK__;
+        if (ctx.success) v = validators.applyOptionTransform(v, path, ctx, __TAGS__, __KIND__);
         if (ctx.success && v !== undefined && v !== null) {
             ${constraintCode};
         }
@@ -252,7 +276,12 @@ export function createConstrainedPrimitiveCheck( baseType: string, constraints: 
         [ts.factory.createIdentifier( 'v' ), ts.factory.createIdentifier( 'path' ), ts.factory.createIdentifier( 'ctx' )]
     );
     
-    return injectNodes( templateToAst( tpl ), { '__BASE_CHECK__' : baseCheck, ...nestedReplacements });
+    return injectNodes( templateToAst( tpl ), {
+        '__BASE_CHECK__' : baseCheck,
+        '__TAGS__'       : ts.factory.createArrayLiteralExpression( tags.map( t => ts.factory.createStringLiteral( t ))),
+        '__KIND__'       : ts.factory.createStringLiteral( kind ),
+        ...nestedReplacements
+    });
 }
 
 export function createLiteralCheck( value: string | number | boolean | ts.PseudoBigInt ): ts.Expression 

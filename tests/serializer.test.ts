@@ -254,7 +254,7 @@ describe( 'Serializer & Stringify', () =>
                 .toContain( '__tcRuntime.serializeString' );
 
             const { dummyType : numType, checker : numChecker } = createDummyTypeChecker( ts.TypeFlags.Number );
-            expect( generateSerializerCode( numType, numChecker )).toContain( "typeof input === 'number'" );
+            expect( generateSerializerCode( numType, numChecker )).toContain( "typeof __sv === 'number'" );
 
             const { dummyType : arrType, checker : arrChecker } = createDummyTypeChecker( ts.TypeFlags.Object, true );
             expect( generateSerializerCode( arrType, arrChecker )).toContain( '__tcRuntime.serializeArray' );
