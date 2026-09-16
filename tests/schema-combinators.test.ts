@@ -554,8 +554,8 @@ describe( 'schema combinators', () =>
             const fn = getOrCompileSchema({
                 anyOf : [
                     {
-                        type                 : 'object',
-                        properties           : {
+                        type       : 'object',
+                        properties : {
                             kind : { type : 'string', const : 'a' },
                             n    : { type : 'number' }
                         },
@@ -563,8 +563,8 @@ describe( 'schema combinators', () =>
                         additionalProperties : false
                     },
                     {
-                        type                 : 'object',
-                        properties           : {
+                        type       : 'object',
+                        properties : {
                             kind : { type : 'string', const : 'b' },
                             s    : { type : 'string' }
                         },
@@ -724,8 +724,8 @@ describe( 'schema combinators', () =>
             const fn = getOrCompileSchema({
                 anyOf : [
                     {
-                        type                 : 'object',
-                        properties           : {
+                        type       : 'object',
+                        properties : {
                             kind : { type : 'string', const : 'a' },
                             n    : { type : 'number' }
                         },
@@ -733,8 +733,8 @@ describe( 'schema combinators', () =>
                         additionalProperties : false
                     },
                     {
-                        type                 : 'object',
-                        properties           : {
+                        type       : 'object',
+                        properties : {
                             kind : { type : 'string', const : 'b' },
                             s    : { type : 'string' }
                         },
@@ -957,8 +957,8 @@ describe( 'schema combinators', () =>
                             body : {
                                 anyOf : [
                                     {
-                                        type                 : 'object',
-                                        properties           : {
+                                        type       : 'object',
+                                        properties : {
                                             kind  : { type : 'string', const : 'text' },
                                             value : { type : 'string', minLength : 1 }
                                         },
@@ -966,8 +966,8 @@ describe( 'schema combinators', () =>
                                         additionalProperties : false
                                     },
                                     {
-                                        type                 : 'object',
-                                        properties           : {
+                                        type       : 'object',
+                                        properties : {
                                             kind : { type : 'string', const : 'count' },
                                             n    : { type : 'number' }
                                         },
@@ -1033,8 +1033,8 @@ describe( 'schema combinators', () =>
                         anyOf : [
                             { $ref : '#/$defs/Pair' },
                             {
-                                type                 : 'object',
-                                properties           : {
+                                type       : 'object',
+                                properties : {
                                     child : { $ref : '#/$defs/Pair' }
                                 },
                                 required             : ['child'],
@@ -1073,8 +1073,8 @@ describe( 'schema combinators', () =>
                             type       : 'object',
                             properties : {
                                 tags : {
-                                    type     : 'array',
-                                    items    : {
+                                    type  : 'array',
+                                    items : {
                                         anyOf : [
                                             { type : 'string', const : 'a' },
                                             { type : 'string', const : 'b' }
@@ -1294,8 +1294,8 @@ describe( 'schema combinators', () =>
                             body : {
                                 anyOf : [
                                     {
-                                        type                 : 'object',
-                                        properties           : {
+                                        type       : 'object',
+                                        properties : {
                                             kind  : { type : 'string', const : 'text' },
                                             value : { type : 'string' }
                                         },
@@ -1303,8 +1303,8 @@ describe( 'schema combinators', () =>
                                         additionalProperties : false
                                     },
                                     {
-                                        type                 : 'object',
-                                        properties           : {
+                                        type       : 'object',
+                                        properties : {
                                             kind : { type : 'string', const : 'count' },
                                             n    : { type : 'number' }
                                         },
@@ -1595,25 +1595,25 @@ describe( 'schema combinators', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, [ 1, 'ab', 'cd' ] ).success ).toBe( true );
-            expect( validate( fn, [ 1, 'ab' ] ).success ).toBe( false );
-            expect( validate( fn, [ 'ab', 'cd', 'ef', 'gh' ] ).success ).toBe( false );
+            expect( validate( fn, [ 1, 'ab', 'cd' ]).success ).toBe( true );
+            expect( validate( fn, [ 1, 'ab' ]).success ).toBe( false );
+            expect( validate( fn, [ 'ab', 'cd', 'ef', 'gh' ]).success ).toBe( false );
         });
 
         it( 'should enforce patternProperties alongside properties', () =>
         {
             // Arrange
             const fn = getOrCompileSchema({
-                type              : 'object',
-                properties        : { id : { type : 'string' } },
-                patternProperties : { '^x_' : { type : 'number' } },
+                type                 : 'object',
+                properties           : { id : { type : 'string' } },
+                patternProperties    : { '^x_' : { type : 'number' } },
                 additionalProperties : false
             });
 
             // Act / Assert
-            expect( validate( fn, { id : 'a', x_count : 2 } ).success ).toBe( true );
-            expect( validate( fn, { id : 'a', x_count : 'no' } ).success ).toBe( false );
-            expect( validate( fn, { id : 'a', other : 1 } ).success ).toBe( false );
+            expect( validate( fn, { id : 'a', x_count : 2 }).success ).toBe( true );
+            expect( validate( fn, { id : 'a', x_count : 'no' }).success ).toBe( false );
+            expect( validate( fn, { id : 'a', other : 1 }).success ).toBe( false );
         });
 
         it( 'should enforce propertyNames against every key', () =>
@@ -1626,35 +1626,35 @@ describe( 'schema combinators', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, { abc : 1 } ).success ).toBe( true );
-            expect( validate( fn, { 'Bad-Key' : 1 } ).success ).toBe( false );
+            expect( validate( fn, { abc : 1 }).success ).toBe( true );
+            expect( validate( fn, { 'Bad-Key' : 1 }).success ).toBe( false );
         });
 
         it( 'should enforce dependentRequired and draft-07 dependencies property lists', () =>
         {
             // Arrange
             const dependent = getOrCompileSchema({
-                type              : 'object',
-                dependentRequired : { credit_card : [ 'billing_address' ] },
+                type                 : 'object',
+                dependentRequired    : { credit_card : [ 'billing_address' ] },
                 additionalProperties : true
             });
             const legacy = getOrCompileSchema({
-                type         : 'object',
-                dependencies : { credit_card : [ 'billing_address' ] },
+                type                 : 'object',
+                dependencies         : { credit_card : [ 'billing_address' ] },
                 additionalProperties : true
             });
 
             // Act / Assert
-            expect( validate( dependent, { name : 'a' } ).success ).toBe( true );
-            expect( validate( dependent, { credit_card : '1' } ).success ).toBe( false );
+            expect( validate( dependent, { name : 'a' }).success ).toBe( true );
+            expect( validate( dependent, { credit_card : '1' }).success ).toBe( false );
             expect( validate( dependent, {
-                credit_card      : '1',
-                billing_address  : 'x'
+                credit_card     : '1',
+                billing_address : 'x'
             }).success ).toBe( true );
-            expect( validate( legacy, { credit_card : '1' } ).success ).toBe( false );
+            expect( validate( legacy, { credit_card : '1' }).success ).toBe( false );
             expect( validate( legacy, {
-                credit_card      : '1',
-                billing_address  : 'x'
+                credit_card     : '1',
+                billing_address : 'x'
             }).success ).toBe( true );
         });
 
@@ -1685,13 +1685,13 @@ describe( 'schema combinators', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, { name : 'a' } ).success ).toBe( true );
-            expect( validate( fn, { credit_card : '1' } ).success ).toBe( false );
+            expect( validate( fn, { name : 'a' }).success ).toBe( true );
+            expect( validate( fn, { credit_card : '1' }).success ).toBe( false );
             expect( validate( fn, {
                 credit_card     : '1',
                 billing_address : 'x'
             }).success ).toBe( true );
-            expect( validate( legacy, { credit_card : '1' } ).success ).toBe( false );
+            expect( validate( legacy, { credit_card : '1' }).success ).toBe( false );
             expect( validate( legacy, {
                 credit_card     : '1',
                 billing_address : 'x'
@@ -1711,9 +1711,9 @@ describe( 'schema combinators', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, [ 'a', 1, true, false ] ).success ).toBe( true );
-            expect( validate( fn, [ 'a', 1, 'no' ] ).success ).toBe( false );
-            expect( validate( fn, [ 1, 1 ] ).success ).toBe( false );
+            expect( validate( fn, [ 'a', 1, true, false ]).success ).toBe( true );
+            expect( validate( fn, [ 'a', 1, 'no' ]).success ).toBe( false );
+            expect( validate( fn, [ 1, 1 ]).success ).toBe( false );
         });
 
         it( 'should reject trailing items when items is false', () =>
@@ -1726,8 +1726,8 @@ describe( 'schema combinators', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, [ 'a' ] ).success ).toBe( true );
-            expect( validate( fn, [ 'a', 1 ] ).success ).toBe( false );
+            expect( validate( fn, [ 'a' ]).success ).toBe( true );
+            expect( validate( fn, [ 'a', 1 ]).success ).toBe( false );
         });
 
         it( 'should honor draft-07 tuple items + additionalItems', () =>
@@ -1744,9 +1744,9 @@ describe( 'schema combinators', () =>
             });
 
             // Act / Assert
-            expect( validate( open, [ 'a', 1, true ] ).success ).toBe( true );
-            expect( validate( closed, [ 'a' ] ).success ).toBe( true );
-            expect( validate( closed, [ 'a', 1 ] ).success ).toBe( false );
+            expect( validate( open, [ 'a', 1, true ]).success ).toBe( true );
+            expect( validate( closed, [ 'a' ]).success ).toBe( true );
+            expect( validate( closed, [ 'a', 1 ]).success ).toBe( false );
         });
 
         it( 'should enforce unevaluatedItems after prefixItems and contains', () =>
@@ -1760,9 +1760,9 @@ describe( 'schema combinators', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, [ 'a', 2 ] ).success ).toBe( true );
-            expect( validate( fn, [ 'a', true ] ).success ).toBe( false );
-            expect( validate( fn, [ 'a', 2, false ] ).success ).toBe( false );
+            expect( validate( fn, [ 'a', 2 ]).success ).toBe( true );
+            expect( validate( fn, [ 'a', true ]).success ).toBe( false );
+            expect( validate( fn, [ 'a', 2, false ]).success ).toBe( false );
         });
 
         it( 'should enforce unevaluatedProperties for keys not covered by properties/patternProperties', () =>
@@ -1776,8 +1776,8 @@ describe( 'schema combinators', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, { id : 'a', x_n : 1 } ).success ).toBe( true );
-            expect( validate( fn, { id : 'a', extra : 1 } ).success ).toBe( false );
+            expect( validate( fn, { id : 'a', x_n : 1 }).success ).toBe( true );
+            expect( validate( fn, { id : 'a', extra : 1 }).success ).toBe( false );
         });
 
         it( 'should apply new keywords from typeless schemas when the instance matches', () =>
@@ -1793,12 +1793,12 @@ describe( 'schema combinators', () =>
             });
 
             // Act / Assert
-            expect( validate( obj, { n_a : 1 } ).success ).toBe( true );
-            expect( validate( obj, { other : 1 } ).success ).toBe( false );
+            expect( validate( obj, { n_a : 1 }).success ).toBe( true );
+            expect( validate( obj, { other : 1 }).success ).toBe( false );
             expect( validate( obj, 'skip' ).success ).toBe( true );
-            expect( validate( arr, [ 'a' ] ).success ).toBe( true );
-            expect( validate( arr, [ 'a', 1 ] ).success ).toBe( false );
-            expect( validate( arr, { not : 'array' } ).success ).toBe( true );
+            expect( validate( arr, [ 'a' ]).success ).toBe( true );
+            expect( validate( arr, [ 'a', 1 ]).success ).toBe( false );
+            expect( validate( arr, { not : 'array' }).success ).toBe( true );
         });
 
         it( 'should still throw for unknown x-typescript-type values', () =>
@@ -1815,8 +1815,8 @@ describe( 'schema combinators', () =>
             const fn = getOrCompileSchema({ type : 'array', items : false });
 
             // Act / Assert
-            expect( validate( fn, [] ).success ).toBe( true );
-            expect( validate( fn, [ 1 ] ).success ).toBe( false );
+            expect( validate( fn, []).success ).toBe( true );
+            expect( validate( fn, [ 1 ]).success ).toBe( false );
         });
 
         it( 'should validate unevaluatedProperties / unevaluatedItems schemas', () =>
@@ -1834,10 +1834,10 @@ describe( 'schema combinators', () =>
             });
 
             // Act / Assert
-            expect( validate( obj, { id : 'a', n : 1 } ).success ).toBe( true );
-            expect( validate( obj, { id : 'a', n : 'x' } ).success ).toBe( false );
-            expect( validate( arr, [ 'a', 2 ] ).success ).toBe( true );
-            expect( validate( arr, [ 'a', 'b' ] ).success ).toBe( false );
+            expect( validate( obj, { id : 'a', n : 1 }).success ).toBe( true );
+            expect( validate( obj, { id : 'a', n : 'x' }).success ).toBe( false );
+            expect( validate( arr, [ 'a', 2 ]).success ).toBe( true );
+            expect( validate( arr, [ 'a', 'b' ]).success ).toBe( false );
         });
 
         it( 'should allow unevaluatedProperties true and additionalProperties schema forms', () =>
@@ -1855,9 +1855,9 @@ describe( 'schema combinators', () =>
             });
 
             // Act / Assert
-            expect( validate( open, { id : 'a', extra : 'kept' } ).success ).toBe( true );
-            expect( validate( extras, { id : 'a', flag : true } ).success ).toBe( true );
-            expect( validate( extras, { id : 'a', flag : 1 } ).success ).toBe( false );
+            expect( validate( open, { id : 'a', extra : 'kept' }).success ).toBe( true );
+            expect( validate( extras, { id : 'a', flag : true }).success ).toBe( true );
+            expect( validate( extras, { id : 'a', flag : 1 }).success ).toBe( false );
         });
 
         it( 'should keep or strip unknown keys under patternProperties with additionalProperties false', () =>
@@ -1889,8 +1889,8 @@ describe( 'schema combinators', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, {} ).success ).toBe( false );
-            expect( validate( fn, { must : 1 } ).success ).toBe( true );
+            expect( validate( fn, {}).success ).toBe( false );
+            expect( validate( fn, { must : 1 }).success ).toBe( true );
         });
     });
 
@@ -1955,9 +1955,9 @@ describe( 'schema combinators', () =>
             // Act / Assert
             expect( validate( fn, 'a' ).success ).toBe( true );
             expect( validate( fn, 1 ).success ).toBe( true );
-            expect( validate( fn, { x : 1 } ).success ).toBe( true );
+            expect( validate( fn, { x : 1 }).success ).toBe( true );
             expect( validate( fn, 'b' ).success ).toBe( false );
-            expect( validate( fn, { x : 2 } ).success ).toBe( false );
+            expect( validate( fn, { x : 2 }).success ).toBe( false );
         });
 
         it( 'should apply if/then/else branches', () =>

@@ -93,10 +93,10 @@ describe( 'parse / stringify reviver, replacer, and transform', () =>
     {
         // Arrange
         const mod = await emitAndImport<{
-            parseJson    : ( input: unknown, transform: ( value: unknown, ctx: { type : string } ) => unknown ) => { at : Date }
-            parseQuery   : ( input: unknown, transform: ( value: unknown, ctx: { type : string } ) => unknown ) => { at : Date }
-            stringifyJson  : ( input: { at : Date }, transform: ( value: unknown, ctx: { type : string } ) => unknown ) => string
-            stringifyQuery : ( input: { at : Date }, transform: ( value: unknown, ctx: { type : string } ) => unknown ) => string
+            parseJson      : ( input: unknown, transform: ( value: unknown, ctx: { type : string }) => unknown ) => { at : Date }
+            parseQuery     : ( input: unknown, transform: ( value: unknown, ctx: { type : string }) => unknown ) => { at : Date }
+            stringifyJson  : ( input: { at : Date }, transform: ( value: unknown, ctx: { type : string }) => unknown ) => string
+            stringifyQuery : ( input: { at : Date }, transform: ( value: unknown, ctx: { type : string }) => unknown ) => string
         }>( `
             import { parse, stringify } from '../src/index.js';
             interface Event { at : Date }
@@ -106,7 +106,7 @@ describe( 'parse / stringify reviver, replacer, and transform', () =>
             export const stringifyQuery = ( input: Event, transform: any ) => stringify<Event>( input, { format: 'query', transform } );
         `, 'temp_pt_date_offset' );
         const ms = 3_600_000;
-        const shift = ( delta: number ) => ( value: unknown, ctx: { type : string } ) =>
+        const shift = ( delta: number ) => ( value: unknown, ctx: { type : string }) =>
         {
             if( ctx.type === 'Date' && value instanceof Date )
             {
@@ -135,7 +135,7 @@ describe( 'parse / stringify reviver, replacer, and transform', () =>
     {
         // Arrange
         const mod = await emitAndImport<{
-            run : ( input: unknown, transform: ( value: unknown, ctx: { tags : string[], path : string } ) => unknown ) => { body : string, title : string }
+            run : ( input: unknown, transform: ( value: unknown, ctx: { tags : string[], path : string }) => unknown ) => { body : string, title : string }
         }>( `
             import { parse, tag } from '../src/index.js';
             interface Article {
@@ -181,7 +181,7 @@ describe( 'parse / stringify reviver, replacer, and transform', () =>
 
         // Assert
         expect( piped ).toEqual({ name : 'Adaxy' });
-        expect(() => mod.runParse( '{"name":"Ada"}', ( _value: unknown, ctx: { path : string } ) =>
+        expect(() => mod.runParse( '{"name":"Ada"}', ( _value: unknown, ctx: { path : string }) =>
         {
             throw new Error( 'nope' );
         })).toThrow( /Parse error at "name": nope/ );
@@ -193,7 +193,7 @@ describe( 'parse / stringify reviver, replacer, and transform', () =>
     {
         // Arrange
         const mod = await emitAndImport<{
-            closed : ( input: { name : string } ) => string
+            closed : ( input: { name : string }) => string
             open   : ( input: { name : string }, transform: any ) => string
         }>( `
             import { serializer, stringify } from '../src/index.js';
@@ -260,10 +260,10 @@ describe( 'parse / stringify reviver, replacer, and transform', () =>
     {
         // Arrange
         const mod = await emitAndImport<{
-            doAssert : ( input: unknown, transform: any ) => { n : number }
+            doAssert   : ( input: unknown, transform: any ) => { n : number }
             doValidate : ( input: unknown, transform: any ) => { success : boolean, data? : { n : number } }
-            doIs : ( input: unknown, transform: any ) => boolean
-            doGuard : ( input: unknown, transform: any ) => { n : number }
+            doIs       : ( input: unknown, transform: any ) => boolean
+            doGuard    : ( input: unknown, transform: any ) => { n : number }
         }>( `
             import { assert, validate, is, assertGuard } from '../src/index.js';
             interface Row { n : number }
@@ -282,7 +282,7 @@ describe( 'parse / stringify reviver, replacer, and transform', () =>
                 return value;
             };
         `, 'temp_pt_assert_is' );
-        const bump = ( value: unknown, ctx: { type : string } ) =>
+        const bump = ( value: unknown, ctx: { type : string }) =>
             ctx.type === 'number' && typeof value === 'number' ? value + 1 : value;
 
         // Act
@@ -338,7 +338,7 @@ describe( 'parse / stringify reviver, replacer, and transform', () =>
         `, 'temp_pt_tonumber' );
 
         // Act
-        const result = mod.run( '{"n":"42"}', ( value: unknown, ctx: { type : string } ) =>
+        const result = mod.run( '{"n":"42"}', ( value: unknown, ctx: { type : string }) =>
             ctx.type === 'number' && typeof value === 'number' ? value + 1 : value
         );
 

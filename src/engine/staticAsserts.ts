@@ -395,11 +395,18 @@ export function collectStaticConstraintDiagnostics(
     return diagnostics;
 }
 
+const STATIC_DIAGNOSTICS_INSTALLED = Symbol.for( '@webergency-utils/typechecker:static-diagnostics-installed' );
+
 /**
  * Analyze the program and patch getSemanticDiagnostics so constant constraint violations appear in tsc/IDE.
  */
 export function installStaticConstraintDiagnostics( program: ts.Program )
 {
+    if(( program as any )[STATIC_DIAGNOSTICS_INSTALLED])
+    {
+        return ( program as any )[STATIC_DIAGNOSTICS_INSTALLED] as ts.Diagnostic[];
+    }
+
     const checker = program.getTypeChecker();
     const collected: ts.Diagnostic[] = [];
 
@@ -423,6 +430,8 @@ export function installStaticConstraintDiagnostics( program: ts.Program )
 
         return [ ...base, ...extra ];
     }) as typeof program.getSemanticDiagnostics;
+
+    ( program as any )[STATIC_DIAGNOSTICS_INSTALLED] = collected;
 
     return collected;
 }

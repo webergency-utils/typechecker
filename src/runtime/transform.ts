@@ -101,7 +101,7 @@ function internalizeJsonProperty(
     {
         if( e instanceof TransformWalkError ){ throw e }
 
-        if( e && typeof e === 'object' && typeof ( e as { path? : unknown } ).path === 'string' )
+        if( e && typeof e === 'object' && typeof ( e as { path? : unknown }).path === 'string' )
         {
             throw e;
         }

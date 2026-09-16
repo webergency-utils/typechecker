@@ -129,7 +129,7 @@ export function serializeBuffer( val: Uint8Array | ArrayBuffer, path = '' ): str
     throw new SerializationError( path, 'Type<Buffer>' );
 }
 
-export function serializeArray<T>( val: T[], mapper: ( item: T ) => string, path = '' ): string
+export function serializeArray<T>( val: T[], mapper: ( item: T, index: number ) => string, path = '' ): string
 {
     if( !Array.isArray( val ))
     {
@@ -140,7 +140,7 @@ export function serializeArray<T>( val: T[], mapper: ( item: T ) => string, path
 
     for( let i = 0; i < val.length; i++ )
     {
-        parts.push( mapper( val[i]));
+        parts.push( mapper( val[i], i ));
     }
 
     return `[${parts.join( ',' )}]`;

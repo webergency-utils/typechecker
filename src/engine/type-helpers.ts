@@ -576,7 +576,7 @@ export function collectTagBagNames( type: ts.Type, checker: ts.TypeChecker ): st
     return [ ...names ].sort();
 }
 
-export function constraintTagNames( constraints: ParsedConstraint[] ): string[]
+export function constraintTagNames( constraints: ParsedConstraint[]): string[]
 {
     const found = constraints.find( c => c.type === 'tags' );
 
@@ -586,7 +586,7 @@ export function constraintTagNames( constraints: ParsedConstraint[] ): string[]
 }
 
 /** Collapse every `tags` constraint into one sorted bag. */
-export function mergeTagConstraints( constraints: ParsedConstraint[] ): ParsedConstraint[]
+export function mergeTagConstraints( constraints: ParsedConstraint[]): ParsedConstraint[]
 {
     const names = new Set<string>();
     const rest: ParsedConstraint[] = [];

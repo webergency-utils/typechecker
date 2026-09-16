@@ -284,7 +284,8 @@ function wrapConstraints(
     mode         : ValidationMode,
     scope        : ICustomFunctionScope,
     kind         : CoercionKind,
-    applyOption  : boolean
+    applyOption  : boolean,
+    visited?     : Set<number>
 ): string
 {
     const tags = constraintTagNames( constraints );
@@ -346,7 +347,7 @@ function wrapConstraints(
     if( containsC?.nestedType )
     {
         const itemBody = buildValidation(
-            containsC.nestedType, checker, mode, from, 'item', 'itemP', rootExpr, scope
+            containsC.nestedType, checker, mode, from, 'item', 'itemP', rootExpr, scope, visited
         );
         const minStr = minContains !== undefined ? String( minContains ) : '1';
         const maxStr = maxContains !== undefined ? String( maxContains ) : 'undefined';
@@ -358,7 +359,7 @@ function wrapConstraints(
     if( propertyNamesC?.nestedType )
     {
         const keyBody = buildValidation(
-            propertyNamesC.nestedType, checker, mode, from, 'key', 'keyP', rootExpr, scope
+            propertyNamesC.nestedType, checker, mode, from, 'key', 'keyP', rootExpr, scope, visited
         );
         const msgArg = propertyNamesC.message !== undefined
             ? `, ${JSON.stringify( propertyNamesC.message )}`
@@ -382,76 +383,99 @@ function buildValidation(
     varName  : string,
     pathExpr : string,
     rootExpr : string,
-    scope    : ICustomFunctionScope
+    scope    : ICustomFunctionScope,
+    visited  : Set<number> = new Set()
 ): string
 {
-    let constraints: ParsedConstraint[] = [];
-    let walkType = type;
+    const typeId = ( type as any ).id;
 
-    if( typeof type.isIntersection === 'function' && type.isIntersection())
+    if( typeof typeId === 'number' )
     {
-        const peeled = peelTaggedIntersection( type, checker, scope );
-        const merged = tryMergeObjectTypes(
-            type.types.filter( t =>
-            {
-                const props = getTypeProps( t, checker );
-
-                return !( props.length > 0 && props.every( p => isTagKey( p.getName())));
-            }),
-            checker
-        );
-
-        if( peeled?.hasTags )
+        if( visited.has( typeId ))
         {
-            constraints = peeled.constraints;
-            walkType = peeled.base;
+            const label = unionExpectedLabel( type, checker );
+            throw new Error( `[Webergency] Recursive/cyclic type ${label} is not supported by ahead-of-time parser codegen; use assert/validate instead.` );
+        }
 
-            if( typeof walkType.isIntersection === 'function' && walkType.isIntersection())
-            {
-                const inner = tryMergeObjectTypes( walkType.types, checker );
-
-                if( inner )
-                {
-                    return wrapConstraints(
-                        ( vn, pe ) => buildObjectValidation( inner.props, inner.indexType, checker, mode, from, vn, pe, rootExpr, scope ),
-                        constraints,
-                        varName,
-                        pathExpr,
-                        from,
-                        rootExpr,
-                        checker,
-                        mode,
-                        scope,
-                        'Object',
-                        false
-                    );
-                }
-            }
-        }
-        else if( merged )
-        {
-            return buildObjectValidation( merged.props, merged.indexType, checker, mode, from, varName, pathExpr, rootExpr, scope );
-        }
-        else if( peeled )
-        {
-            walkType = peeled.base;
-            constraints = peeled.constraints;
-        }
+        visited.add( typeId );
     }
 
-    return wrapConstraints(
-        ( vn, pe ) => buildValidationCore( walkType, checker, mode, from, vn, pe, rootExpr, scope ),
-        constraints,
-        varName,
-        pathExpr,
-        from,
-        rootExpr,
-        checker,
-        mode,
-        scope,
-        coercionKindOf( walkType, checker ),
-        shouldApplyParseTransform( walkType, checker )
-    );
+    try
+    {
+        let constraints: ParsedConstraint[] = [];
+        let walkType = type;
+
+        if( typeof type.isIntersection === 'function' && type.isIntersection())
+        {
+            const peeled = peelTaggedIntersection( type, checker, scope );
+            const merged = tryMergeObjectTypes(
+                type.types.filter( t =>
+                {
+                    const props = getTypeProps( t, checker );
+
+                    return !( props.length > 0 && props.every( p => isTagKey( p.getName())));
+                }),
+                checker
+            );
+
+            if( peeled?.hasTags )
+            {
+                constraints = peeled.constraints;
+                walkType = peeled.base;
+
+                if( typeof walkType.isIntersection === 'function' && walkType.isIntersection())
+                {
+                    const inner = tryMergeObjectTypes( walkType.types, checker );
+
+                    if( inner )
+                    {
+                        return wrapConstraints(
+                            ( vn, pe ) => buildObjectValidation( inner.props, inner.indexType, checker, mode, from, vn, pe, rootExpr, scope, visited ),
+                            constraints,
+                            varName,
+                            pathExpr,
+                            from,
+                            rootExpr,
+                            checker,
+                            mode,
+                            scope,
+                            'Object',
+                            false,
+                            visited
+                        );
+                    }
+                }
+            }
+            else if( merged )
+            {
+                return buildObjectValidation( merged.props, merged.indexType, checker, mode, from, varName, pathExpr, rootExpr, scope, visited );
+            }
+            else if( peeled )
+            {
+                walkType = peeled.base;
+                constraints = peeled.constraints;
+            }
+        }
+
+        return wrapConstraints(
+            ( vn, pe ) => buildValidationCore( walkType, checker, mode, from, vn, pe, rootExpr, scope, visited ),
+            constraints,
+            varName,
+            pathExpr,
+            from,
+            rootExpr,
+            checker,
+            mode,
+            scope,
+            coercionKindOf( walkType, checker ),
+            shouldApplyParseTransform( walkType, checker ),
+            visited
+        );
+    }
+    finally
+    {
+        if( typeof typeId === 'number' ){ visited.delete( typeId ) }
+    }
 }
 
 function buildValidationCore(
@@ -462,7 +486,8 @@ function buildValidationCore(
     varName  : string,
     pathExpr : string,
     rootExpr : string,
-    scope    : ICustomFunctionScope
+    scope    : ICustomFunctionScope,
+    visited  : Set<number> = new Set()
 ): string
 {
     const flags = typeof type.getFlags === 'function' ? type.getFlags() : ts.TypeFlags.Any;
@@ -567,7 +592,8 @@ function buildValidationCore(
                 varName,
                 pathExpr,
                 rootExpr,
-                scope
+                scope,
+                visited
             );
         }
     }
@@ -620,7 +646,7 @@ function buildValidationCore(
     {
         const typeArgs = ( type as ts.TupleTypeReference ).typeArguments || [];
         const slots = typeArgs.map(( elem, i ) =>
-            buildValidation( elem, checker, mode, from, `arr[${i}]`, `p + "[${i}]"`, rootExpr, scope )
+            buildValidation( elem, checker, mode, from, `arr[${i}]`, `p + "[${i}]"`, rootExpr, scope, visited )
         ).join( ', ' );
 
         return `( function( arr, p ){ if( !Array.isArray( arr ) || arr.length !== ${typeArgs.length} ){ throw new __tcRuntime.ParseError( p, "Tuple<${typeArgs.length}>" ); } return [${slots}]; })( ${varName}, ${p} )`;
@@ -629,7 +655,7 @@ function buildValidationCore(
     if( typeof checker.isArrayType === 'function' && checker.isArrayType( type ))
     {
         const elemType = ( checker as any ).getTypeArguments?.( type as ts.TypeReference )?.[0] || { getFlags : () => ts.TypeFlags.Any };
-        const elemCode = buildValidation( elemType, checker, mode, from, 'item', 'itemP', rootExpr, scope );
+        const elemCode = buildValidation( elemType, checker, mode, from, 'item', 'itemP', rootExpr, scope, visited );
 
         if( wantsQueryCoercion( from ))
         {
@@ -655,14 +681,14 @@ function buildValidationCore(
         if( tagged )
         {
             const cases = tagged.arms.map( arm =>
-                `case ${JSON.stringify( arm.tag )}: return ${buildValidation( arm.type, checker, mode, from, 'v', 'p', rootExpr, scope )};`
+                `case ${JSON.stringify( arm.tag )}: return ${buildValidation( arm.type, checker, mode, from, 'v', 'p', rootExpr, scope, visited )};`
             ).join( ' ' );
 
             return `( function( v, p ){ switch( v && v[${JSON.stringify( tagged.key )}] ){ ${cases} default: throw new __tcRuntime.ParseError( p, ${JSON.stringify( label )} ); } })( ${varName}, ${p} )`;
         }
 
         const armFns = arms.map( arm =>
-            `( v, p ) => ${buildValidation( arm, checker, mode, from, 'v', 'p', rootExpr, scope )}`
+            `( v, p ) => ${buildValidation( arm, checker, mode, from, 'v', 'p', rootExpr, scope, visited )}`
         ).join( ', ' );
 
         return `__tcRuntime.parseUnion( ${varName}, ${p}, ${JSON.stringify( label )}, [ ${armFns} ] )`;
@@ -671,7 +697,7 @@ function buildValidationCore(
     const indexType = stringIndexType( type, checker );
     const props = mapStructuralProps( type, checker );
 
-    return buildObjectValidation( props, indexType, checker, mode, from, varName, pathExpr, rootExpr, scope );
+    return buildObjectValidation( props, indexType, checker, mode, from, varName, pathExpr, rootExpr, scope, visited );
 }
 
 function buildObjectValidation(
@@ -683,31 +709,33 @@ function buildObjectValidation(
     varName   : string,
     pathExpr  : string,
     rootExpr  : string,
-    scope     : ICustomFunctionScope
+    scope     : ICustomFunctionScope,
+    visited?  : Set<number>
 ): string
 {
     const propNames = props.map( p => p.name );
-    const propAssignments: string[] = [];
+    const initialProps: string[] = [];
+    const optionalAssignments: string[] = [];
 
     for( const prop of props )
     {
         const valAccess = safePropAccess( 'o', prop.name );
         const subPathExpr = joinPath( pathExpr, prop.name );
-        const subValCode = buildValidation( prop.type, checker, mode, from, valAccess, subPathExpr, rootExpr, scope );
+        const subValCode = buildValidation( prop.type, checker, mode, from, valAccess, subPathExpr, rootExpr, scope, visited );
 
         if( prop.hasDefault )
         {
             // Always run so __default can fill missing values (optional or required).
-            propAssignments.push( `${JSON.stringify( prop.name )}: ${subValCode}` );
+            initialProps.push( `${JSON.stringify( prop.name )}: ${subValCode}` );
         }
         else if( prop.isOptional )
         {
-            propAssignments.push( `${JSON.stringify( prop.name )}: ${valAccess} === undefined ? undefined : ${subValCode}` );
+            optionalAssignments.push( `if( ${valAccess} !== undefined ){ res[${JSON.stringify( prop.name )}] = ${subValCode}; }` );
         }
         else
         {
             // Required: same as assert — run the field validator on undefined (Type<*>), not a Missing shorthand.
-            propAssignments.push( `${JSON.stringify( prop.name )}: ${subValCode}` );
+            initialProps.push( `${JSON.stringify( prop.name )}: ${subValCode}` );
         }
     }
 
@@ -720,7 +748,7 @@ function buildObjectValidation(
 
         if( indexType )
         {
-            const idxCode = buildValidation( indexType, checker, mode, from, 'o[k]', '( p ? p + "." + k : k )', rootExpr, scope );
+            const idxCode = buildValidation( indexType, checker, mode, from, 'o[k]', '( p ? p + "." + k : k )', rootExpr, scope, visited );
             extraHandling = `for( const k in o ){ if( !__keys.has( k ) ){ res[k] = ${idxCode}; } }`;
         }
         else if( mode === 'strict' )
@@ -733,5 +761,7 @@ function buildObjectValidation(
         }
     }
 
-    return `( function( o, p ){ o = __tcRuntime.expectObject( o, p ); ${keysInit}const res = { ${propAssignments.join( ', ' )} }; ${extraHandling} return res; })( ${varName}, ${pathExpr || '""'} )`;
+    const optCode = optionalAssignments.length > 0 ? optionalAssignments.join( ' ' ) + ' ' : '';
+
+    return `( function( o, p ){ o = __tcRuntime.expectObject( o, p ); ${keysInit}const res = { ${initialProps.join( ', ' )} }; ${optCode}${extraHandling} return res; })( ${varName}, ${pathExpr || '""'} )`;
 }

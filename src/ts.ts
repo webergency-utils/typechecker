@@ -4,6 +4,11 @@ import { createRequire } from 'node:module';
 
 let tsInstance: any = tsModule;
 
+if( !tsInstance.createProgram && tsInstance.default?.createProgram )
+{
+    tsInstance = tsInstance.default;
+}
+
 if( !tsInstance.createProgram )
 {
     try

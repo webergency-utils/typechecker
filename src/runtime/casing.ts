@@ -113,11 +113,22 @@ export type FormatCasing<S extends string, Casing extends CasingFormat, Options 
 
 type ExtractArray<T> = T extends any[] ? T : never;
 
+type NonConvertibleType = 
+    | Date 
+    | RegExp 
+    | Function 
+    | Map<any, any> 
+    | Set<any> 
+    | Promise<any>
+    | Uint8Array
+    | ArrayBuffer
+    | ArrayBufferView;
+
 export type ConvertPropertyCasing<T, Casing extends CasingFormat, Options extends ConvertCasingOptions = Record<never, never>> = 
     T extends [infer F, ...infer R] ? [ConvertPropertyCasing<F, Casing, Options>, ...ExtractArray<ConvertPropertyCasing<R, Casing, Options>>] :
         T extends ( infer E )[] ? ConvertPropertyCasing<E, Casing, Options>[] :
             T extends string | number | boolean | symbol | bigint | null | undefined ? T :
-                T extends Date | RegExp | Function | Map<any, any> | Set<any> | Promise<any> ? T :
+                T extends NonConvertibleType ? T :
                     T extends object ? 
                         {
                             [K in keyof T as K extends string ? FormatCasing<K, Casing, Options> : K]: ConvertPropertyCasing<T[K], Casing, Options>
@@ -173,7 +184,7 @@ function formatCasing( str: string, casing: CasingFormat, options: ConvertCasing
         const camel = normalized.replace( /_([a-z0-9])/g, ( _match, p1 ) => p1.toUpperCase());
 
         if( casing === 'camelCase' ){ formatted = camel }
-        else if( casing === 'camelCaseID' ){ formatted = camel.replace( /Id$/, 'ID' ) }
+        else if( casing === 'camelCaseID' ){ formatted = camel === 'id' ? 'ID' : camel.replace( /Id$/, 'ID' ) }
         else
         {
             const pascal = camel.charAt( 0 ).toUpperCase() + camel.slice( 1 );
@@ -197,6 +208,10 @@ export function convertPropertyCasing<T, C extends CasingFormat>
     if( !obj || typeof obj !== 'object' ){ return obj as any }
 
     if( obj instanceof Date || obj instanceof RegExp || obj instanceof Map || obj instanceof Set || typeof obj === 'function' ){ return obj as any }
+
+    if( typeof Buffer !== 'undefined' && typeof Buffer.isBuffer === 'function' && Buffer.isBuffer( obj )){ return obj as any }
+
+    if( ArrayBuffer.isView( obj ) || obj instanceof ArrayBuffer ){ return obj as any }
 
     if( Array.isArray( obj ))
     {

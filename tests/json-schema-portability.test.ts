@@ -79,8 +79,8 @@ describe( 'JSON Schema portability coverage', () =>
             {
                 allOf : [
                     {
-                        type     : 'array',
-                        items    : [
+                        type  : 'array',
+                        items : [
                             { type : 'string' },
                             { type : 'number' }
                         ],

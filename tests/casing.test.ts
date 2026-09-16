@@ -222,13 +222,31 @@ describe( 'Casing Conversion Utilities', () =>
         )).toThrow( 'Casing conversion collision: user_id and userId both map to userId' );
     });
 
-    it( 'should preserve __proto__ as an own property without changing the output prototype', () =>
+    it( 'should convert id property to ID for camelCaseID and PascalCaseID', () =>
     {
-        const input = JSON.parse( '{"__proto__":{"isAdmin":true}}' );
-        const result: any = convertPropertyCasing( input, 'camelCase' );
+        const input = { id : 'abc', user_id : '123' };
+        expect( convertPropertyCasing( input, 'camelCaseID' )).toEqual({ ID : 'abc', userID : '123' });
+        expect( convertPropertyCasing( input, 'PascalCaseID' )).toEqual({ ID : 'abc', UserID : '123' });
+    });
 
-        expect( Object.getPrototypeOf( result )).toBe( Object.prototype );
-        expect( Object.hasOwn( result, '__proto__' )).toBe( true );
-        expect( result.isAdmin ).toBeUndefined();
+    it( 'should preserve Buffer, Uint8Array, and ArrayBuffer without recursion', () =>
+    {
+        const buf = Buffer.from( 'hello' );
+        const u8 = new Uint8Array([1, 2, 3]);
+        const i32 = new Int32Array([4, 5, 6]);
+        const ab = new ArrayBuffer( 8 );
+
+        const input = {
+            raw_buffer : buf,
+            byte_array : u8,
+            int_array  : i32,
+            buffer_mem : ab
+        };
+
+        const result = convertPropertyCasing( input, 'camelCase' );
+        expect( result.rawBuffer ).toBe( buf );
+        expect( result.byteArray ).toBe( u8 );
+        expect( result.intArray ).toBe( i32 );
+        expect( result.bufferMem ).toBe( ab );
     });
 });

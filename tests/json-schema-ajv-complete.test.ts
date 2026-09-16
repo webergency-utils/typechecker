@@ -64,7 +64,7 @@ describe( 'JSON Schema AJV-complete coverage', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, { id : 'a', x_n : 2 } ).success ).toBe( true );
+            expect( validate( fn, { id : 'a', x_n : 2 }).success ).toBe( true );
         });
 
         it( 'should accept additionalProperties schema evaluations from a member', () =>
@@ -82,7 +82,7 @@ describe( 'JSON Schema AJV-complete coverage', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, { id : 'a', flag : true } ).success ).toBe( true );
+            expect( validate( fn, { id : 'a', flag : true }).success ).toBe( true );
         });
     });
 
@@ -123,8 +123,8 @@ describe( 'JSON Schema AJV-complete coverage', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, { a : 1 } ).success ).toBe( true );
-            expect( validate( fn, { a : 1, extra : 1 } ).success ).toBe( false );
+            expect( validate( fn, { a : 1 }).success ).toBe( true );
+            expect( validate( fn, { a : 1, extra : 1 }).success ).toBe( false );
         });
 
         it( 'should still reject closed allOf extras without unevaluatedProperties', () =>
@@ -146,8 +146,8 @@ describe( 'JSON Schema AJV-complete coverage', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, { a : 1, b : 'x' } ).success ).toBe( true );
-            expect( validate( fn, { a : 1, b : 'x', c : 1 } ).success ).toBe( false );
+            expect( validate( fn, { a : 1, b : 'x' }).success ).toBe( true );
+            expect( validate( fn, { a : 1, b : 'x', c : 1 }).success ).toBe( false );
         });
     });
 
@@ -165,9 +165,9 @@ describe( 'JSON Schema AJV-complete coverage', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, [ 'a', 1 ] ).success ).toBe( true );
-            expect( validate( fn, [ 'a', 1, true ] ).success ).toBe( false );
-            expect( validate( fn, [ 'a', 1, true ] ).errors?.some( e =>
+            expect( validate( fn, [ 'a', 1 ]).success ).toBe( true );
+            expect( validate( fn, [ 'a', 1, true ]).success ).toBe( false );
+            expect( validate( fn, [ 'a', 1, true ]).errors?.some( e =>
                 e.error === 'UnevaluatedItem<2>'
             )).toBe( true );
         });
@@ -183,7 +183,7 @@ describe( 'JSON Schema AJV-complete coverage', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, [ 'a', 1, false ] ).success ).toBe( true );
+            expect( validate( fn, [ 'a', 1, false ]).success ).toBe( true );
         });
     });
 
@@ -193,16 +193,16 @@ describe( 'JSON Schema AJV-complete coverage', () =>
         {
             // Arrange
             const fn = getOrCompileSchema({
-                type       : 'object',
-                properties : { kind : { const : 'a' } },
-                if         : { properties : { kind : { const : 'a' } } },
-                then       : { properties : { value : { type : 'number' } } },
+                type                  : 'object',
+                properties            : { kind : { const : 'a' } },
+                if                    : { properties : { kind : { const : 'a' } } },
+                then                  : { properties : { value : { type : 'number' } } },
                 unevaluatedProperties : false
             });
 
             // Act / Assert
-            expect( validate( fn, { kind : 'a', value : 1 } ).success ).toBe( true );
-            expect( validate( fn, { kind : 'a', value : 1, extra : 1 } ).success ).toBe( false );
+            expect( validate( fn, { kind : 'a', value : 1 }).success ).toBe( true );
+            expect( validate( fn, { kind : 'a', value : 1, extra : 1 }).success ).toBe( false );
         });
     });
 
@@ -219,10 +219,10 @@ describe( 'JSON Schema AJV-complete coverage', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, { a : 1 } ).success ).toBe( false );
-            expect( validate( fn, { a : 1, b : 2 } ).success ).toBe( true );
-            expect( validate( fn, { a : 1, b : 2, c : 3 } ).success ).toBe( true );
-            expect( validate( fn, { a : 1, b : 2, c : 3, d : 4 } ).success ).toBe( false );
+            expect( validate( fn, { a : 1 }).success ).toBe( false );
+            expect( validate( fn, { a : 1, b : 2 }).success ).toBe( true );
+            expect( validate( fn, { a : 1, b : 2, c : 3 }).success ).toBe( true );
+            expect( validate( fn, { a : 1, b : 2, c : 3, d : 4 }).success ).toBe( false );
         });
     });
 
@@ -313,8 +313,8 @@ describe( 'JSON Schema AJV-complete coverage', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, { a : 1, flag : true } ).success ).toBe( true );
-            expect( validate( fn, { a : 1, flag : 'no' } ).success ).toBe( false );
+            expect( validate( fn, { a : 1, flag : true }).success ).toBe( true );
+            expect( validate( fn, { a : 1, flag : 'no' }).success ).toBe( false );
         });
 
         it( 'should validate unevaluatedItems schema across allOf', () =>
@@ -328,8 +328,8 @@ describe( 'JSON Schema AJV-complete coverage', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, [ 'a', 2 ] ).success ).toBe( true );
-            expect( validate( fn, [ 'a', true ] ).success ).toBe( false );
+            expect( validate( fn, [ 'a', 2 ]).success ).toBe( true );
+            expect( validate( fn, [ 'a', true ]).success ).toBe( false );
         });
     });
 
@@ -348,8 +348,8 @@ describe( 'JSON Schema AJV-complete coverage', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, { a : 1 } ).success ).toBe( true );
-            expect( validate( fn, {} ).success ).toBe( false );
+            expect( validate( fn, { a : 1 }).success ).toBe( true );
+            expect( validate( fn, {}).success ).toBe( false );
             expect( validate( fn, 'nope' ).success ).toBe( false );
         });
 
@@ -359,9 +359,9 @@ describe( 'JSON Schema AJV-complete coverage', () =>
             const fn = getOrCompileSchema({
                 $defs : {
                     box : {
-                        $dynamicAnchor : 'box',
-                        type           : 'object',
-                        properties     : { n : { type : 'number' } },
+                        $dynamicAnchor       : 'box',
+                        type                 : 'object',
+                        properties           : { n : { type : 'number' } },
                         additionalProperties : false
                     }
                 },
@@ -372,8 +372,8 @@ describe( 'JSON Schema AJV-complete coverage', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, { wrap : { n : 1 } } ).success ).toBe( true );
-            expect( validate( fn, { wrap : { n : 'x' } } ).success ).toBe( false );
+            expect( validate( fn, { wrap : { n : 1 } }).success ).toBe( true );
+            expect( validate( fn, { wrap : { n : 'x' } }).success ).toBe( false );
         });
     });
 
@@ -482,8 +482,8 @@ describe( 'JSON Schema AJV-complete coverage', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, { v : 1, next : { v : 2 } } ).success ).toBe( true );
-            expect( validate( fn, { v : 1, next : { v : 'x' } } ).success ).toBe( false );
+            expect( validate( fn, { v : 1, next : { v : 2 } }).success ).toBe( true );
+            expect( validate( fn, { v : 1, next : { v : 'x' } }).success ).toBe( false );
         });
 
         it( 'should follow $recursiveRef / $recursiveAnchor', () =>
@@ -505,9 +505,9 @@ describe( 'JSON Schema AJV-complete coverage', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, { v : 1 } ).success ).toBe( true );
-            expect( validate( fn, { v : 1, next : { v : 2 } } ).success ).toBe( true );
-            expect( validate( fn, { v : 1, next : { v : 'x' } } ).success ).toBe( false );
+            expect( validate( fn, { v : 1 }).success ).toBe( true );
+            expect( validate( fn, { v : 1, next : { v : 2 } }).success ).toBe( true );
+            expect( validate( fn, { v : 1, next : { v : 'x' } }).success ).toBe( false );
         });
 
         it( 'should reject remote http(s) references', () =>
@@ -544,8 +544,8 @@ describe( 'JSON Schema AJV-complete coverage', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, { a : 1 } ).success ).toBe( true );
-            expect( validate( fn, { a : 1, extra : 1 } ).success ).toBe( false );
+            expect( validate( fn, { a : 1 }).success ).toBe( true );
+            expect( validate( fn, { a : 1, extra : 1 }).success ).toBe( false );
         });
 
         it( 'should union annotations from all successful anyOf arms', () =>
@@ -560,8 +560,8 @@ describe( 'JSON Schema AJV-complete coverage', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, { a : 1, b : 2 } ).success ).toBe( true );
-            expect( validate( fn, { a : 1, b : 2, c : 3 } ).success ).toBe( false );
+            expect( validate( fn, { a : 1, b : 2 }).success ).toBe( true );
+            expect( validate( fn, { a : 1, b : 2, c : 3 }).success ).toBe( false );
         });
     });
 
@@ -656,8 +656,8 @@ describe( 'JSON Schema AJV-complete coverage', () =>
             });
 
             // Act / Assert
-            expect( validate( fn, { root : { v : 1 } } ).success ).toBe( true );
-            expect( validate( fn, { root : { v : 'x' } } ).success ).toBe( false );
+            expect( validate( fn, { root : { v : 1 } }).success ).toBe( true );
+            expect( validate( fn, { root : { v : 'x' } }).success ).toBe( false );
         });
 
         it( 'should coerce query scalars into arrays for prefixItems schemas', () =>

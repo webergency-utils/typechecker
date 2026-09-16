@@ -96,7 +96,7 @@ export function createPrimitiveCheck( type: string ): ts.Expression
     );
 }
 
-export function wrapOptionTransform( inner: ts.Expression, kind: string, tags: string[] = [] ): ts.Expression
+export function wrapOptionTransform( inner: ts.Expression, kind: string, tags: string[] = []): ts.Expression
 {
     const tpl = '(v, path, ctx) => { v = __INNER__(v, path, ctx); if (ctx.success) v = validators.applyOptionTransform(v, path, ctx, __TAGS__, __KIND__); return v; }';
 

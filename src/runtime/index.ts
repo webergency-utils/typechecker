@@ -9,7 +9,7 @@ export
 }
     from './transform.js';
 export type
-{
+    {
     JsonReviver,
     JsonReplacer,
     TransformFn,

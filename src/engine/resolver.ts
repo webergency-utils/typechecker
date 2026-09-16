@@ -100,8 +100,8 @@ function applyConstraintsToJsonSchema(
         }
         else if( c.type === 'tags' && Array.isArray( c.value ))
         {
-            const prev = Array.isArray( target['x-tags'] ) ? target['x-tags'] as string[] : [];
-            const merged = new Set<string>([ ...prev, ...c.value.filter( ( n ): n is string => typeof n === 'string' ) ]);
+            const prev = Array.isArray( target['x-tags']) ? target['x-tags'] as string[] : [];
+            const merged = new Set<string>([ ...prev, ...c.value.filter(( n ): n is string => typeof n === 'string' ) ]);
 
             target['x-tags'] = [ ...merged ].sort();
         }

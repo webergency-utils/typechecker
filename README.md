@@ -311,7 +311,7 @@ Single-pass parse + validate into `T`. Every `parse` entry requires a **string**
     - `'string'` — a single already-decoded scalar (path/header/cookie values). Same coercions as `'query'`, but **never** runs `JSON.parse` / `parseQueryString`. Reviver is ignored. Only basic scalar types (`string`, `number`, `boolean`, `bigint`, `Date`, `RegExp`, literals, enums, and unions of these).
   - `reviver`: same contract as `JSON.parse` (bottom-up, root `key === ''`, `undefined` deletes). Runs on decoded JSON values and decoded query objects. Ignored for `from: 'string'`.
   - `transform`: `TransformFn | TransformFn[]` — typed rewrite after revival / `transform.*` tags (`ctx.type`, `ctx.path`, `ctx.tags` from `tag<'html'>`). `fn[]` pipes left to right. Throws become `ParseError` with `ctx.path`. Skip `undefined`/`null` so `tag.Default` still fills.
-- **Behavior**: Applies `tag.Default`, `transform.*`, and `constraint.*` / `format.*` (parity with `validate`). Rejects `NaN`; JSON numbers that survive `JSON.parse` may be `±Infinity`, but `JSON.stringify(Infinity)` is `null` so Infinity cannot round-trip through JSON text. Query/string numbers must be finite. Throws `ParseError`.
+- **Behavior**: Applies `tag.Default`, `transform.*`, and `constraint.*` / `format.*` (parity with `validate`). Plain absent optional properties remain omitted (`'prop' in res === false`). Rejects `NaN`; JSON numbers that survive `JSON.parse` may be `±Infinity`, but `JSON.stringify(Infinity)` is `null` so Infinity cannot round-trip through JSON text. Query/string numbers must be finite. Throws `ParseError`.
 - **Example**:
   ```typescript
   import { parse, stringify, type TransformContext } from '@webergency-utils/typechecker';
@@ -344,6 +344,7 @@ Single-pass parse + validate into `T`. Every `parse` entry requires a **string**
 #### `convertPropertyCasing<T, C extends CasingFormat>(obj: T, casing: C, options?: ConvertCasingOptions): ConvertPropertyCasing<T, C>`
 
 Recursively converts all property keys of an object to the specified casing format.
+Binary data types (`Buffer`, `Uint8Array`, `ArrayBuffer`, and `ArrayBufferView`) are preserved as-is without recursion into numeric indices.
 If two source keys normalize to the same output key, conversion throws instead of silently discarding a value.
 Special keys such as `__proto__` are preserved as own data properties without changing the result prototype.
 
@@ -695,6 +696,10 @@ parse<Article>(json, {
 ### IDE does not report constraint errors on literals
 - **Cause**: The optional language service plugin is not loaded.
 - **Fix**: Add `{ "name": "@webergency-utils/typechecker/plugin" }` alongside the transformer entry in `tsconfig.json` plugins, and restart the TypeScript language service in your editor.
+
+### Recursive / cyclic types with `parse` or `stringify` / `serializer`
+- **Cause**: Ahead-of-time code generation for serializers and parsers unrolls types statically. Recursive/cyclic shapes cannot be statically unrolled without dynamic dispatch.
+- **Fix**: Use `validate<T>`, `assert<T>`, or `is<T>` instead for recursive or tree-like data structures.
 
 ---
 

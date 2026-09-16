@@ -120,12 +120,12 @@ function setOwn( obj: any, key: string | number, value: any ): void
     if( isUnsafeKey( key )){ return }
 
     Object.defineProperty( obj, key,
-    {
-        value,
-        writable     : true,
-        enumerable   : true,
-        configurable : true
-    });
+        {
+            value,
+            writable     : true,
+            enumerable   : true,
+            configurable : true
+        });
 }
 
 /** decodeURIComponent throws URIError on lone `%` / bad hex; keep the raw segment instead. */
@@ -139,6 +139,23 @@ function safeDecodeURIComponent( value: string ): string
     {
         return value;
     }
+}
+
+function maxNumericKey( target: any ): number
+{
+    let max = -1;
+
+    for( const k of Object.keys( target ))
+    {
+        if( intRE.test( k ))
+        {
+            const num = parseInt( k, 10 );
+
+            if( num > max ){ max = num }
+        }
+    }
+
+    return max;
 }
 
 /**
@@ -168,7 +185,7 @@ export function parseQueryString( querystring: string ): Record<string, any>
             if( k && intRE.test( k.toString())){ k = parseInt( k, 10 ) }
             else if( k === '' )
             {
-                k = Array.isArray( obj ) ? obj.length - 1 : Math.max( -1, ...Object.keys( obj ).map( k => intRE.test( k ) ? parseInt( k, 10 ) : -1 ));
+                k = Array.isArray( obj ) ? obj.length - 1 : maxNumericKey( obj );
 
                 if( k === -1 || i === keys.length - 1 || Object.prototype.hasOwnProperty.call( obj[k] || createPlainObject(), keys[i + 1]))
                 {
@@ -211,7 +228,7 @@ export function parseQueryString( querystring: string ): Record<string, any>
                     else if( typeof obj[k] === 'object' && obj[k] !== null )
                     {
                         const nested = obj[k];
-                        const nextIndex = Math.max( -1, ...Object.keys( nested ).map( nk => intRE.test( nk ) ? parseInt( nk, 10 ) : -1 )) + 1;
+                        const nextIndex = maxNumericKey( nested ) + 1;
                         setOwn( nested, nextIndex, value );
                     }
                     else

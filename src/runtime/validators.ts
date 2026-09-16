@@ -35,22 +35,22 @@ export type FromCoercionContext = PathContext & { kind : CoercionKind };
 type FromOption = 'json' | 'query' | 'string' | (( val: any, ctx: FromCoercionContext ) => any );
 
 export interface ValidationContext {
-    success : boolean
-    errors  : IValidationError[]
-    mode    : ValidationMode
-    from?   : FromOption
-    mutate? : boolean
-    root?   : any
+    success         : boolean
+    errors          : IValidationError[]
+    mode            : ValidationMode
+    from?           : FromOption
+    mutate?         : boolean
+    root?           : any
     /**
      * Draft 2019-09 / 2020-12 annotation frame for the current instance location.
      * In-place applicators (`allOf`, `anyOf`, `oneOf`, `if`, `$ref`) merge into the
      * parent frame; nested property/item applications push a fresh frame.
      */
-    annotations? : SchemaAnnotationFrame
+    annotations?    : SchemaAnnotationFrame
     /** Dynamic scope bindings for `$dynamicAnchor` / `$dynamicRef` (and 2019-09 recursive). */
     dynamicAnchors? : Map<string, JsonSchema | boolean>[]
     /** Opt-in typed walk for `assert` / `validate`. Never set by `is` / `assertGuard`. */
-    transform? : TransformFn | TransformFn[]
+    transform?      : TransformFn | TransformFn[]
 }
 
 /** Evaluated properties / items collected for `unevaluatedProperties` / `unevaluatedItems`. */
@@ -84,7 +84,7 @@ export interface AssertGuardOptions extends GuardOptions {
 /** Options for `validate` / `validateSchema`. */
 export interface ValidationOptions extends GuardOptions {
     /** `true`: write in place while validating. `false` (default): allocate new containers. */
-    mutate? : boolean
+    mutate?    : boolean
     /** Opt-in typed rewrite after revival / `transform.*` tags. Not used by `is` / `assertGuard`. */
     transform? : TransformFn | TransformFn[]
 }
@@ -2908,13 +2908,13 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
 
                 const probe: ValidationContext =
                 {
-                    success         : true,
-                    errors          : [],
-                    mode            : ctx.mode,
-                    from            : ctx.from,
-                    mutate          : false,
-                    root            : ctx.root,
-                    dynamicAnchors  : ctx.dynamicAnchors
+                    success        : true,
+                    errors         : [],
+                    mode           : ctx.mode,
+                    from           : ctx.from,
+                    mutate         : false,
+                    root           : ctx.root,
+                    dynamicAnchors : ctx.dynamicAnchors
                 };
                 inner( v, path, probe );
 
@@ -2942,14 +2942,14 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
 
                 const probe: ValidationContext =
                 {
-                    success         : true,
-                    errors          : [],
-                    mode            : ctx.mode,
-                    from            : ctx.from,
-                    mutate          : false,
-                    root            : ctx.root,
-                    annotations     : emptyAnnotations(),
-                    dynamicAnchors  : ctx.dynamicAnchors
+                    success        : true,
+                    errors         : [],
+                    mode           : ctx.mode,
+                    from           : ctx.from,
+                    mutate         : false,
+                    root           : ctx.root,
+                    annotations    : emptyAnnotations(),
+                    dynamicAnchors : ctx.dynamicAnchors
                 };
                 ifCheck( v, path, probe );
                 mergeAnnotations( ensureAnnotations( ctx ), probe.annotations );
@@ -2981,7 +2981,7 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
 
             wrapped = ( v, path, ctx ) =>
             {
-                let out = prev( v, path, ctx );
+                const out = prev( v, path, ctx );
 
                 if( !ctx.success ){ return out }
 
@@ -3336,14 +3336,14 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
                 let data: any = undefined;
                 const subCtx: ValidationContext =
                 {
-                    success         : true,
-                    errors          : [],
-                    mode            : ctx.mode,
-                    from            : ctx.from,
-                    mutate          : false,
-                    root            : ctx.root,
-                    annotations     : emptyAnnotations(),
-                    dynamicAnchors  : ctx.dynamicAnchors
+                    success        : true,
+                    errors         : [],
+                    mode           : ctx.mode,
+                    from           : ctx.from,
+                    mutate         : false,
+                    root           : ctx.root,
+                    annotations    : emptyAnnotations(),
+                    dynamicAnchors : ctx.dynamicAnchors
                 };
 
                 for( let i = 0; i < checks.length; i++ )
@@ -3412,7 +3412,7 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
                         }
                     }
                 }
-                else if( ( 'unevaluatedProperties' in subSchema ) && isPlainObject( v ) && isPlainObject( data ))
+                else if(( 'unevaluatedProperties' in subSchema ) && isPlainObject( v ) && isPlainObject( data ))
                 {
                     // Member merges only copy evaluated keys; keep unevaluated extras on the
                     // result so finalize's unevaluatedProperties can see them.
@@ -3424,7 +3424,7 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
                     }
                 }
 
-                if( ( 'unevaluatedItems' in subSchema ) && Array.isArray( v ) && Array.isArray( data ))
+                if(( 'unevaluatedItems' in subSchema ) && Array.isArray( v ) && Array.isArray( data ))
                 {
                     for( let i = 0; i < v.length; i++ )
                     {
@@ -3453,14 +3453,14 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
                 const armErrors: IValidationError[] = [];
                 const subCtx: ValidationContext =
                 {
-                    success         : true,
-                    errors          : [],
-                    mode            : ctx.mode,
-                    from            : undefined,
-                    mutate          : false,
-                    root            : ctx.root,
-                    annotations     : emptyAnnotations(),
-                    dynamicAnchors  : ctx.dynamicAnchors
+                    success        : true,
+                    errors         : [],
+                    mode           : ctx.mode,
+                    from           : undefined,
+                    mutate         : false,
+                    root           : ctx.root,
+                    annotations    : emptyAnnotations(),
+                    dynamicAnchors : ctx.dynamicAnchors
                 };
 
                 const runPass = ( from: ValidationContext['from']) =>
@@ -3696,14 +3696,14 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
                 const unionErrors: IValidationError[] = [];
                 const subCtx: ValidationContext =
                 {
-                    success         : true,
-                    errors          : [],
-                    mode            : ctx.mode,
-                    from            : undefined,
-                    mutate          : false,
-                    root            : ctx.root,
-                    annotations     : emptyAnnotations(),
-                    dynamicAnchors  : ctx.dynamicAnchors
+                    success        : true,
+                    errors         : [],
+                    mode           : ctx.mode,
+                    from           : undefined,
+                    mutate         : false,
+                    root           : ctx.root,
+                    annotations    : emptyAnnotations(),
+                    dynamicAnchors : ctx.dynamicAnchors
                 };
 
                 const runPass = ( from: ValidationContext['from']) =>
@@ -3925,13 +3925,13 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
                     {
                         const probe: ValidationContext =
                         {
-                            success         : true,
-                            errors          : [],
-                            mode            : ctx.mode,
-                            from            : ctx.from,
-                            mutate          : false,
-                            root            : ctx.root,
-                            dynamicAnchors  : ctx.dynamicAnchors
+                            success        : true,
+                            errors         : [],
+                            mode           : ctx.mode,
+                            from           : ctx.from,
+                            mutate         : false,
+                            root           : ctx.root,
+                            dynamicAnchors : ctx.dynamicAnchors
                         };
                         containsCheck( v[i], indexPath( path, i ), probe );
 

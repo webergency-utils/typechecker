@@ -79,7 +79,86 @@ function argOrUndefined( args: ts.NodeArray<ts.Expression>, index: number ): ts.
     return args[index] || ts.factory.createIdentifier( 'undefined' );
 }
 
-function parseSerializerOptions( optsArg: ts.Expression | undefined ): SerializerGeneratorOptions
+function getPropName( prop: ts.ObjectLiteralElementLike ): string | undefined
+{
+    if( !prop.name ){ return undefined }
+
+    if( ts.isIdentifier( prop.name )){ return prop.name.text }
+
+    if( ts.isStringLiteral( prop.name )){ return prop.name.text }
+
+    return undefined;
+}
+
+function extractStringValue(
+    exprOrProp : ts.Expression | ts.ObjectLiteralElementLike | undefined,
+    checker?   : ts.TypeChecker
+): string | undefined
+{
+    if( !exprOrProp ){ return undefined }
+
+    if( ts.isStringLiteral( exprOrProp as ts.Node )){ return ( exprOrProp as ts.StringLiteral ).text }
+
+    if( ts.isPropertyAssignment( exprOrProp as ts.ObjectLiteralElementLike ))
+    {
+        const pa = exprOrProp as ts.PropertyAssignment;
+
+        if( ts.isStringLiteral( pa.initializer )){ return pa.initializer.text }
+
+        if( checker )
+        {
+            try
+            {
+                const t = checker.getTypeAtLocation( pa.initializer );
+
+                if( t && typeof t.isStringLiteral === 'function' && t.isStringLiteral())
+                {
+                    return t.value;
+                }
+            }
+            catch
+            { /* ignore */ }
+        }
+    }
+    else if( ts.isShorthandPropertyAssignment( exprOrProp as ts.ObjectLiteralElementLike ))
+    {
+        if( checker )
+        {
+            try
+            {
+                const t = checker.getTypeAtLocation(( exprOrProp as ts.ShorthandPropertyAssignment ).name );
+
+                if( t && typeof t.isStringLiteral === 'function' && t.isStringLiteral())
+                {
+                    return t.value;
+                }
+            }
+            catch
+            { /* ignore */ }
+        }
+    }
+    else if( checker && ts.isExpression( exprOrProp as ts.Node ))
+    {
+        try
+        {
+            const t = checker.getTypeAtLocation( exprOrProp as ts.Expression );
+
+            if( t && typeof t.isStringLiteral === 'function' && t.isStringLiteral())
+            {
+                return t.value;
+            }
+        }
+        catch
+        { /* ignore */ }
+    }
+
+    return undefined;
+}
+
+function parseSerializerOptions(
+    optsArg : ts.Expression | undefined,
+    checker : ts.TypeChecker
+): SerializerGeneratorOptions
 {
     let mode: ValidationMode = 'strip';
     let format: SerializeFormat = 'json';
@@ -90,25 +169,44 @@ function parseSerializerOptions( optsArg: ts.Expression | undefined ): Serialize
     }
     else if( optsArg && ts.isObjectLiteralExpression( optsArg ))
     {
-        const modeProp = optsArg.properties.find( p => p.name && ts.isIdentifier( p.name ) && p.name.text === 'mode' );
+        const modeProp = optsArg.properties.find( p => getPropName( p ) === 'mode' );
+        const extractedMode = extractStringValue( modeProp, checker );
 
-        if( modeProp && ts.isPropertyAssignment( modeProp ) && ts.isStringLiteral( modeProp.initializer ))
+        if( extractedMode )
         {
-            mode = modeProp.initializer.text as ValidationMode;
+            mode = extractedMode as ValidationMode;
         }
 
-        const formatProp = optsArg.properties.find( p => p.name && ts.isIdentifier( p.name ) && ( p.name.text === 'format' || p.name.text === 'to' ));
-
-        if( formatProp && ts.isPropertyAssignment( formatProp ) && ts.isStringLiteral( formatProp.initializer ))
+        const formatProp = optsArg.properties.find( p =>
         {
-            format = formatProp.initializer.text as SerializeFormat;
+            const name = getPropName( p );
+
+            return name === 'format' || name === 'to';
+        });
+        const extractedFormat = extractStringValue( formatProp, checker );
+
+        if( extractedFormat )
+        {
+            format = extractedFormat as SerializeFormat;
+        }
+    }
+    else if( optsArg )
+    {
+        const extractedMode = extractStringValue( optsArg, checker );
+
+        if( extractedMode )
+        {
+            mode = extractedMode as ValidationMode;
         }
     }
 
     return { mode, format };
 }
 
-function parseParseOptions( optsArg: ts.Expression | undefined ): ParseGeneratorOptions
+function parseParseOptions(
+    optsArg : ts.Expression | undefined,
+    checker : ts.TypeChecker
+): ParseGeneratorOptions
 {
     let mode: ValidationMode = 'strip';
     let from: ParseSource = 'json';
@@ -119,18 +217,29 @@ function parseParseOptions( optsArg: ts.Expression | undefined ): ParseGenerator
     }
     else if( optsArg && ts.isObjectLiteralExpression( optsArg ))
     {
-        const modeProp = optsArg.properties.find( p => p.name && ts.isIdentifier( p.name ) && p.name.text === 'mode' );
+        const modeProp = optsArg.properties.find( p => getPropName( p ) === 'mode' );
+        const extractedMode = extractStringValue( modeProp, checker );
 
-        if( modeProp && ts.isPropertyAssignment( modeProp ) && ts.isStringLiteral( modeProp.initializer ))
+        if( extractedMode )
         {
-            mode = modeProp.initializer.text as ValidationMode;
+            mode = extractedMode as ValidationMode;
         }
 
-        const fromProp = optsArg.properties.find( p => p.name && ts.isIdentifier( p.name ) && p.name.text === 'from' );
+        const fromProp = optsArg.properties.find( p => getPropName( p ) === 'from' );
+        const extractedFrom = extractStringValue( fromProp, checker );
 
-        if( fromProp && ts.isPropertyAssignment( fromProp ) && ts.isStringLiteral( fromProp.initializer ))
+        if( extractedFrom )
         {
-            from = fromProp.initializer.text as ParseSource;
+            from = extractedFrom as ParseSource;
+        }
+    }
+    else if( optsArg )
+    {
+        const extractedMode = extractStringValue( optsArg, checker );
+
+        if( extractedMode )
+        {
+            mode = extractedMode as ValidationMode;
         }
     }
 
@@ -242,7 +351,7 @@ export default function transformer( program: ts.Program )
                             if( fnName === 'serializer' || fnName === 'stringify' )
                             {
                                 const optsArg = fnName === 'serializer' ? node.arguments[0] : node.arguments[1];
-                                const options = parseSerializerOptions( optsArg );
+                                const options = parseSerializerOptions( optsArg, checker );
                                 const serRef = buildSerializer( type, checker, serializerCache, hash, options );
                                 const visitedOpts = optsArg
                                     ? ts.visitNode( optsArg, visitor ) as ts.Expression
@@ -275,7 +384,7 @@ export default function transformer( program: ts.Program )
 
                             if( fnName === 'parse' )
                             {
-                                const options = parseParseOptions( node.arguments[1]);
+                                const options = parseParseOptions( node.arguments[1], checker );
                                 const parseRef = buildParser( type, checker, parserCache, hash, options, customFns );
                                 const inputArg = node.arguments[0];
                                 const visitedOpts = node.arguments[1]

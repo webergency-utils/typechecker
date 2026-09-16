@@ -171,10 +171,10 @@ describe( 'tag bag transformer', () =>
     {
         // Arrange
         const mod = await emitAndImport<{
-            schema : { type? : string, 'x-tags'? : string[], minLength? : number }
+            schema        : { type? : string, 'x-tags'? : string[], minLength? : number }
             articleSchema : { properties? : { body? : { 'x-tags'? : string[] } } }
-            ok : { success : boolean, data? : { body : string } }
-            short : { success : boolean }
+            ok            : { success : boolean, data? : { body : string } }
+            short         : { success : boolean }
         }>( `
             import { jsonSchema, validate, tag, constraint } from '../src/index.js';
 
@@ -192,7 +192,7 @@ describe( 'tag bag transformer', () =>
 
         // Assert
         expect( schema ).toMatchObject({ type : 'string', 'x-tags' : ['basic', 'html'], minLength : 3 });
-        expect( articleSchema.properties?.body?.['x-tags'] ).toEqual([ 'basic', 'html' ]);
+        expect( articleSchema.properties?.body?.['x-tags']).toEqual([ 'basic', 'html' ]);
         expect( ok.success ).toBe( true );
         expect( ok.data?.body ).toBe( '<p>hi</p>' );
         expect( short.success ).toBe( false );

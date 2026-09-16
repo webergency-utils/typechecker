@@ -68,6 +68,7 @@ describe( 'transform runtime', () =>
             });
 
             // Assert
+            // eslint-disable-next-line no-sparse-arrays
             expect( result ).toEqual({ keep : 1, items : [ 'a', , 'c' ] });
             expect( 1 in result.items ).toBe( false );
         });
@@ -120,8 +121,8 @@ describe( 'transform runtime', () =>
             const pathErr = { path : 'named', message : 'kept' };
 
             // Act / Assert
-            expect(() => walkRevive( 1, () => { throw walkErr } )).toThrow( walkErr );
-            expect(() => walkRevive( 1, () => { throw pathErr } )).toThrow( pathErr );
+            expect(() => walkRevive( 1, () => { throw walkErr })).toThrow( walkErr );
+            expect(() => walkRevive( 1, () => { throw pathErr })).toThrow( pathErr );
         });
 
         it( 'should wrap TransformWalkError as ParseError in the parse helper', () =>
@@ -141,7 +142,7 @@ describe( 'transform runtime', () =>
             const err = new ParseError( 'z', 'Type<string>' );
 
             // Act / Assert
-            expect(() => reviveTree( 'x', () => { throw err } )).toThrow( err );
+            expect(() => reviveTree( 'x', () => { throw err })).toThrow( err );
         });
     });
 
@@ -154,8 +155,8 @@ describe( 'transform runtime', () =>
 
             // Act / Assert
             expect( applyNodeTransform( 1, '', undefined, 'number', [], 1 )).toBe( 1 );
-            expect( applyNodeTransform( undefined, '', fn, 'number', [], {} )).toBeUndefined();
-            expect( applyNodeTransform( null, '', fn, 'number', [], {} )).toBeNull();
+            expect( applyNodeTransform( undefined, '', fn, 'number', [], {})).toBeUndefined();
+            expect( applyNodeTransform( null, '', fn, 'number', [], {})).toBeNull();
             expect( applyNodeTransform( 1, '', [], 'number', [], 1 )).toBe( 1 );
         });
 
@@ -199,13 +200,13 @@ describe( 'transform runtime', () =>
             const leadingDotOnly = makeTransformContext( '.', 'string', [], root );
             const indexed = makeTransformContext( 'items[0].n', 'number', [], root );
             const rootIndex = makeTransformContext( '[0]', 'string', [], [ 'a' ]);
-            const nanIndex = makeTransformContext( '[nope]', 'string', [], [] );
-            const unclosed = makeTransformContext( 'foo[bar', 'string', [], { 'foo[bar' : 1 } );
-            const missing = makeTransformContext( 'a.b.c', 'string', [], { a : 1 } );
+            const nanIndex = makeTransformContext( '[nope]', 'string', [], []);
+            const unclosed = makeTransformContext( 'foo[bar', 'string', [], { 'foo[bar' : 1 });
+            const missing = makeTransformContext( 'a.b.c', 'string', [], { a : 1 });
 
-            const dottedDots = makeTransformContext( 'a..b', 'string', [], { a : { b : 1 } } );
+            const dottedDots = makeTransformContext( 'a..b', 'string', [], { a : { b : 1 } });
             const indexThenName = makeTransformContext( '[0].n', 'number', [], [ { n : 1 } ]);
-            const brokenMid = makeTransformContext( 'gone.child.x', 'string', [], { gone : null } );
+            const brokenMid = makeTransformContext( 'gone.child.x', 'string', [], { gone : null });
             const scalarRoot = makeTransformContext( 'a.b', 'string', [], 5 );
 
             // Assert
@@ -258,8 +259,8 @@ describe( 'transform runtime', () =>
             const serErr = new SerializationError( 's', 'Type<string>' );
 
             // Act / Assert
-            expect(() => applyParseTransform( 1, 'p', () => { throw parseErr }, 'number', [], {} )).toThrow( parseErr );
-            expect(() => applySerializeTransform( 1, 's', () => { throw serErr }, 'number', [], {} )).toThrow( serErr );
+            expect(() => applyParseTransform( 1, 'p', () => { throw parseErr }, 'number', [], {})).toThrow( parseErr );
+            expect(() => applySerializeTransform( 1, 's', () => { throw serErr }, 'number', [], {})).toThrow( serErr );
         });
     });
 
