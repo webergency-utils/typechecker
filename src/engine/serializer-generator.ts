@@ -81,6 +81,69 @@ function bindTransformedStmt(
     return `{ const __sv = __tcRuntime.applySerializeTransform( ${varName}, ${pathExpr}, transform, ${JSON.stringify( kind )}, ${JSON.stringify( tags )}, input ); ${stmt( '__sv' )} }`;
 }
 
+function getObjectSpecificity( t: ts.Type, checker: ts.TypeChecker ): number
+{
+    if( typeof t.isIntersection === 'function' && t.isIntersection())
+    {
+        const merged = tryMergeObjectTypes( t.types, checker );
+
+        if( merged )
+        {
+            if( merged.props.length > 0 ){ return 1000 + merged.props.length }
+
+            if( merged.indexType ){ return 500 }
+
+            return 0;
+        }
+
+        const peeled = peelTaggedIntersection( t, checker );
+
+        if( peeled )
+        {
+            t = peeled.base;
+        }
+    }
+
+    const flags = typeof t.getFlags === 'function' ? t.getFlags() : 0;
+
+    if( !( flags & ( ts.TypeFlags.Object | ts.TypeFlags.NonPrimitive )))
+    {
+        return 0;
+    }
+
+    if( typeof checker.isArrayType === 'function' && checker.isArrayType( t ))
+    {
+        return 0;
+    }
+
+    if( typeof checker.isTupleType === 'function' && checker.isTupleType( t ))
+    {
+        return 0;
+    }
+
+    const symbolName = typeSymbolName( t );
+
+    if( symbolName === 'Date' || symbolName === 'RegExp' || ( symbolName && BUFFER_LIKE.has( symbolName )))
+    {
+        return 0;
+    }
+
+    const props = mapStructuralProps( t, checker );
+    const hasIndex = Boolean( stringIndexType( t, checker ));
+
+    if( props.length > 0 )
+    {
+        return 1000 + props.length;
+    }
+
+    if( hasIndex )
+    {
+        return 500;
+    }
+
+    return 0;
+}
+
 export function generateSerializerCode(
     type        : ts.Type,
     checker     : ts.TypeChecker,
@@ -294,7 +357,8 @@ function buildJsonSerializer(
                 return `( function( val ){ switch( val && val[${JSON.stringify( tagged.key )}] ){ ${cases} default: throw new __tcRuntime.SerializationError( ${pathLiteral}, ${JSON.stringify( label )} ); } })( ${varName} )`;
             }
 
-            const armFns = type.types.map( arm =>
+            const sortedTypes = [ ...type.types ].sort(( a, b ) => getObjectSpecificity( b, checker ) - getObjectSpecificity( a, checker ));
+            const armFns = sortedTypes.map( arm =>
                 `( val ) => ${buildJsonSerializer( arm, checker, mode, pathExpr, 'val', visited )}`
             ).join( ', ' );
 
@@ -552,8 +616,10 @@ function buildQuerySerializer(
                 return `switch( ${varName} && ${varName}[${JSON.stringify( tagged.key )}] ){ ${cases} default: throw new __tcRuntime.SerializationError( ${prefixExpr}, ${JSON.stringify( label )} ); }`;
             }
 
+            const sortedTypes = [ ...type.types ].sort(( a, b ) => getObjectSpecificity( b, checker ) - getObjectSpecificity( a, checker ));
+
             // Query arms mutate params; snapshot params.length before each arm and restore on failure.
-            return `{ let _ok = false; ${type.types.map(( arm, i ) =>
+            return `{ let _ok = false; ${sortedTypes.map(( arm, i ) =>
                 `if( !_ok ){ const _snap${i} = params.length; try { ${buildQuerySerializer( arm, checker, mode, varName, prefixExpr, visited )} _ok = true; } catch( _qe${i} ) { params.length = _snap${i}; } }`
             ).join( ' ' )} if( !_ok ){ throw new __tcRuntime.SerializationError( ${prefixExpr}, ${JSON.stringify( label )} ); } }`;
         }
