@@ -307,7 +307,12 @@ export function createLiteralCheck( value: string | number | boolean | ts.Pseudo
                 typeof value === 'string' ? ts.factory.createStringLiteral( value ) :
                     typeof value === 'number' ? ts.factory.createNumericLiteral( value.toString()) :
                         typeof value === 'boolean' ? ( value ? ts.factory.createTrue() : ts.factory.createFalse()) :
-                            ts.factory.createBigIntLiteral(( value as any ).base10Value + 'n' )
+                            ( value as ts.PseudoBigInt ).negative
+                                ? ts.factory.createPrefixUnaryExpression(
+                                    ts.SyntaxKind.MinusToken,
+                                    ts.factory.createBigIntLiteral(( value as ts.PseudoBigInt ).base10Value + 'n' )
+                                )
+                                : ts.factory.createBigIntLiteral(( value as ts.PseudoBigInt ).base10Value + 'n' )
             ]
         )
     );

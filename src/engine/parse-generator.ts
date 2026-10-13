@@ -151,7 +151,9 @@ function coercionKindOf( type: ts.Type, checker: ts.TypeChecker ): CoercionKind
 
     if( flags & ts.TypeFlags.Number ){ return 'number' }
 
-    if( flags & ts.TypeFlags.BigInt || flags & ts.TypeFlags.BigIntLiteral ){ return 'bigint' }
+    if( flags & ts.TypeFlags.BigIntLiteral ){ return 'literal' }
+
+    if( flags & ts.TypeFlags.BigInt ){ return 'bigint' }
 
     if( flags & ts.TypeFlags.Boolean || flags & ts.TypeFlags.BooleanLiteral ){ return 'boolean' }
 
@@ -337,7 +339,7 @@ function wrapConstraints(
             `__v = __tcRuntime.applyPropertyNames(__v, p, (key, keyP) => ${keyBody}${msgArg}); `;
     }
 
-    const optionCode = applyOption
+    const optionCode = ( applyOption || tags.length > 0 )
         ? `__v = __tcRuntime.applyParseTransform( __v, p, transform, ${JSON.stringify( kind )}, ${JSON.stringify( tags )}, root ); `
         : '';
 
@@ -517,6 +519,15 @@ function buildValidationCore(
         return `( function( v, path ){ if( v !== ${expected} ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( litCode )} ); } return v; })( ${varName}, ${p} )`;
     }
 
+    if( flags & ts.TypeFlags.BigIntLiteral )
+    {
+        const raw = ( type as any ).value;
+        const lit = typeof raw === 'object' && raw ? `${raw.negative ? '-' : ''}${raw.base10Value}` : String( raw );
+        const litCode = `Literal<${lit}n>`;
+
+        return `( function( v, path ){ const b = __tcRuntime.coerceBigInt( v, path ); if( b !== ${lit}n ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( litCode )} ); } return b; })( ${varName}, ${p} )`;
+    }
+
     if( flags & ts.TypeFlags.String )
     {
         return `__tcRuntime.expectString( ${varName}, ${p} )`;
@@ -542,7 +553,7 @@ function buildValidationCore(
         return `__tcRuntime.expectBoolean( ${varName}, ${p} )`;
     }
 
-    if( flags & ts.TypeFlags.BigInt || flags & ts.TypeFlags.BigIntLiteral )
+    if( flags & ts.TypeFlags.BigInt )
     {
         return `__tcRuntime.coerceBigInt( ${varName}, ${p} )`;
     }

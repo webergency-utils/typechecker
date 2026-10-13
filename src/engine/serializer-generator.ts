@@ -160,17 +160,21 @@ function buildJsonSerializer(
         if( typeof type.isIntersection === 'function' && type.isIntersection())
         {
             const peeled = peelTaggedIntersection( type, checker );
-            const merged = tryMergeObjectTypes( type.types, checker );
-
-            if( merged )
-            {
-                return buildObjectSerializer( merged.props, merged.indexType, checker, mode, pathExpr, varName, visited );
-            }
 
             if( peeled )
             {
                 tags = constraintTagNames( peeled.constraints );
                 type = peeled.base;
+            }
+
+            if( typeof type.isIntersection === 'function' && type.isIntersection())
+            {
+                const merged = tryMergeObjectTypes( type.types, checker );
+
+                if( merged )
+                {
+                    return buildObjectSerializer( merged.props, merged.indexType, checker, mode, pathExpr, varName, visited, tags );
+                }
             }
         }
 
@@ -218,8 +222,11 @@ function buildJsonSerializer(
         {
             const raw = ( type as any ).value;
             const lit = typeof raw === 'object' && raw ? `${raw.negative ? '-' : ''}${raw.base10Value}` : String( raw );
+            const litCode = `Literal<${lit}n>`;
 
-            return JSON.stringify( lit );
+            return bindTransformed( varName, pathLiteral, 'literal', tags, v =>
+                `( ${v} === ${lit}n ? ${JSON.stringify( lit )} : ( function(){ throw new __tcRuntime.SerializationError( ${pathLiteral}, ${JSON.stringify( litCode )} ); })() )`
+            );
         }
 
         if( flags & ts.TypeFlags.String || flags & ts.TypeFlags.TemplateLiteral )
@@ -337,7 +344,7 @@ function buildJsonSerializer(
         const indexType = stringIndexType( type, checker );
         const props = mapStructuralProps( type, checker );
 
-        return buildObjectSerializer( props, indexType, checker, mode, pathExpr, varName, visited );
+        return buildObjectSerializer( props, indexType, checker, mode, pathExpr, varName, visited, tags );
     }
     finally
     {
@@ -352,7 +359,8 @@ function buildObjectSerializer(
     mode      : ValidationMode,
     pathExpr  : string,
     varName   : string,
-    visited?  : Set<number>
+    visited?  : Set<number>,
+    tags      : string[] = []
 ): string
 {
     const pathLiteral = pathExpr;
@@ -400,8 +408,9 @@ function buildObjectSerializer(
     }
 
     statements.push( 'return \'{\' + parts.join( \',\' ) + \'}\';' );
+    const body = ( v: string ) => `( function( obj ){ ${statements.join( ' ' )} })( ${v} )`;
 
-    return `( function( obj ){ ${statements.join( ' ' )} })( ${varName} )`;
+    return tags.length > 0 ? bindTransformed( varName, pathLiteral, 'Object', tags, body ) : body( varName );
 }
 
 function leafQueryEncode( expr: string ): string
@@ -438,17 +447,21 @@ function buildQuerySerializer(
         if( typeof type.isIntersection === 'function' && type.isIntersection())
         {
             const peeled = peelTaggedIntersection( type, checker );
-            const merged = tryMergeObjectTypes( type.types, checker );
-
-            if( merged )
-            {
-                return buildQueryObject( merged.props, merged.indexType, checker, mode, varName, prefixExpr, visited );
-            }
 
             if( peeled )
             {
                 tags = constraintTagNames( peeled.constraints );
                 type = peeled.base;
+            }
+
+            if( typeof type.isIntersection === 'function' && type.isIntersection())
+            {
+                const merged = tryMergeObjectTypes( type.types, checker );
+
+                if( merged )
+                {
+                    return buildQueryObject( merged.props, merged.indexType, checker, mode, varName, prefixExpr, visited, tags );
+                }
             }
         }
 
@@ -504,8 +517,11 @@ function buildQuerySerializer(
         {
             const raw = ( type as any ).value;
             const lit = typeof raw === 'object' && raw ? `${raw.negative ? '-' : ''}${raw.base10Value}` : String( raw );
+            const litCode = `Literal<${lit}n>`;
 
-            return `params.push( encodeURIComponent( ${prefixExpr} ) + "=" + encodeURIComponent( ${JSON.stringify( lit )} ) );`;
+            return bindTransformedStmt( varName, prefixExpr, 'literal', tags, v =>
+                `if( ${v} !== ${lit}n ){ throw new __tcRuntime.SerializationError( ${prefixExpr}, ${JSON.stringify( litCode )} ); } params.push( encodeURIComponent( ${prefixExpr} ) + "=" + encodeURIComponent( ${JSON.stringify( lit )} ) );`
+            );
         }
 
         if( flags & ts.TypeFlags.String || flags & ts.TypeFlags.TemplateLiteral )
@@ -596,7 +612,7 @@ function buildQuerySerializer(
         const indexType = stringIndexType( type, checker );
         const props = mapStructuralProps( type, checker );
 
-        return buildQueryObject( props, indexType, checker, mode, varName, prefixExpr, visited );
+        return buildQueryObject( props, indexType, checker, mode, varName, prefixExpr, visited, tags );
     }
     finally
     {
@@ -611,12 +627,14 @@ function buildQueryObject(
     mode       : ValidationMode,
     varName    : string,
     prefixExpr : string,
-    visited?   : Set<number>
+    visited?   : Set<number>,
+    tags       : string[] = []
 ): string
 {
+    const objVar = tags.length > 0 ? '__qobj' : varName;
     const declared = props.map( p => p.name );
     const statements: string[] = [];
-    statements.push( `if( typeof ${varName} !== 'object' || ${varName} === null || Array.isArray( ${varName} ) ){ throw new __tcRuntime.SerializationError( ${prefixExpr}, "Type<Object>" ); }` );
+    statements.push( `if( typeof ${objVar} !== 'object' || ${objVar} === null || Array.isArray( ${objVar} ) ){ throw new __tcRuntime.SerializationError( ${prefixExpr}, "Type<Object>" ); }` );
 
     if( indexType || mode === 'strict' || mode === 'relaxed' )
     {
@@ -625,7 +643,7 @@ function buildQueryObject(
 
     for( const prop of props )
     {
-        const access = safePropAccess( varName, prop.name );
+        const access = safePropAccess( objVar, prop.name );
         const childPrefix = `(${prefixExpr}) === "" ? ${JSON.stringify( prop.name )} : (${prefixExpr}) + ${JSON.stringify( '[' + prop.name + ']' )}`;
         const body = buildQuerySerializer( prop.type, checker, mode, access, childPrefix, visited );
 
@@ -641,17 +659,19 @@ function buildQueryObject(
 
     if( indexType )
     {
-        const idxBody = buildQuerySerializer( indexType, checker, mode, `${varName}[k]`, `(${prefixExpr}) === "" ? k : (${prefixExpr}) + "[" + k + "]"`, visited );
-        statements.push( `for( const k in ${varName} ){ if( !__keys.has( k ) && ${varName}[k] !== undefined ){ ${idxBody} } }` );
+        const idxBody = buildQuerySerializer( indexType, checker, mode, `${objVar}[k]`, `(${prefixExpr}) === "" ? k : (${prefixExpr}) + "[" + k + "]"`, visited );
+        statements.push( `for( const k in ${objVar} ){ if( !__keys.has( k ) && ${objVar}[k] !== undefined ){ ${idxBody} } }` );
     }
     else if( mode === 'strict' )
     {
-        statements.push( `for( const k in ${varName} ){ if( !__keys.has( k ) && ${varName}[k] !== undefined ){ throw new __tcRuntime.SerializationError( ${prefixExpr}, "PropertyNotAllowed<" + k + ">" ); } }` );
+        statements.push( `for( const k in ${objVar} ){ if( !__keys.has( k ) && ${objVar}[k] !== undefined ){ throw new __tcRuntime.SerializationError( ${prefixExpr}, "PropertyNotAllowed<" + k + ">" ); } }` );
     }
     else if( mode === 'relaxed' )
     {
-        statements.push( `for( const k in ${varName} ){ if( !__keys.has( k ) && ${varName}[k] !== undefined ){ params.push( encodeURIComponent( (${prefixExpr}) === "" ? k : (${prefixExpr}) + "[" + k + "]" ) + "=" + ${leafQueryEncode( `${varName}[k]` )} ); } }` );
+        statements.push( `for( const k in ${objVar} ){ if( !__keys.has( k ) && ${objVar}[k] !== undefined ){ params.push( encodeURIComponent( (${prefixExpr}) === "" ? k : (${prefixExpr}) + "[" + k + "]" ) + "=" + ${leafQueryEncode( `${objVar}[k]` )} ); } }` );
     }
 
-    return statements.join( ' ' );
+    const code = statements.join( ' ' );
+
+    return tags.length > 0 ? bindTransformedStmt( varName, prefixExpr, 'Object', tags, v => `( function( __qobj ){ ${code} })( ${v} );` ) : code;
 }

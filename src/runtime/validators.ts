@@ -1340,6 +1340,27 @@ export const validators = {
             }
         }
 
+        if( wantsFrom( ctx ) && typeof expected === 'bigint' )
+        {
+            if( typeof v === 'string' && v.trim() !== '' )
+            {
+                try
+                {
+                    const b = BigInt( v );
+
+                    if( b === expected ){ return b }
+                }
+                catch
+                { /* ignore */ }
+            }
+            else if( typeof v === 'number' && Number.isFinite( v ) && Number.isInteger( v ))
+            {
+                const b = BigInt( v );
+
+                if( b === expected ){ return b }
+            }
+        }
+
         if( typeof ctx.from === 'function' )
         {
             const converted = fromCustom( ctx, path, v, 'literal' );
@@ -1347,7 +1368,11 @@ export const validators = {
             if( converted === expected ){ return converted }
         }
 
-        const expStr = typeof expected === 'string' ? `'${expected}'` : expected;
+        const expStr = typeof expected === 'string'
+            ? `'${expected}'`
+            : typeof expected === 'bigint'
+                ? `${expected}n`
+                : expected;
         report( ctx, path, `Literal<${expStr}>`, v );
 
         return v;

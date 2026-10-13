@@ -115,4 +115,87 @@ describe( 'Parse Fixes & Regressions', () =>
             export const run = ( json: string ) => parse<LinkedListNode>( json );
         `, 'temp_parse_recursive_error' )).toThrow( /Recursive\/cyclic type .* is not supported by ahead-of-time parser codegen/ );
     });
+
+    it( 'enforces BigIntLiteral equality including negative literals and unions in JSON and query modes', async() =>
+    {
+        const mod = await emitAndImport<{
+            parseTen     : ( json: string ) => bigint
+            parseTenQ    : ( qs: string ) => { n : bigint }
+            parseNeg     : ( json: string ) => bigint
+            parseUnion   : ( json: string ) => bigint
+        }>( `
+            import { parse } from '../src/index.js';
+            export const parseTen = ( json: string ) => parse<10n>( json );
+            export const parseTenQ = ( qs: string ) => parse<{ n: 10n }>( qs, { from: 'query' } );
+            export const parseNeg = ( json: string ) => parse<-42n>( json );
+            export const parseUnion = ( json: string ) => parse<1n | 2n>( json );
+        `, 'temp_parse_bigint_literal' );
+
+        expect( mod.parseTen( '"10"' )).toBe( 10n );
+        expect( mod.parseTen( '10' )).toBe( 10n );
+        expect(() => mod.parseTen( '"11"' )).toThrow( /Literal<10n>/ );
+        expect(() => mod.parseTen( '11' )).toThrow( /Literal<10n>/ );
+
+        expect( mod.parseTenQ( 'n=10' )).toEqual({ n : 10n });
+        expect(() => mod.parseTenQ( 'n=11' )).toThrow( /Literal<10n>/ );
+
+        expect( mod.parseNeg( '"-42"' )).toBe( -42n );
+        expect(() => mod.parseNeg( '"42"' )).toThrow( /Literal<-42n>/ );
+
+        expect( mod.parseUnion( '"1"' )).toBe( 1n );
+        expect( mod.parseUnion( '"2"' )).toBe( 2n );
+        expect(() => mod.parseUnion( '"3"' )).toThrow();
+    });
+
+    it( 'preserves all arms and invokes tag/constraint/transform hooks on multi-arm tagged object intersections', async() =>
+    {
+        const mod = await emitAndImport<{
+            parseTwoJson    : ( json: string, transform?: any ) => any
+            parseTwoQuery   : ( qs: string, transform?: any ) => any
+            parseThreeJson  : ( json: string, transform?: any ) => any
+        }>( `
+            import { parse, tag, constraint, transform } from '../src/index.js';
+            interface A { a: string }
+            interface B { b: number }
+            interface C { c: boolean }
+            function checkSum( v: A & B ): boolean { return v.a.length + v.b > 2; }
+            function enrichA( v: A & B ): A & B { return { ...v, a: v.a.trim() }; }
+            type MergedTwo = A & B & tag<'audit'> & constraint.Custom<typeof checkSum> & transform.Custom<typeof enrichA>;
+            type MergedThree = A & B & C & tag<'tri'>;
+            export const parseTwoJson = ( json: string, tf?: any ) => parse<MergedTwo>( json, { transform: tf } );
+            export const parseTwoQuery = ( qs: string, tf?: any ) => parse<MergedTwo>( qs, { from: 'query', transform: tf } );
+            export const parseThreeJson = ( json: string, tf?: any ) => parse<MergedThree>( json, { transform: tf } );
+        `, 'temp_parse_multi_arm_tagged_intersection' );
+
+        const seenTags: string[][] = [];
+        const resJson = mod.parseTwoJson( '{"a":"  hi  ","b":5}', ( val: any, ctx: any ) =>
+        {
+            if( ctx.tags.length > 0 ){ seenTags.push( ctx.tags ) }
+
+            return val;
+        });
+        expect( resJson ).toEqual({ a : 'hi', b : 5 });
+        expect( seenTags ).toContainEqual([ 'audit' ]);
+
+        const resQuery = mod.parseTwoQuery( 'a=%20ok%20&b=3', ( val: any, ctx: any ) =>
+        {
+            if( ctx.tags.length > 0 ){ seenTags.push( ctx.tags ) }
+
+            return val;
+        });
+        expect( resQuery ).toEqual({ a : 'ok', b : 3 });
+
+        expect(() => mod.parseTwoJson( '{"a":"x","b":1}' )).toThrow( /Custom/ );
+
+        const seenThree: string[][] = [];
+        const resThree = mod.parseThreeJson( '{"a":"x","b":2,"c":true}', ( val: any, ctx: any ) =>
+        {
+            if( ctx.tags.length > 0 ){ seenThree.push( ctx.tags ) }
+
+            return val;
+        });
+        expect( resThree ).toEqual({ a : 'x', b : 2, c : true });
+        expect( seenThree ).toContainEqual([ 'tri' ]);
+    });
 });
+

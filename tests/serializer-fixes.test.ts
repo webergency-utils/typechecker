@@ -487,4 +487,109 @@ describe( 'Serializer Fixes & Regressions', () =>
             config : {}
         });
     });
+
+    it( 'enforces BigIntLiteral equality including negative literals and unions in JSON and query modes', async() =>
+    {
+        const mod = await emitAndImport<{
+            serTen   : ( v: any, transform?: any ) => string
+            serTenQ  : ( v: any, transform?: any ) => string
+            serNeg   : ( v: any ) => string
+            serUnion : ( v: any ) => string
+        }>( `
+            import { stringify, tag } from '../src/index.js';
+            export const serTen = ( v: 10n & tag<'bigten'>, transform?: any ) =>
+                stringify<10n & tag<'bigten'>>( v, { transform } );
+            export const serTenQ = ( v: { n: 10n & tag<'bigten'> }, transform?: any ) =>
+                stringify<{ n: 10n & tag<'bigten'> }>( v, { format: 'query', transform } );
+            export const serNeg = ( v: -42n ) => stringify<-42n>( v );
+            export const serUnion = ( v: 1n | 2n ) => stringify<1n | 2n>( v );
+        `, 'temp_ser_bigint_literal' );
+
+        expect( mod.serTen( 10n )).toBe( '10' );
+        expect(() => mod.serTen( 11n as any )).toThrow( /Literal<10n>/ );
+
+        const seenTags: string[][] = [];
+        expect( mod.serTen( 9n as any, ( val: any, ctx: any ) =>
+        {
+            seenTags.push( ctx.tags );
+
+            return val + 1n;
+        })).toBe( '10' );
+        expect( seenTags ).toContainEqual([ 'bigten' ]);
+
+        expect( mod.serTenQ({ n : 10n })).toBe( 'n=10' );
+        expect(() => mod.serTenQ({ n : 11n as any })).toThrow( /Literal<10n>/ );
+
+        expect( mod.serNeg( -42n )).toBe( '-42' );
+        expect(() => mod.serNeg( 42n as any )).toThrow( /Literal<-42n>/ );
+
+        expect( mod.serUnion( 1n )).toBe( '1' );
+        expect( mod.serUnion( 2n )).toBe( '2' );
+        expect(() => mod.serUnion( 3n as any )).toThrow();
+    });
+
+    it( 'preserves all arms and invokes tag transform hooks on multi-arm tagged object intersections', async() =>
+    {
+        const mod = await emitAndImport<{
+            serTwoJson    : ( v: any, transform?: any ) => string
+            serTwoQuery   : ( v: any, transform?: any ) => string
+            serThreeJson  : ( v: any, transform?: any ) => string
+        }>( `
+            import { stringify, tag } from '../src/index.js';
+            interface A { a: string }
+            interface B { b: number }
+            interface C { c: boolean }
+            type MergedTwo = A & B & tag<'audit'>;
+            type MergedThree = A & B & C & tag<'tri'>;
+            export const serTwoJson = ( v: MergedTwo, transform?: any ) =>
+                stringify<MergedTwo>( v, { transform } );
+            export const serTwoQuery = ( v: MergedTwo, transform?: any ) =>
+                stringify<MergedTwo>( v, { format: 'query', transform } );
+            export const serThreeJson = ( v: MergedThree, transform?: any ) =>
+                stringify<MergedThree>( v, { transform } );
+        `, 'temp_ser_multi_arm_tagged_intersection' );
+
+        const seenJsonTags: string[][] = [];
+        const jsonOut = mod.serTwoJson({ a : 'hello', b : 42 }, ( val: any, ctx: any ) =>
+        {
+            if( ctx.tags.length > 0 )
+            {
+                seenJsonTags.push( ctx.tags );
+
+                return { ...val, b : val.b + 1 };
+            }
+
+            return val;
+        });
+        expect( JSON.parse( jsonOut )).toEqual({ a : 'hello', b : 43 });
+        expect( seenJsonTags ).toContainEqual([ 'audit' ]);
+
+        const seenQueryTags: string[][] = [];
+        const queryOut = mod.serTwoQuery({ a : 'hello', b : 42 }, ( val: any, ctx: any ) =>
+        {
+            if( ctx.tags.length > 0 )
+            {
+                seenQueryTags.push( ctx.tags );
+
+                return { ...val, b : val.b + 1 };
+            }
+
+            return val;
+        });
+        const params = new URLSearchParams( queryOut );
+        expect( params.get( 'a' )).toBe( 'hello' );
+        expect( params.get( 'b' )).toBe( '43' );
+        expect( seenQueryTags ).toContainEqual([ 'audit' ]);
+
+        const seenThreeTags: string[][] = [];
+        const threeOut = mod.serThreeJson({ a : 'x', b : 7, c : true }, ( val: any, ctx: any ) =>
+        {
+            if( ctx.tags.length > 0 ){ seenThreeTags.push( ctx.tags ) }
+
+            return val;
+        });
+        expect( JSON.parse( threeOut )).toEqual({ a : 'x', b : 7, c : true });
+        expect( seenThreeTags ).toContainEqual([ 'tri' ]);
+    });
 });
+

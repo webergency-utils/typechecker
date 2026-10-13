@@ -646,6 +646,22 @@ export function mergeTagConstraints( constraints: ParsedConstraint[]): ParsedCon
     return rest;
 }
 
+function synthesizeIntersection( original: ts.Type, types: ts.Type[]): ts.Type
+{
+    const proto = typeof original === 'object' && original !== null ? Object.getPrototypeOf( original ) : Object.prototype;
+
+    return Object.assign( Object.create( proto ), original,
+        {
+            id                    : undefined,
+            types,
+            flags                 : ts.TypeFlags.Intersection,
+            getFlags              : () => ts.TypeFlags.Intersection,
+            isIntersection        : () => true,
+            isUnion               : () => false,
+            isUnionOrIntersection : () => true
+        });
+}
+
 /**
  * Peel tag / brand phantoms from an intersection. Returns base runtime type + constraints.
  * Brand-only arms are dropped. Constraint-only arms contribute tags only.
@@ -690,15 +706,7 @@ export function peelTaggedIntersection(
             return { base : withoutBrand[0], constraints : [], hasTags : false };
         }
 
-        const merged = tryMergeObjectTypes( withoutBrand, checker );
-
-        if( merged )
-        {
-            // Represent merged objects by synthesizing from first object arm — callers should use tryMergeObjectTypes on peel.base if intersection remains
-            return { base : withoutBrand[0], constraints : [], hasTags : false };
-        }
-
-        return { base : withoutBrand[0], constraints : [], hasTags : false };
+        return { base : synthesizeIntersection( type, withoutBrand ), constraints : [], hasTags : false };
     }
 
     if( constraints.length === 0 && baseCandidates.length === 0 ){ return undefined }
@@ -716,7 +724,7 @@ export function peelTaggedIntersection(
     }
     else
     {
-        base = baseCandidates[0];
+        base = synthesizeIntersection( type, baseCandidates );
     }
 
     return { base, constraints : mergeTagConstraints( constraints ), hasTags : constraints.length > 0 };
