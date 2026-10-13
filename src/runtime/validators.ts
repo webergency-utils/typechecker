@@ -3897,7 +3897,9 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
             const additionalCheck = additional && typeof additional === 'object' ? build( additional ) : undefined;
             // Synthetic allOf opens allow extras without evaluating them for unevaluated*.
             const allowWithoutEvaluating = additional === true && allofOpenedRoots.has( subSchema );
-            const knownPropKeys = new Set<string>([ ...Object.keys( properties ), ...required ]);
+            const propertyKeys = Object.keys( properties );
+            const declaredPropKeys = new Set<string>( propertyKeys );
+            const knownPropKeys = new Set<string>([ ...propertyKeys, ...required ]);
             const canUseStrictKeys = additional === false &&
                 patternEntries.length === 0 &&
                 !hasUnevaluatedProps;
@@ -3908,6 +3910,7 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
             const minProperties = subSchema.minProperties;
             const maxProperties = subSchema.maxProperties;
             const dependentRequired = subSchema.dependentRequired || {};
+            const dependentRequiredEntries = Object.entries( dependentRequired );
             const dependentSchemas = Object.entries( subSchema.dependentSchemas || {}).map(([ key, schema ]) =>
                 ({ key, check : build( openAllOfMemberRoot( schema ))}));
             const dependencies = Object.entries( subSchema.dependencies || {}).map(([ key, dep ]) =>
@@ -3926,14 +3929,13 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
                     v,
                     path,
                     ctx,
-                    canUseStrictKeys ? knownPropKeys : undefined,
+                    undefined,
                     'Object'
                 );
 
                 if( obj === false ){ return v }
 
                 const data = validators.objectShell( obj, ctx, closedShape );
-                const evaluated = new Set<string>();
 
                 if( propertyNamesCheck )
                 {
@@ -3945,69 +3947,15 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
 
                 validators.props( obj, data, path, ctx, propVals );
 
-                for( const key of Object.keys( properties ))
+                if( canUseStrictKeys )
                 {
-                    if( !Object.hasOwn( obj, key )){ continue }
-
-                    evaluated.add( key );
-                    markProperty( ctx, key );
-                }
-
-                for( const key of Object.keys( obj ))
-                {
-                    for( const entry of patternEntries )
+                    for( const key of Object.keys( obj ))
                     {
-                        if( !testRegex( entry.regex, key )){ continue }
-
-                        evaluated.add( key );
-                        markProperty( ctx, key );
-                        setOwnProperty(
-                            data,
-                            key,
-                            runNested( entry.check, obj[key], childPath( path, key ), ctx )
-                        );
-                    }
-                }
-
-                const forAdditional = Object.keys( obj ).filter( key =>
-                {
-                    if( Object.hasOwn( properties, key )){ return false }
-
-                    if( patternEntries.some( entry => testRegex( entry.regex, key ))){ return false }
-
-                    return true;
-                });
-
-                if( additionalCheck )
-                {
-                    for( const key of forAdditional )
-                    {
-                        evaluated.add( key );
-                        markProperty( ctx, key );
-                        setOwnProperty(
-                            data,
-                            key,
-                            runNested( additionalCheck, obj[key], childPath( path, key ), ctx )
-                        );
-                    }
-                }
-                else if( additional === true )
-                {
-                    for( const key of forAdditional )
-                    {
-                        setOwnProperty( data, key, obj[key]);
-
-                        if( allowWithoutEvaluating ){ continue }
-
-                        evaluated.add( key );
-                        markProperty( ctx, key );
-                    }
-                }
-                else if( additional === false )
-                {
-                    for( const key of forAdditional )
-                    {
-                        if( ctx.mode === 'strict' )
+                        if( declaredPropKeys.has( key ))
+                        {
+                            markProperty( ctx, key );
+                        }
+                        else if( ctx.mode === 'strict' )
                         {
                             report( ctx, path, `PropertyNotAllowed<${key}>`, obj[key]);
                         }
@@ -4023,24 +3971,105 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
                 }
                 else
                 {
-                    // `additionalProperties` absent (typically with `unevaluatedProperties`): keep
-                    // values on the shell but leave them unevaluated.
-                    for( const key of forAdditional )
-                    {
-                        setOwnProperty( data, key, obj[key]);
-                    }
-                }
+                    const evaluated = new Set<string>();
 
-                if( additional === false && !hasUnevaluatedProps )
-                {
-                    validators.stripExtras( data, ctx, new Set([ ...evaluated, ...knownPropKeys ]));
+                    for( const key of propertyKeys )
+                    {
+                        if( !Object.hasOwn( obj, key )){ continue }
+
+                        evaluated.add( key );
+                        markProperty( ctx, key );
+                    }
+
+                    for( const key of Object.keys( obj ))
+                    {
+                        for( const entry of patternEntries )
+                        {
+                            if( !testRegex( entry.regex, key )){ continue }
+
+                            evaluated.add( key );
+                            markProperty( ctx, key );
+                            setOwnProperty(
+                                data,
+                                key,
+                                runNested( entry.check, obj[key], childPath( path, key ), ctx )
+                            );
+                        }
+                    }
+
+                    const forAdditional = Object.keys( obj ).filter( key =>
+                    {
+                        if( declaredPropKeys.has( key )){ return false }
+
+                        if( patternEntries.some( entry => testRegex( entry.regex, key ))){ return false }
+
+                        return true;
+                    });
+
+                    if( additionalCheck )
+                    {
+                        for( const key of forAdditional )
+                        {
+                            evaluated.add( key );
+                            markProperty( ctx, key );
+                            setOwnProperty(
+                                data,
+                                key,
+                                runNested( additionalCheck, obj[key], childPath( path, key ), ctx )
+                            );
+                        }
+                    }
+                    else if( additional === true )
+                    {
+                        for( const key of forAdditional )
+                        {
+                            setOwnProperty( data, key, obj[key]);
+
+                            if( allowWithoutEvaluating ){ continue }
+
+                            evaluated.add( key );
+                            markProperty( ctx, key );
+                        }
+                    }
+                    else if( additional === false )
+                    {
+                        for( const key of forAdditional )
+                        {
+                            if( ctx.mode === 'strict' )
+                            {
+                                report( ctx, path, `PropertyNotAllowed<${key}>`, obj[key]);
+                            }
+                            else if( ctx.mode === 'strip' )
+                            {
+                                delete data[key];
+                            }
+                            else
+                            {
+                                setOwnProperty( data, key, obj[key]);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // `additionalProperties` absent (typically with `unevaluatedProperties`): keep
+                        // values on the shell but leave them unevaluated.
+                        for( const key of forAdditional )
+                        {
+                            setOwnProperty( data, key, obj[key]);
+                        }
+                    }
+
+                    if( additional === false && !hasUnevaluatedProps )
+                    {
+                        validators.stripExtras( data, ctx, new Set([ ...evaluated, ...knownPropKeys ]));
+                    }
                 }
 
                 if( minProperties !== undefined ){ validators.minProperties( data, path, ctx, minProperties ) }
 
                 if( maxProperties !== undefined ){ validators.maxProperties( data, path, ctx, maxProperties ) }
 
-                for( const [ key, deps ] of Object.entries( dependentRequired ))
+                for( const [ key, deps ] of dependentRequiredEntries )
                 {
                     if( !Object.hasOwn( obj, key )){ continue }
 

@@ -27,12 +27,15 @@ export function buildSerializer(
 
     if( !map.has( resolvedHash ))
     {
-        const codeStr = generateSerializerCode( type, checker, { mode, format });
-        const ast = format === 'query'
-            ? templateToAst( `( function( input, options ){ const transform = options && options.transform; return ${codeStr}; })` )
-            : templateToAst(
-                `( function( input, options ){ const transform = options && options.transform; const replacer = options && options.replacer; const out = ${codeStr}; if( replacer ){ try { return JSON.stringify( JSON.parse( out ), replacer ); } catch( e ){ throw new __tcRuntime.SerializationError( "", e && e.message ? e.message : String( e ) ); } } return out; })`
-            );
+        const hoisted: string[] = [];
+        const codeStr = generateSerializerCode( type, checker, { mode, format, hoisted });
+        const innerFn = format === 'query'
+            ? `( function( input, options ){ const transform = options && options.transform; return ${codeStr}; })`
+            : `( function( input, options ){ const transform = options && options.transform; const replacer = options && options.replacer; const out = ${codeStr}; if( replacer ){ try { return JSON.stringify( JSON.parse( out ), replacer ); } catch( e ){ throw new __tcRuntime.SerializationError( "", e && e.message ? e.message : String( e ) ); } } return out; })`;
+        const wrapped = hoisted.length > 0
+            ? `( function(){ ${hoisted.join( ' ' )} return ${innerFn}; })()`
+            : innerFn;
+        const ast = templateToAst( wrapped );
         map.set( resolvedHash, ast );
     }
 
