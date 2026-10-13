@@ -3,6 +3,7 @@ import { ValidationMode } from '../runtime/validators.js';
 import
 {
     assertValidMapKeyType,
+    bigIntLiteralText,
     BUFFER_LIKE,
     constraintTagNames,
     enumMemberTypes,
@@ -241,8 +242,7 @@ function buildJsonSerializer(
 
         if( flags & ts.TypeFlags.BigIntLiteral )
         {
-            const raw = ( type as any ).value;
-            const lit = typeof raw === 'object' && raw ? `${raw.negative ? '-' : ''}${raw.base10Value}` : String( raw );
+            const lit = bigIntLiteralText( type );
             const litCode = `Literal<${lit}n>`;
 
             return bindTransformed( varName, pathLiteral, 'literal', tags, v =>
@@ -574,8 +574,7 @@ function buildQuerySerializer(
 
         if( flags & ts.TypeFlags.BigIntLiteral )
         {
-            const raw = ( type as any ).value;
-            const lit = typeof raw === 'object' && raw ? `${raw.negative ? '-' : ''}${raw.base10Value}` : String( raw );
+            const lit = bigIntLiteralText( type );
             const litCode = `Literal<${lit}n>`;
 
             return bindTransformedStmt( varName, prefixExpr, 'literal', tags, v =>

@@ -156,7 +156,7 @@ export function getValueAtPath( obj: any, path: string ): any
             return undefined;
         }
 
-        if( part.startsWith( '[' ) && part.endsWith( ']' ))
+        if( isIndexSegment( part ))
         {
             const idx = parseInt( part.slice( 1, -1 ), 10 );
             current = current[idx];

@@ -860,10 +860,7 @@ function templateSlotRegex( subType: ts.Type ): string
 
     if( subFlags & ts.TypeFlags.BigIntLiteral )
     {
-        const raw = ( subType as any ).value;
-        const lit = typeof raw === 'object' && raw ? `${raw.negative ? '-' : ''}${raw.base10Value}` : String( raw );
-
-        return lit.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
+        return bigIntLiteralText( subType ).replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
     }
 
     if( subFlags & ts.TypeFlags.Null ){ return 'null' }
@@ -897,4 +894,9 @@ export function buildTemplateLiteralRegex( templateType: ts.TemplateLiteralType 
     return regexStr;
 }
 
+export function bigIntLiteralText( type: ts.Type ): string
+{
+    const raw = ( type as any ).value;
 
+    return typeof raw === 'object' && raw ? `${raw.negative ? '-' : ''}${raw.base10Value}` : String( raw );
+}

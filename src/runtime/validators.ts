@@ -3898,7 +3898,6 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
             // Synthetic allOf opens allow extras without evaluating them for unevaluated*.
             const allowWithoutEvaluating = additional === true && allofOpenedRoots.has( subSchema );
             const propertyKeys = Object.keys( properties );
-            const declaredPropKeys = new Set<string>( propertyKeys );
             const knownPropKeys = new Set<string>([ ...propertyKeys, ...required ]);
             const canUseStrictKeys = additional === false &&
                 patternEntries.length === 0 &&
@@ -3962,6 +3961,7 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
                 else
                 {
                     const evaluated = new Set<string>();
+                    const objKeys = Object.keys( obj );
 
                     for( const key of propertyKeys )
                     {
@@ -3971,7 +3971,7 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
                         markProperty( ctx, key );
                     }
 
-                    for( const key of Object.keys( obj ))
+                    for( const key of objKeys )
                     {
                         for( const entry of patternEntries )
                         {
@@ -3987,14 +3987,7 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
                         }
                     }
 
-                    const forAdditional = Object.keys( obj ).filter( key =>
-                    {
-                        if( declaredPropKeys.has( key )){ return false }
-
-                        if( patternEntries.some( entry => testRegex( entry.regex, key ))){ return false }
-
-                        return true;
-                    });
+                    const forAdditional = objKeys.filter( key => !evaluated.has( key ));
 
                     if( additionalCheck )
                     {
@@ -4047,11 +4040,6 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
                         {
                             setOwnProperty( data, key, obj[key]);
                         }
-                    }
-
-                    if( additional === false && !hasUnevaluatedProps )
-                    {
-                        validators.stripExtras( data, ctx, new Set([ ...evaluated, ...knownPropKeys ]));
                     }
                 }
 

@@ -4,13 +4,12 @@ import { type ICustomFunctionScope } from './customFns.js';
 import
 {
     assertValidMapKeyType,
+    bigIntLiteralText,
     BUFFER_LIKE,
     buildTemplateLiteralRegex,
     constraintTagNames,
     enumMemberTypes,
-    getTypeProps,
     isNativeEnumType,
-    isTagKey,
     mapStructuralProps,
     minifyTypeString,
     ParsedConstraint,
@@ -262,24 +261,30 @@ function serializeConstraintValue( v: any ): string
 
 function serializeConstraints( list: ParsedConstraint[], hoisted: string[]): string
 {
+    if( list.length === 0 ){ return '[]' }
+
     const items = list.map( c =>
     {
-        if( c.type === 'pattern' && typeof c.value === 'string' )
-        {
-            const reVar = `__re_${hoisted.length}`;
-            hoisted.push( `const ${reVar} = __tcRuntime.getCachedPattern( ${JSON.stringify( c.value )} );` );
-        }
-
         const parts = [ `type: ${JSON.stringify( c.type )}` ];
 
         if( c.value !== undefined ){ parts.push( `value: ${serializeConstraintValue( c.value )}` ) }
 
         if( c.message !== undefined ){ parts.push( `message: ${JSON.stringify( c.message )}` ) }
 
+        if( c.type === 'pattern' && typeof c.value === 'string' )
+        {
+            const reVar = `__re_${hoisted.length}`;
+            hoisted.push( `const ${reVar} = __tcRuntime.getCachedPattern( ${JSON.stringify( c.value )} );` );
+            parts.push( `regex: ${reVar}` );
+        }
+
         return `{ ${parts.join( ', ' )} }`;
     });
 
-    return `[${items.join( ', ' )}]`;
+    const cVar = `__c_${hoisted.length}`;
+    hoisted.push( `const ${cVar} = [${items.join( ', ' )}];` );
+
+    return cVar;
 }
 
 function wrapConstraints(
@@ -378,11 +383,17 @@ function wrapConstraints(
             `__v = __tcRuntime.applyPropertyNames(__v, p, (key, keyP) => ${keyBody}${msgArg}); `;
     }
 
+    const earlyInit = early.length > 0
+        ? `let __v = __tcRuntime.applyParseConstraints( raw, p, ${serializeConstraints( early, hoisted )}, ${JSON.stringify( from )}, root ); `
+        : 'let __v = raw; ';
     const optionCode = ( applyOption || tags.length > 0 )
         ? `__v = __tcRuntime.applyParseTransform( __v, p, transform, ${JSON.stringify( kind )}, ${JSON.stringify( tags )}, root ); `
         : '';
+    const lateCode = late.length > 0
+        ? `__v = __tcRuntime.applyParseConstraints( __v, p, ${serializeConstraints( late, hoisted )}, ${JSON.stringify( from )}, root ); `
+        : '';
 
-    return `( function( raw, p, root ){ let __v = __tcRuntime.applyParseConstraints( raw, p, ${serializeConstraints( early, hoisted )}, ${JSON.stringify( from )}, root ); ${customTransformCode}__v = ${inner}; ${optionCode}__v = __tcRuntime.applyParseConstraints( __v, p, ${serializeConstraints( late, hoisted )}, ${JSON.stringify( from )}, root ); ${nestedConstraintCode}${customConstraintCode}return __v; })( ${varName}, ${pathExpr || '""'}, ${rootExpr} )`;
+    return `( function( raw, p, root ){ ${earlyInit}${customTransformCode}__v = ${inner}; ${optionCode}${lateCode}${nestedConstraintCode}${customConstraintCode}return __v; })( ${varName}, ${pathExpr || '""'}, ${rootExpr} )`;
 }
 
 function buildValidation(
@@ -419,15 +430,6 @@ function buildValidation(
         if( typeof type.isIntersection === 'function' && type.isIntersection())
         {
             const peeled = peelTaggedIntersection( type, checker, scope );
-            const merged = tryMergeObjectTypes(
-                type.types.filter( t =>
-                {
-                    const props = getTypeProps( t, checker );
-
-                    return !( props.length > 0 && props.every( p => isTagKey( p.getName())));
-                }),
-                checker
-            );
 
             if( peeled?.hasTags )
             {
@@ -458,14 +460,20 @@ function buildValidation(
                     }
                 }
             }
-            else if( merged )
+            else
             {
-                return buildObjectValidation( merged.props, merged.indexType, checker, mode, from, varName, pathExpr, rootExpr, scope, visited, hoisted );
-            }
-            else if( peeled )
-            {
-                walkType = peeled.base;
-                constraints = peeled.constraints;
+                const merged = tryMergeObjectTypes( type.types, checker );
+
+                if( merged )
+                {
+                    return buildObjectValidation( merged.props, merged.indexType, checker, mode, from, varName, pathExpr, rootExpr, scope, visited, hoisted );
+                }
+
+                if( peeled )
+                {
+                    walkType = peeled.base;
+                    constraints = peeled.constraints;
+                }
             }
         }
 
@@ -564,8 +572,7 @@ function buildValidationCore(
 
     if( flags & ts.TypeFlags.BigIntLiteral )
     {
-        const raw = ( type as any ).value;
-        const lit = typeof raw === 'object' && raw ? `${raw.negative ? '-' : ''}${raw.base10Value}` : String( raw );
+        const lit = bigIntLiteralText( type );
         const litCode = `Literal<${lit}n>`;
 
         return `( function( v, path ){ const b = __tcRuntime.coerceBigInt( v, path ); if( b !== ${lit}n ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( litCode )} ); } return b; })( ${varName}, ${p} )`;

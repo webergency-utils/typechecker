@@ -1,4 +1,5 @@
 import ts from 'typescript';
+import { hasUniqueItems, isMultipleOfNumber } from '../runtime/validators.js';
 import { TagName } from './tagKeys.js';
 import { collectConstraintsFromProps, getTypeProps, peelTaggedIntersection } from './type-helpers.js';
 
@@ -243,18 +244,9 @@ export function evaluateStaticConstraints(
         {
             const v = constant.value;
             const n = c.value;
-            let ok: boolean;
-
-            if( typeof v === 'bigint' || typeof n === 'bigint' )
-            {
-                ok = BigInt( v ) % BigInt( n ) === 0n;
-            }
-            else
-            {
-                const q = v / n;
-
-                ok = Math.abs( q - Math.round( q )) <= 1e-8 * Math.max( 1, Math.abs( q ));
-            }
+            const ok = ( typeof v === 'bigint' || typeof n === 'bigint' )
+                ? BigInt( n ) !== 0n && BigInt( v ) % BigInt( n ) === 0n
+                : isMultipleOfNumber( v, n );
 
             if( !ok )
             {
@@ -291,20 +283,9 @@ export function evaluateStaticConstraints(
         }
         else if( c.type === 'uniqueItems' && constant.kind === 'array' )
         {
-            const seen = new Set();
-
-            for( const item of constant.value )
+            if( !hasUniqueItems( constant.value ))
             {
-                const key = typeof item === 'object' && item !== null
-                    ? JSON.stringify( item, ( _k, v ) => typeof v === 'bigint' ? `${v}n` : v )
-                    : item;
-
-                if( seen.has( key ))
-                {
-                    errors.push( c.message || 'Array does not satisfy UniqueItems' );
-                    break;
-                }
-                seen.add( key );
+                errors.push( c.message || 'Array does not satisfy UniqueItems' );
             }
         }
         else if( c.type === 'minProperties' && constant.kind === 'object' )

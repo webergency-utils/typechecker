@@ -472,6 +472,7 @@ export type ParseConstraint =
         type     : string
         value?   : any
         message? : string
+        regex?   : RegExp | null
     };
 
 /**
@@ -597,7 +598,7 @@ export function applyParseConstraints(
         {
             if( typeof v === 'string' )
             {
-                const regex = getCachedPattern( c.value );
+                const regex = c.regex !== undefined ? c.regex : getCachedPattern( c.value );
 
                 if( !regex ){ throw new ParseError( path, msg || 'UnsafePattern' ) }
 

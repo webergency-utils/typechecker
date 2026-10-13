@@ -361,12 +361,11 @@ export default function transformer( program: ts.Program )
 
                             if( fnName === 'serializer' || fnName === 'stringify' )
                             {
-                                const optsArg = fnName === 'serializer' ? node.arguments[0] : node.arguments[1];
+                                const optsIdx = fnName === 'serializer' ? 0 : 1;
+                                const optsArg = node.arguments[optsIdx];
                                 const options = parseSerializerOptions( optsArg, checker );
                                 const serRef = buildSerializer( type, checker, serializerCache, hash, options );
-                                const visitedOpts = optsArg
-                                    ? ts.visitNode( optsArg, visitor ) as ts.Expression
-                                    : ts.factory.createIdentifier( 'undefined' );
+                                const visitedOpts = visitArgOrUndefined( node.arguments, optsIdx, visitor );
 
                                 if( fnName === 'serializer' )
                                 {
