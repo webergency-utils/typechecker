@@ -531,9 +531,9 @@ describe( 'Serializer Fixes & Regressions', () =>
     it( 'preserves all arms and invokes tag transform hooks on multi-arm tagged object intersections', async() =>
     {
         const mod = await emitAndImport<{
-            serTwoJson    : ( v: any, transform?: any ) => string
-            serTwoQuery   : ( v: any, transform?: any ) => string
-            serThreeJson  : ( v: any, transform?: any ) => string
+            serTwoJson   : ( v: any, transform?: any ) => string
+            serTwoQuery  : ( v: any, transform?: any ) => string
+            serThreeJson : ( v: any, transform?: any ) => string
         }>( `
             import { stringify, tag } from '../src/index.js';
             interface A { a: string }

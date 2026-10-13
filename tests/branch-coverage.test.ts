@@ -1,5 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { validators, groupErrorsByPath, coerceQueryDate, type ValidationContext, getOrCompileSchema, is, validate } from '../src/runtime/validators.js';
+import {
+    validators,
+    groupErrorsByPath,
+    coerceQueryDate,
+    type ValidationContext,
+    getOrCompileSchema,
+    is,
+    validate,
+    parseSet,
+    parseMap,
+    applyParseConstraints,
+    serializeSet,
+    serializeMap,
+    resolvePath,
+    getValueAtPath,
+    hasPath
+} from '../src/runtime/index.js';
 
 describe( 'Branch coverage edges', () =>
 {
@@ -526,6 +542,105 @@ describe( 'Branch coverage edges', () =>
 
             // Assert
             expect( ctx.success ).toBe( false );
+        });
+    });
+
+    describe( 'U1-U6 runtime helper branches', () =>
+    {
+        it( 'should cover resolvePath, getValueAtPath, and hasPath relative and root branches', () =>
+        {
+            expect( resolvePath( 'a.b.c', '/root.x' )).toBe( 'root.x' );
+            expect( resolvePath( 'a.b.c', './d' )).toBe( 'a.b.c.d' );
+            expect( resolvePath( 'a.b.c', '../d' )).toBe( 'a.b.d' );
+            expect( resolvePath( 'a.b.c', '../.././d' )).toBe( 'a.d' );
+            expect( resolvePath( 'a.b', '..c' )).toBe( 'c' );
+            expect( getValueAtPath( null, 'a' )).toBeUndefined();
+            expect( getValueAtPath({ a : [ 10, 20 ] }, 'a[1]' )).toBe( 20 );
+            expect( getValueAtPath({ a : null }, 'a.b' )).toBeUndefined();
+            expect( hasPath({ a : 0 }, 'a' )).toBe( true );
+            expect( hasPath({ a : undefined }, 'a' )).toBe( false );
+        });
+
+        it( 'should cover parseSet and parseMap branches across json and query modes', () =>
+        {
+            expect( parseSet( new Set([ 'a', 'b' ]), 's', 'json', x => String( x ))).toEqual( new Set([ 'a', 'b' ]));
+            expect( parseSet([ 'x' ], 's', 'json', x => String( x ))).toEqual( new Set([ 'x' ]));
+            expect( parseSet( undefined, 's', 'query', x => String( x ))).toEqual( new Set());
+            expect( parseSet({}, 's', 'query', x => String( x ))).toEqual( new Set());
+            expect( parseSet( 'one', 's', 'query', x => String( x ))).toEqual( new Set([ 'one' ]));
+            expect(() => parseSet( 'bad', 's', 'json', x => x )).toThrow( /Type<Set>/ );
+
+            const existingMap = new Map([[ 'k', 1 ]]);
+            expect( parseMap( existingMap, 'm', 'json', k => String( k ), v => Number( v ))).toEqual( new Map([[ 'k', 1 ]]));
+            expect( parseMap( undefined, 'm', 'query', k => String( k ), v => Number( v ))).toEqual( new Map());
+            expect( parseMap([ 'a', 'b' ], 'm', 'query', k => Number( k ), v => String( v ))).toEqual( new Map([[ 0, 'a' ], [ 1, 'b' ]]));
+            expect( parseMap({ a : 1, b : undefined }, 'm', 'json', k => k, v => v )).toEqual( new Map([[ 'a', 1 ]]));
+            expect(() => parseMap( null, 'm', 'json', k => k, v => v )).toThrow( /Type<Map>/ );
+            expect(() => parseMap([ 1 ], 'm', 'json', k => k, v => v )).toThrow( /Type<Map>/ );
+            expect(() => parseMap( new Set(), 'm', 'json', k => k, v => v )).toThrow( /Type<Map>/ );
+            expect(() => parseMap( new Date(), 'm', 'json', k => k, v => v )).toThrow( /Type<Map>/ );
+            expect(() => parseMap( /re/, 'm', 'json', k => k, v => v )).toThrow( /Type<Map>/ );
+        });
+
+        it( 'should cover serializeSet and serializeMap branches', () =>
+        {
+            expect( serializeSet( new Set([ 1, 2 ]), x => String( x ), 's' )).toBe( '[1,2]' );
+            expect(() => serializeSet([ 1 ] as any, x => String( x ), 's' )).toThrow( /Type<Set>/ );
+
+            expect( serializeMap(
+                new Map<any, any>([[ 'a', 1 ], [ 2, true ]]),
+                ( k, v ) => [ typeof k === 'string' ? JSON.stringify( k ) : String( k ), String( v ) ],
+                'm'
+            )).toBe( '{"a":1,"2":true}' );
+            expect(() => serializeMap({} as any, ( k, v ) => [ String( k ), String( v ) ], 'm' )).toThrow( /Type<Map>/ );
+        });
+
+        it( 'should cover applyParseConstraints bigint, Set, Map, and Requires branches', () =>
+        {
+            expect( applyParseConstraints( 10n, 'b', [
+                { type : 'minimum', value : 5n },
+                { type : 'maximum', value : 20n },
+                { type : 'exclusiveMinimum', value : 5n },
+                { type : 'exclusiveMaximum', value : 20n },
+                { type : 'multipleOf', value : 5n }
+            ])).toBe( 10n );
+
+            expect(() => applyParseConstraints( 10n, 'b', [{ type : 'multipleOf', value : 0n }])).toThrow( /MultipleOf<0>/ );
+            expect(() => applyParseConstraints( 10n, 'b', [{ type : 'multipleOf', value : 3n }])).toThrow( /MultipleOf<3>/ );
+            expect(() => applyParseConstraints( 10n, 'b', [{ type : 'multipleOf', value : 'bad-bigint' }])).toThrow( /MultipleOf<bad-bigint>/ );
+            expect(() => applyParseConstraints( 0.35, 'n', [{ type : 'multipleOf', value : 0.1 }])).toThrow( /MultipleOf<0\.1>/ );
+
+            expect( applyParseConstraints( new Set([ 1, 2 ]), 's', [{ type : 'minItems', value : 1 }, { type : 'maxItems', value : 3 }])).toEqual( new Set([ 1, 2 ]));
+            expect(() => applyParseConstraints( new Set(), 's', [{ type : 'minItems', value : 1 }])).toThrow( /MinItems<1>/ );
+            expect(() => applyParseConstraints( new Set([ 1, 2 ]), 's', [{ type : 'maxItems', value : 1 }])).toThrow( /MaxItems<1>/ );
+
+            expect( applyParseConstraints( new Map([[ 'a', 1 ]]), 'm', [{ type : 'minProperties', value : 1 }, { type : 'maxProperties', value : 2 }])).toEqual( new Map([[ 'a', 1 ]]));
+            expect(() => applyParseConstraints( new Map(), 'm', [{ type : 'minProperties', value : 1 }])).toThrow( /MinProperties<1>/ );
+            expect(() => applyParseConstraints( new Map([[ 'a', 1 ], [ 'b', 2 ]]), 'm', [{ type : 'maxProperties', value : 1 }])).toThrow( /MaxProperties<1>/ );
+
+            expect( applyParseConstraints({ a : 1 }, 'sub', [{ type : 'requires', value : '/flag' }], 'json', { flag : true, sub : { a : 1 } })).toEqual({ a : 1 });
+            expect(() => applyParseConstraints({ a : 1 }, 'sub', [{ type : 'requires', value : '/flag' }], 'json', { sub : { a : 1 } })).toThrow( /Requires<\/flag>/ );
+
+            expect(() => applyParseConstraints([ { a : 1, b : 2 }, { b : 2, a : 1 } ], 'u', [{ type : 'uniqueItems' }])).toThrow( /UniqueItems/ );
+        });
+
+        it( 'should cover validators.literal bigint coercion and patternProperties closed object modes', () =>
+        {
+            const jsonCtx: ValidationContext = { success : true, errors : [], mode : 'strict', from : 'json', root : {} };
+            expect( validators.literal( '10', 'b', jsonCtx, 10n )).toBe( 10n );
+            expect( validators.literal( 10, 'b', jsonCtx, 10n )).toBe( 10n );
+            expect( validators.literal( 'bad', 'b', jsonCtx, 10n )).toBe( 'bad' );
+            expect( jsonCtx.errors[0].error ).toBe( 'Literal<10n>' );
+
+            const fn = getOrCompileSchema({
+                type                 : 'object',
+                properties           : { id : { type : 'number' } },
+                patternProperties    : { '^x_' : { type : 'string' } },
+                additionalProperties : false
+            });
+            expect( validate( fn, { id : 1, x_ok : 'hi', extra : 2 }, { mode : 'strict' }).success ).toBe( false );
+            expect( validate( fn, { id : 1, x_ok : 'hi', extra : 2 }, { mode : 'strip', mutate : true }).data ).toEqual({ id : 1, x_ok : 'hi' });
+            expect( validate( fn, { id : 1, x_ok : 'hi', extra : 2 }, { mode : 'relaxed' }).data ).toEqual({ id : 1, x_ok : 'hi', extra : 2 });
         });
     });
 });

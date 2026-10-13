@@ -260,7 +260,7 @@ function serializeConstraintValue( v: any ): string
     return JSON.stringify( v );
 }
 
-function serializeConstraints( list: ParsedConstraint[], hoisted: string[] ): string
+function serializeConstraints( list: ParsedConstraint[], hoisted: string[]): string
 {
     const items = list.map( c =>
     {

@@ -1080,7 +1080,7 @@ function uniqueContentHash( value: any, seen?: WeakSet<object> ): number | undef
     return h >>> 0;
 }
 
-export function hasUniqueItems( v: any[] ): boolean
+export function hasUniqueItems( v: any[]): boolean
 {
     let seenStrings: Set<string> | undefined;
     let seenNumbers: Set<number> | undefined;
@@ -3929,7 +3929,7 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
                     v,
                     path,
                     ctx,
-                    undefined,
+                    canUseStrictKeys ? knownPropKeys : undefined,
                     'Object'
                 );
 
@@ -3949,25 +3949,15 @@ export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
 
                 if( canUseStrictKeys )
                 {
-                    for( const key of Object.keys( obj ))
+                    if( ctx.annotations )
                     {
-                        if( declaredPropKeys.has( key ))
+                        for( const key of propertyKeys )
                         {
-                            markProperty( ctx, key );
-                        }
-                        else if( ctx.mode === 'strict' )
-                        {
-                            report( ctx, path, `PropertyNotAllowed<${key}>`, obj[key]);
-                        }
-                        else if( ctx.mode === 'strip' )
-                        {
-                            delete data[key];
-                        }
-                        else
-                        {
-                            setOwnProperty( data, key, obj[key]);
+                            if( Object.hasOwn( obj, key )){ markProperty( ctx, key ) }
                         }
                     }
+
+                    validators.stripExtras( data, ctx, knownPropKeys );
                 }
                 else
                 {

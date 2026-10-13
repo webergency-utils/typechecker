@@ -119,10 +119,10 @@ describe( 'Parse Fixes & Regressions', () =>
     it( 'enforces BigIntLiteral equality including negative literals and unions in JSON and query modes', async() =>
     {
         const mod = await emitAndImport<{
-            parseTen     : ( json: string ) => bigint
-            parseTenQ    : ( qs: string ) => { n : bigint }
-            parseNeg     : ( json: string ) => bigint
-            parseUnion   : ( json: string ) => bigint
+            parseTen   : ( json: string ) => bigint
+            parseTenQ  : ( qs: string ) => { n : bigint }
+            parseNeg   : ( json: string ) => bigint
+            parseUnion : ( json: string ) => bigint
         }>( `
             import { parse } from '../src/index.js';
             export const parseTen = ( json: string ) => parse<10n>( json );
@@ -150,9 +150,9 @@ describe( 'Parse Fixes & Regressions', () =>
     it( 'preserves all arms and invokes tag/constraint/transform hooks on multi-arm tagged object intersections', async() =>
     {
         const mod = await emitAndImport<{
-            parseTwoJson    : ( json: string, transform?: any ) => any
-            parseTwoQuery   : ( qs: string, transform?: any ) => any
-            parseThreeJson  : ( json: string, transform?: any ) => any
+            parseTwoJson   : ( json: string, transform?: any ) => any
+            parseTwoQuery  : ( qs: string, transform?: any ) => any
+            parseThreeJson : ( json: string, transform?: any ) => any
         }>( `
             import { parse, tag, constraint, transform } from '../src/index.js';
             interface A { a: string }

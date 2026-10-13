@@ -888,7 +888,7 @@ export function buildTemplateLiteralRegex( templateType: ts.TemplateLiteralType 
 
         if( i < templateType.types.length )
         {
-            regexStr += templateSlotRegex( templateType.types[i] );
+            regexStr += templateSlotRegex( templateType.types[i]);
         }
     }
 

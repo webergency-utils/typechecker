@@ -427,7 +427,7 @@ function checkArrayLiteral(
 
             if( ts.isSpreadElement( el )){ continue }
 
-            const slotType = typeArgs[i] ?? checker.getNumberIndexType( baseType );
+            const slotType = typeArgs[i] ?? checker.getIndexTypeOfType( baseType, ts.IndexKind.Number );
 
             if( slotType )
             {
@@ -438,7 +438,7 @@ function checkArrayLiteral(
     else if( checker.isArrayType( baseType ))
     {
         const elemType = checker.getTypeArguments( baseType as ts.TypeReference )[0]
-            ?? checker.getNumberIndexType( baseType );
+            ?? checker.getIndexTypeOfType( baseType, ts.IndexKind.Number );
 
         if( !elemType ){ return }
 

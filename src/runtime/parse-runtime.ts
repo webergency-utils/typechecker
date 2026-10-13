@@ -607,42 +607,38 @@ export function applyParseConstraints(
                 }
             }
         }
-        else if( c.type === 'minItems' )
+        else if( c.type === 'minItems' && ( Array.isArray( v ) || v instanceof Set ))
         {
-            const size = v instanceof Set ? v.size : ( Array.isArray( v ) ? v.length : undefined );
+            const size = v instanceof Set ? v.size : v.length;
 
-            if( size !== undefined && size < c.value )
+            if( size < c.value )
             {
                 throw new ParseError( path, msg || `MinItems<${c.value}>` );
             }
         }
-        else if( c.type === 'maxItems' )
+        else if( c.type === 'maxItems' && ( Array.isArray( v ) || v instanceof Set ))
         {
-            const size = v instanceof Set ? v.size : ( Array.isArray( v ) ? v.length : undefined );
+            const size = v instanceof Set ? v.size : v.length;
 
-            if( size !== undefined && size > c.value )
+            if( size > c.value )
             {
                 throw new ParseError( path, msg || `MaxItems<${c.value}>` );
             }
         }
-        else if( c.type === 'minProperties' )
+        else if( c.type === 'minProperties' && v !== null && typeof v === 'object' )
         {
-            const size = v instanceof Map
-                ? v.size
-                : ( v !== null && typeof v === 'object' && !Array.isArray( v ) && !( v instanceof Set ) ? Object.keys( v ).length : undefined );
+            const size = v instanceof Map ? v.size : Object.keys( v ).length;
 
-            if( size !== undefined && size < c.value )
+            if( size < c.value )
             {
                 throw new ParseError( path, msg || `MinProperties<${c.value}>` );
             }
         }
-        else if( c.type === 'maxProperties' )
+        else if( c.type === 'maxProperties' && v !== null && typeof v === 'object' )
         {
-            const size = v instanceof Map
-                ? v.size
-                : ( v !== null && typeof v === 'object' && !Array.isArray( v ) && !( v instanceof Set ) ? Object.keys( v ).length : undefined );
+            const size = v instanceof Map ? v.size : Object.keys( v ).length;
 
-            if( size !== undefined && size > c.value )
+            if( size > c.value )
             {
                 throw new ParseError( path, msg || `MaxProperties<${c.value}>` );
             }
