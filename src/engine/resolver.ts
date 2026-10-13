@@ -249,6 +249,16 @@ function constrainedBaseKind( type: ts.Type, checker: ts.TypeChecker ): { baseNa
         return { baseName : 'date', baseType : type };
     }
 
+    if( typeSymbolName( type ) === 'Set' )
+    {
+        return { baseName : 'set', baseType : type };
+    }
+
+    if( typeSymbolName( type ) === 'Map' )
+    {
+        return { baseName : 'map', baseType : type };
+    }
+
     if( typeof checker.isArrayType === 'function' && checker.isArrayType( type ))
     {
         return { baseName : 'array', baseType : type };
@@ -350,7 +360,7 @@ function buildValidatorScoped(
 
             if( kind )
             {
-                if( kind.baseName === 'array' && kind.baseType )
+                if(( kind.baseName === 'array' || kind.baseName === 'set' || kind.baseName === 'map' ) && kind.baseType )
                 {
                     const baseValidator = buildValidatorScoped( kind.baseType, checker, validatorsMap, scope );
                     result = createConstrainedPrimitiveCheck( kind.baseName, constraints, baseValidator );

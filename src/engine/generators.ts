@@ -113,6 +113,10 @@ function constrainedCoercionKind( baseType: string ): string
 
     if( baseType === 'array' ){ return 'Array' }
 
+    if( baseType === 'set' ){ return 'Set' }
+
+    if( baseType === 'map' ){ return 'Map' }
+
     return baseType;
 }
 

@@ -2,6 +2,7 @@ import ts from 'typescript';
 import { ValidationMode } from '../runtime/validators.js';
 import
 {
+    assertValidMapKeyType,
     BUFFER_LIKE,
     constraintTagNames,
     enumMemberTypes,
@@ -92,7 +93,13 @@ function getObjectSpecificity( t: ts.Type, checker: ts.TypeChecker ): number
 
     const symbolName = typeSymbolName( t );
 
-    if( symbolName === 'Date' || symbolName === 'RegExp' || ( symbolName && BUFFER_LIKE.has( symbolName )))
+    if(
+        symbolName === 'Date' ||
+        symbolName === 'RegExp' ||
+        symbolName === 'Set' ||
+        symbolName === 'Map' ||
+        ( symbolName && BUFFER_LIKE.has( symbolName ))
+    )
     {
         return 0;
     }
@@ -317,6 +324,38 @@ function buildJsonSerializer(
             const elemSer = buildJsonSerializer( elemType, checker, mode, elemPath, 'item', visited );
 
             return `__tcRuntime.serializeArray( ${varName}, ( item, i ) => ${elemSer}, ${pathLiteral} )`;
+        }
+
+        if( symbolName === 'Set' )
+        {
+            const typeArgs = typeof checker.getTypeArguments === 'function'
+                ? checker.getTypeArguments( type as ts.TypeReference )
+                : ( type as ts.TypeReference ).typeArguments || [];
+            const elemType = typeArgs[0] || ({ getFlags : () => ts.TypeFlags.Any } as any );
+            const elemPath = pathExpr === '""' ? '"[" + i + "]"' : `(${pathExpr}) + "[" + i + "]"`;
+            const elemSer = buildJsonSerializer( elemType, checker, mode, elemPath, 'item', visited );
+
+            return bindTransformed( varName, pathLiteral, 'Set', tags, v =>
+                `__tcRuntime.serializeSet( ${v}, ( item, i ) => ${elemSer}, ${pathLiteral} )`
+            );
+        }
+
+        if( symbolName === 'Map' )
+        {
+            const typeArgs = typeof checker.getTypeArguments === 'function'
+                ? checker.getTypeArguments( type as ts.TypeReference )
+                : ( type as ts.TypeReference ).typeArguments || [];
+            const keyType = typeArgs[0] || ({ getFlags : () => ts.TypeFlags.Any } as any );
+            const valueType = typeArgs[1] || ({ getFlags : () => ts.TypeFlags.Any } as any );
+            assertValidMapKeyType( keyType, checker );
+            const keyPath = pathExpr === '""' ? '".key(" + String( k ) + ")"' : `(${pathExpr}) + ".key(" + String( k ) + ")"`;
+            const valPath = pathExpr === '""' ? '"[" + String( k ) + "]"' : `(${pathExpr}) + "[" + String( k ) + "]"`;
+            const keySer = buildJsonSerializer( keyType, checker, mode, keyPath, 'k', visited );
+            const valSer = buildJsonSerializer( valueType, checker, mode, valPath, 'v', visited );
+
+            return bindTransformed( varName, pathLiteral, 'Map', tags, mv =>
+                `__tcRuntime.serializeMap( ${mv}, ( k, v ) => [ ${keySer}, ${valSer} ], ${pathLiteral} )`
+            );
         }
 
         if( typeof type.isUnion === 'function' && type.isUnion())
@@ -585,6 +624,36 @@ function buildQuerySerializer(
             const elemCode = buildQuerySerializer( elemType, checker, mode, 'item', `(${prefixExpr}) + "[]"`, visited );
 
             return `if( !Array.isArray( ${varName} ) ){ throw new __tcRuntime.SerializationError( ${prefixExpr}, "Type<Array>" ); } for( const item of ${varName} ){ ${elemCode} }`;
+        }
+
+        if( symbolName === 'Set' )
+        {
+            const typeArgs = typeof checker.getTypeArguments === 'function'
+                ? checker.getTypeArguments( type as ts.TypeReference )
+                : ( type as ts.TypeReference ).typeArguments || [];
+            const elemType = typeArgs[0] || ({ getFlags : () => ts.TypeFlags.Any } as any );
+            const elemCode = buildQuerySerializer( elemType, checker, mode, 'item', `(${prefixExpr}) + "[]"`, visited );
+
+            return bindTransformedStmt( varName, prefixExpr, 'Set', tags, v =>
+                `if( !( ${v} instanceof Set ) ){ throw new __tcRuntime.SerializationError( ${prefixExpr}, "Type<Set>" ); } for( const item of ${v} ){ ${elemCode} }`
+            );
+        }
+
+        if( symbolName === 'Map' )
+        {
+            const typeArgs = typeof checker.getTypeArguments === 'function'
+                ? checker.getTypeArguments( type as ts.TypeReference )
+                : ( type as ts.TypeReference ).typeArguments || [];
+            const keyType = typeArgs[0] || ({ getFlags : () => ts.TypeFlags.Any } as any );
+            const valueType = typeArgs[1] || ({ getFlags : () => ts.TypeFlags.Any } as any );
+            assertValidMapKeyType( keyType, checker );
+            const keyPath = prefixExpr === '""' ? '".key(" + String( __mk ) + ")"' : `(${prefixExpr}) + ".key(" + String( __mk ) + ")"`;
+            const keySer = buildJsonSerializer( keyType, checker, mode, keyPath, '__mk', visited );
+            const valCode = buildQuerySerializer( valueType, checker, mode, '__mv', '__entryPrefix', visited );
+
+            return bindTransformedStmt( varName, prefixExpr, 'Map', tags, v =>
+                `if( !( ${v} instanceof Map ) ){ throw new __tcRuntime.SerializationError( ${prefixExpr}, "Type<Map>" ); } for( const [ __mk, __mv ] of ${v}.entries() ){ const __kRaw = ${keySer}; const __kStr = __kRaw.charAt( 0 ) === '"' ? JSON.parse( __kRaw ) : __kRaw; const __entryPrefix = (${prefixExpr}) === "" ? __kStr : (${prefixExpr}) + "[" + __kStr + "]"; ${valCode} }`
+            );
         }
 
         if( typeof type.isUnion === 'function' && type.isUnion())

@@ -146,6 +146,44 @@ export function serializeArray<T>( val: T[], mapper: ( item: T, index: number ) 
     return `[${parts.join( ',' )}]`;
 }
 
+export function serializeSet<T>( val: Set<T>, mapper: ( item: T, index: number ) => string, path = '' ): string
+{
+    if( !( val instanceof Set ))
+    {
+        throw new SerializationError( path, 'Type<Set>' );
+    }
+
+    const parts: string[] = [];
+    let i = 0;
+
+    for( const item of val )
+    {
+        parts.push( mapper( item, i ));
+        i++;
+    }
+
+    return `[${parts.join( ',' )}]`;
+}
+
+export function serializeMap<K, V>( val: Map<K, V>, mapper: ( k: K, v: V ) => [ string, string ], path = '' ): string
+{
+    if( !( val instanceof Map ))
+    {
+        throw new SerializationError( path, 'Type<Map>' );
+    }
+
+    const parts: string[] = [];
+
+    for( const [ k, v ] of val.entries())
+    {
+        const [ kSer, vSer ] = mapper( k, v );
+        const keyJson = kSer.charAt( 0 ) === '"' ? kSer : JSON.stringify( kSer );
+        parts.push( `${keyJson}:${vSer}` );
+    }
+
+    return `{${parts.join( ',' )}}`;
+}
+
 export function serializeUnion(
     val      : any,
     path     : string,

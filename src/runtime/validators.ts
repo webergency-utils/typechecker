@@ -1340,7 +1340,7 @@ export const validators = {
             }
         }
 
-        if( wantsFrom( ctx ) && typeof expected === 'bigint' )
+        if( wantsJsonRevive( ctx ) && typeof expected === 'bigint' )
         {
             if( typeof v === 'string' && v.trim() !== '' )
             {
@@ -1672,23 +1672,29 @@ export const validators = {
         return result;
     },
 
-    minItems : ( v: any[], path: string, ctx: ValidationContext, min: number, message?: string ) => 
+    minItems : ( v: any, path: string, ctx: ValidationContext, min: number, message?: string ) => 
     {
-        if( v.length < min ) { report( ctx, path, `MinItems<${min}>`, v, message ) }
+        const size = v instanceof Set ? v.size : ( Array.isArray( v ) ? v.length : undefined );
+
+        if( size !== undefined && size < min ) { report( ctx, path, `MinItems<${min}>`, v, message ) }
 
         return v;
     },
 
-    maxItems : ( v: any[], path: string, ctx: ValidationContext, max: number, message?: string ) => 
+    maxItems : ( v: any, path: string, ctx: ValidationContext, max: number, message?: string ) => 
     {
-        if( v.length > max ) { report( ctx, path, `MaxItems<${max}>`, v, message ) }
+        const size = v instanceof Set ? v.size : ( Array.isArray( v ) ? v.length : undefined );
+
+        if( size !== undefined && size > max ) { report( ctx, path, `MaxItems<${max}>`, v, message ) }
 
         return v;
     },
 
     minProperties : ( v: any, path: string, ctx: ValidationContext, min: number, message?: string ) =>
     {
-        if( isPlainObject( v ) && Object.keys( v ).length < min )
+        const size = v instanceof Map ? v.size : ( isPlainObject( v ) ? Object.keys( v ).length : undefined );
+
+        if( size !== undefined && size < min )
         {
             report( ctx, path, `MinProperties<${min}>`, v, message );
         }
@@ -1698,7 +1704,9 @@ export const validators = {
 
     maxProperties : ( v: any, path: string, ctx: ValidationContext, max: number, message?: string ) =>
     {
-        if( isPlainObject( v ) && Object.keys( v ).length > max )
+        const size = v instanceof Map ? v.size : ( isPlainObject( v ) ? Object.keys( v ).length : undefined );
+
+        if( size !== undefined && size > max )
         {
             report( ctx, path, `MaxProperties<${max}>`, v, message );
         }
@@ -2289,9 +2297,16 @@ export const validators = {
             {
                 v = new Set( v );
             }
-            else if( wantsQuery( ctx ) && v !== undefined && v !== null ) 
+            else if( wantsQuery( ctx ))
             {
-                v = new Set([v]);
+                if( v === undefined || v === null || ( isPlainObject( v ) && Object.keys( v ).length === 0 ))
+                {
+                    v = new Set();
+                }
+                else
+                {
+                    v = new Set([v]);
+                }
             }
             else if( typeof ctx.from === 'function' )
             {
@@ -2341,11 +2356,24 @@ export const validators = {
 
     map : ( v: any, path: string, ctx: ValidationContext, keyValidator: Function, valueValidator: Function, message?: string ) => 
     {
+        const revivedFromObject = !( v instanceof Map );
+
         if( !( v instanceof Map )) 
         {
-            if( wantsJsonRevive( ctx ) && isPlainObject( v )) 
+            if( wantsQuery( ctx ) && ( v === undefined || v === null ))
             {
-                v = new Map( Object.entries( v ));
+                v = new Map();
+            }
+            else if( wantsJsonRevive( ctx ) && ( isPlainObject( v ) || ( wantsQuery( ctx ) && Array.isArray( v )))) 
+            {
+                const entries: [ string, any ][] = [];
+
+                for( const k of Object.keys( v ))
+                {
+                    if( v[k] !== undefined ){ entries.push([ k, v[k] ]) }
+                }
+
+                v = new Map( entries );
             }
             else if( typeof ctx.from === 'function' )
             {
@@ -2368,6 +2396,25 @@ export const validators = {
         }
 
         const source = [...v.entries()];
+        const prevFrom = ctx.from;
+        const runKey = ( key: any ) =>
+        {
+            if( revivedFromObject && prevFrom === 'json' )
+            {
+                ctx.from = 'string';
+
+                try
+                {
+                    return keyValidator( key, `${path}.key(${key})`, ctx );
+                }
+                finally
+                {
+                    ctx.from = prevFrom;
+                }
+            }
+
+            return keyValidator( key, `${path}.key(${key})`, ctx );
+        };
 
         if( shouldMutate( ctx ))
         {
@@ -2375,7 +2422,7 @@ export const validators = {
 
             for( const [key, val] of source )
             {
-                const validatedKey = keyValidator( key, `${path}.key(${key})`, ctx );
+                const validatedKey = runKey( key );
                 const validatedVal = valueValidator( val, `${path}[${key}]`, ctx );
                 v.set( validatedKey, validatedVal );
             }
@@ -2387,7 +2434,7 @@ export const validators = {
 
         for( const [key, val] of source )
         {
-            const validatedKey = keyValidator( key, `${path}.key(${key})`, ctx );
+            const validatedKey = runKey( key );
             const validatedVal = valueValidator( val, `${path}[${key}]`, ctx );
             data.set( validatedKey, validatedVal );
         }

@@ -333,6 +333,99 @@ export function coerceArray<T>( val: any, path: string, mapper: ( item: any, ite
     return arr.map(( item, idx ) => mapper( item, `${path}[${idx}]` ));
 }
 
+export function parseSet<T>(
+    val    : any,
+    path   : string,
+    from   : 'json' | 'query' | 'string',
+    mapper : ( item: any, itemPath: string ) => T
+): Set<T>
+{
+    let items: any[];
+
+    if( val instanceof Set )
+    {
+        items = [ ...val ];
+    }
+    else if( Array.isArray( val ))
+    {
+        items = val;
+    }
+    else if( from === 'query' || from === 'string' )
+    {
+        if( val === undefined || val === null ){ return new Set<T>() }
+
+        if( typeof val === 'object' && Object.keys( val ).length === 0 ){ return new Set<T>() }
+
+        items = [ val ];
+    }
+    else
+    {
+        throw new ParseError( path, 'Type<Set>' );
+    }
+
+    const out = new Set<T>();
+
+    for( let i = 0; i < items.length; i++ )
+    {
+        out.add( mapper( items[i], `${path}[${i}]` ));
+    }
+
+    return out;
+}
+
+export function parseMap<K, V>(
+    val       : any,
+    path      : string,
+    from      : 'json' | 'query' | 'string',
+    keyMapper : ( k: any, keyPath: string ) => K,
+    valMapper : ( v: any, valPath: string ) => V
+): Map<K, V>
+{
+    const out = new Map<K, V>();
+
+    if( val instanceof Map )
+    {
+        for( const [ k, v ] of val.entries())
+        {
+            const mappedK = keyMapper( k, `${path}.key(${String( k )})` );
+            const mappedV = valMapper( v, `${path}[${String( k )}]` );
+            out.set( mappedK, mappedV );
+        }
+
+        return out;
+    }
+
+    if(( from === 'query' || from === 'string' ) && ( val === undefined || val === null ))
+    {
+        return out;
+    }
+
+    const allowSparseArray = ( from === 'query' || from === 'string' ) && Array.isArray( val );
+
+    if(
+        val === null ||
+        typeof val !== 'object' ||
+        ( Array.isArray( val ) && !allowSparseArray ) ||
+        val instanceof Set ||
+        val instanceof Date ||
+        val instanceof RegExp
+    )
+    {
+        throw new ParseError( path, 'Type<Map>' );
+    }
+
+    for( const k of Object.keys( val ))
+    {
+        if( val[k] === undefined ){ continue }
+
+        const mappedK = keyMapper( k, `${path}.key(${k})` );
+        const mappedV = valMapper( val[k], `${path}[${k}]` );
+        out.set( mappedK, mappedV );
+    }
+
+    return out;
+}
+
 export function coerceBuffer( val: any, path: string ): Buffer
 {
     if( typeof Buffer !== 'undefined' && Buffer.isBuffer( val )){ return val }
@@ -496,30 +589,40 @@ export function applyParseConstraints(
         }
         else if( c.type === 'minItems' )
         {
-            if( Array.isArray( v ) && v.length < c.value )
+            const size = v instanceof Set ? v.size : ( Array.isArray( v ) ? v.length : undefined );
+
+            if( size !== undefined && size < c.value )
             {
                 throw new ParseError( path, msg || `MinItems<${c.value}>` );
             }
         }
         else if( c.type === 'maxItems' )
         {
-            if( Array.isArray( v ) && v.length > c.value )
+            const size = v instanceof Set ? v.size : ( Array.isArray( v ) ? v.length : undefined );
+
+            if( size !== undefined && size > c.value )
             {
                 throw new ParseError( path, msg || `MaxItems<${c.value}>` );
             }
         }
         else if( c.type === 'minProperties' )
         {
-            if( v !== null && typeof v === 'object' && !Array.isArray( v ) &&
-                Object.keys( v ).length < c.value )
+            const size = v instanceof Map
+                ? v.size
+                : ( v !== null && typeof v === 'object' && !Array.isArray( v ) && !( v instanceof Set ) ? Object.keys( v ).length : undefined );
+
+            if( size !== undefined && size < c.value )
             {
                 throw new ParseError( path, msg || `MinProperties<${c.value}>` );
             }
         }
         else if( c.type === 'maxProperties' )
         {
-            if( v !== null && typeof v === 'object' && !Array.isArray( v ) &&
-                Object.keys( v ).length > c.value )
+            const size = v instanceof Map
+                ? v.size
+                : ( v !== null && typeof v === 'object' && !Array.isArray( v ) && !( v instanceof Set ) ? Object.keys( v ).length : undefined );
+
+            if( size !== undefined && size > c.value )
             {
                 throw new ParseError( path, msg || `MaxProperties<${c.value}>` );
             }

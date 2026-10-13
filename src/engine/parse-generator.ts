@@ -3,6 +3,7 @@ import { ValidationMode, type CoercionKind } from '../runtime/validators.js';
 import { type ICustomFunctionScope } from './customFns.js';
 import
 {
+    assertValidMapKeyType,
     BUFFER_LIKE,
     constraintTagNames,
     enumMemberTypes,
@@ -643,6 +644,30 @@ function buildValidationCore(
         }
 
         return `( function( arr, p ){ __tcRuntime.expectArray( arr, p ); return arr.map( ( item, i ) => { const itemP = ( p ? p + "[" + i + "]" : "[" + i + "]" ); return ${elemCode}; } ); })( ${varName}, ${p} )`;
+    }
+
+    if( symbolName === 'Set' )
+    {
+        const elemType = ( checker as any ).getTypeArguments?.( type as ts.TypeReference )?.[0]
+            || ( type as ts.TypeReference ).typeArguments?.[0]
+            || ({ getFlags : () => ts.TypeFlags.Any } as any );
+        const elemCode = buildValidation( elemType, checker, mode, from, 'item', 'itemP', rootExpr, scope, visited );
+
+        return `__tcRuntime.parseSet( ${varName}, ${p}, ${JSON.stringify( from )}, ( item, itemP ) => ${elemCode} )`;
+    }
+
+    if( symbolName === 'Map' )
+    {
+        const typeArgs = ( checker as any ).getTypeArguments?.( type as ts.TypeReference )
+            || ( type as ts.TypeReference ).typeArguments
+            || [];
+        const keyType = typeArgs[0] || ({ getFlags : () => ts.TypeFlags.Any } as any );
+        const valueType = typeArgs[1] || ({ getFlags : () => ts.TypeFlags.Any } as any );
+        assertValidMapKeyType( keyType, checker );
+        const keyCode = buildValidation( keyType, checker, mode, 'string', 'k', 'keyP', rootExpr, scope, visited );
+        const valCode = buildValidation( valueType, checker, mode, from, 'val', 'valP', rootExpr, scope, visited );
+
+        return `__tcRuntime.parseMap( ${varName}, ${p}, ${JSON.stringify( from )}, ( k, keyP ) => ${keyCode}, ( val, valP ) => ${valCode} )`;
     }
 
     if( typeof type.isUnion === 'function' && type.isUnion())

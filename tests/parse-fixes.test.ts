@@ -197,5 +197,108 @@ describe( 'Parse Fixes & Regressions', () =>
         expect( resThree ).toEqual({ a : 'x', b : 2, c : true });
         expect( seenThree ).toContainEqual([ 'tri' ]);
     });
+
+    it( 'parses Set<T> and Map<K, V> in JSON and query modes with constraints, tags, and exact error paths', async() =>
+    {
+        const mod = await emitAndImport<{
+            parseSetStr       : ( json: string ) => Set<string>
+            parseSetCon       : ( json: string ) => Set<number>
+            parseSetQuery     : ( qs: string ) => { tags : Set<string> }
+            parseMapStrNum    : ( json: string ) => Map<string, number>
+            parseMapNumBool   : ( json: string ) => Map<number, boolean>
+            parseMapLit       : ( json: string ) => Map<'a' | 'b', string>
+            parseNested       : ( json: string ) => Map<string, Set<number>>
+            parseRootMapQuery : ( qs: string ) => Map<string, string>
+            parseTaggedSet    : ( json: string, tf?: any ) => Set<string>
+            parseTaggedMap    : ( json: string, tf?: any ) => Map<string, number>
+        }>( `
+            import { parse, constraint, tag } from '../src/index.js';
+            type ConstrainedSet = Set<number & constraint.Minimum<0>> & constraint.MinItems<1>;
+            export const parseSetStr = ( json: string ) => parse<Set<string>>( json );
+            export const parseSetCon = ( json: string ) => parse<ConstrainedSet>( json );
+            export const parseSetQuery = ( qs: string ) => parse<{ tags: Set<string> }>( qs, { from: 'query' } );
+            export const parseMapStrNum = ( json: string ) => parse<Map<string, number>>( json );
+            export const parseMapNumBool = ( json: string ) => parse<Map<number, boolean>>( json );
+            export const parseMapLit = ( json: string ) => parse<Map<'a' | 'b', string>>( json );
+            export const parseNested = ( json: string ) => parse<Map<string, Set<number>>>( json );
+            export const parseRootMapQuery = ( qs: string ) => parse<Map<string, string>>( qs, { from: 'query' } );
+            export const parseTaggedSet = ( json: string, tf?: any ) =>
+                parse<Set<string> & tag<'mySet'>>( json, { transform: tf } );
+            export const parseTaggedMap = ( json: string, tf?: any ) =>
+                parse<Map<string, number> & tag<'myMap'>>( json, { transform: tf } );
+        `, 'temp_parse_set_map' );
+
+        // Set<string> & empty Set
+        expect( mod.parseSetStr( '["a","b","a"]' )).toEqual( new Set([ 'a', 'b' ]));
+        expect( mod.parseSetStr( '[]' )).toEqual( new Set());
+        expect(() => mod.parseSetStr( '{}' )).toThrow( /Type<Set>/ );
+        expect(() => mod.parseSetStr( '["ok", 123]' )).toThrow( /"\[1\]".*Type<string>/ );
+
+        // Constrained Set<number & Minimum<0>> & MinItems<1>
+        expect( mod.parseSetCon( '[0, 5, 10]' )).toEqual( new Set([ 0, 5, 10 ]));
+        expect(() => mod.parseSetCon( '[]' )).toThrow( /MinItems<1>/ );
+        expect(() => mod.parseSetCon( '[1, -2]' )).toThrow( /"\[1\]".*Minimum<0>/ );
+
+        // Set in query mode
+        expect( mod.parseSetQuery( 'tags[]=x&tags[]=y' ).tags ).toEqual( new Set([ 'x', 'y' ]));
+        expect( mod.parseSetQuery( 'tags=single' ).tags ).toEqual( new Set([ 'single' ]));
+        expect( mod.parseSetQuery( '' ).tags ).toEqual( new Set());
+
+        // Map<string, number> & empty Map
+        expect( mod.parseMapStrNum( '{"a":1,"b":2}' )).toEqual( new Map([[ 'a', 1 ], [ 'b', 2 ]]));
+        expect( mod.parseMapStrNum( '{}' )).toEqual( new Map());
+        expect(() => mod.parseMapStrNum( '[1, 2]' )).toThrow( /Type<Map>/ );
+        expect(() => mod.parseMapStrNum( '123' )).toThrow( /Type<Map>/ );
+        expect(() => mod.parseMapStrNum( '{"a":"bad"}' )).toThrow( /"\[a\]".*Type<number>/ );
+
+        // Map<number, boolean>
+        expect( mod.parseMapNumBool( '{"1":true,"2":false}' )).toEqual( new Map([[ 1, true ], [ 2, false ]]));
+        expect(() => mod.parseMapNumBool( '{"notNum":true}' )).toThrow( /\.key\(notNum\).*Type<number>/ );
+
+        // Map<'a' | 'b', string>
+        expect( mod.parseMapLit( '{"a":"alpha","b":"beta"}' )).toEqual( new Map([[ 'a', 'alpha' ], [ 'b', 'beta' ]]));
+        expect(() => mod.parseMapLit( '{"c":"gamma"}' )).toThrow( /\.key\(c\)/ );
+
+        // Nested Map<string, Set<number>>
+        const nested = mod.parseNested( '{"group1":[1,2],"group2":[]}' );
+        expect( nested.get( 'group1' )).toEqual( new Set([ 1, 2 ]));
+        expect( nested.get( 'group2' )).toEqual( new Set());
+
+        // Root Map<string, string> in query mode
+        expect( mod.parseRootMapQuery( 'k1=v1&k2=v2' )).toEqual( new Map([[ 'k1', 'v1' ], [ 'k2', 'v2' ]]));
+        expect( mod.parseRootMapQuery( '' )).toEqual( new Map());
+
+        // Tagged Set / Map hooks
+        const seenKinds: Array<{ type : string, tags : string[] }> = [];
+        const tsRes = mod.parseTaggedSet( '["x"]', ( val: any, ctx: any ) =>
+        {
+            if( ctx.tags.length > 0 ){ seenKinds.push({ type : ctx.type, tags : ctx.tags }) }
+
+            return val;
+        });
+        expect( tsRes ).toEqual( new Set([ 'x' ]));
+
+        const tmRes = mod.parseTaggedMap( '{"k":1}', ( val: any, ctx: any ) =>
+        {
+            if( ctx.tags.length > 0 ){ seenKinds.push({ type : ctx.type, tags : ctx.tags }) }
+
+            return val;
+        });
+        expect( tmRes ).toEqual( new Map([[ 'k', 1 ]]));
+        expect( seenKinds ).toEqual([
+            { type : 'Set', tags : [ 'mySet' ] },
+            { type : 'Map', tags : [ 'myMap' ] }
+        ]);
+    });
+
+    it( 'throws a compile-time error when Map has a non-primitive key type in parse', () =>
+    {
+        expect(() => compileAndTransform( `
+            import { parse } from '../src/index.js';
+            interface ObjKey { id: number }
+            export const run = ( json: string ) => parse<Map<ObjKey, string>>( json );
+        `, 'temp_parse_invalid_map_key' )).toThrow( /Map key type .* is not supported/ );
+    });
 });
+
 

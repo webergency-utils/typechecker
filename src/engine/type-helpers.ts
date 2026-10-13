@@ -760,3 +760,69 @@ export function resolveWalkType( type: ts.Type, checker: ts.TypeChecker ): { typ
 
     return { type, constraints : [] };
 }
+
+export function isValidMapKeyType( type: ts.Type, checker: ts.TypeChecker ): boolean
+{
+    let walk = type;
+
+    if( typeof walk.isIntersection === 'function' && walk.isIntersection())
+    {
+        const peeled = peelTaggedIntersection( walk, checker );
+
+        if( peeled ){ walk = peeled.base }
+    }
+
+    if( typeof walk.isUnion === 'function' && walk.isUnion())
+    {
+        return walk.types.length > 0 && walk.types.every( t => isValidMapKeyType( t, checker ));
+    }
+
+    const flags = typeof walk.getFlags === 'function' ? walk.getFlags() : 0;
+
+    if( flags & ( ts.TypeFlags.Any | ts.TypeFlags.Unknown )){ return true }
+
+    if(
+        flags & (
+            ts.TypeFlags.String |
+            ts.TypeFlags.Number |
+            ts.TypeFlags.Boolean |
+            ts.TypeFlags.BigInt |
+            ts.TypeFlags.StringLiteral |
+            ts.TypeFlags.NumberLiteral |
+            ts.TypeFlags.BooleanLiteral |
+            ts.TypeFlags.BigIntLiteral |
+            ts.TypeFlags.TemplateLiteral
+        )
+    )
+    {
+        return true;
+    }
+
+    if( typeof walk.isStringLiteral === 'function' && walk.isStringLiteral()){ return true }
+
+    if( typeof walk.isNumberLiteral === 'function' && walk.isNumberLiteral()){ return true }
+
+    if( isNativeEnumType( walk )){ return true }
+
+    return false;
+}
+
+export function assertValidMapKeyType( type: ts.Type, checker: ts.TypeChecker ): void
+{
+    if( isValidMapKeyType( type, checker )){ return }
+
+    let label = 'unknown';
+
+    try
+    {
+        label = checker.typeToString( type );
+    }
+    catch
+    { /* ignore */ }
+
+    throw new Error(
+        `[Webergency] Map key type '${label}' is not supported by ahead-of-time parse/serializer codegen; ` +
+        'Map keys must be string, number, boolean, bigint, template literal, enum, or a literal/union of these.'
+    );
+}
+
