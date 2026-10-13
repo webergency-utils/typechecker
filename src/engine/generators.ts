@@ -201,7 +201,10 @@ export function createConstrainedPrimitiveCheck( baseType: string, constraints: 
 
     if( defaultConstraint ) 
     {
-        defaultInit = `if (v === undefined) v = ${JSON.stringify( defaultConstraint.value )};\n        `;
+        const defaultLiteral = typeof defaultConstraint.value === 'bigint'
+            ? `${defaultConstraint.value}n`
+            : JSON.stringify( defaultConstraint.value );
+        defaultInit = `if (v === undefined) v = ${defaultLiteral};\n        `;
     }
 
     let transformInit = '';

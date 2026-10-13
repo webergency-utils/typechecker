@@ -140,11 +140,12 @@ describe( 'Parse Fixes & Regressions', () =>
         expect(() => mod.parseTenQ( 'n=11' )).toThrow( /Literal<10n>/ );
 
         expect( mod.parseNeg( '"-42"' )).toBe( -42n );
+        expect( mod.parseNeg( '-42' )).toBe( -42n );
         expect(() => mod.parseNeg( '"42"' )).toThrow( /Literal<-42n>/ );
 
         expect( mod.parseUnion( '"1"' )).toBe( 1n );
         expect( mod.parseUnion( '"2"' )).toBe( 2n );
-        expect(() => mod.parseUnion( '"3"' )).toThrow();
+        expect(() => mod.parseUnion( '"3"' )).toThrow( /Type<|Literal</ );
     });
 
     it( 'preserves all arms and invokes tag/constraint/transform hooks on multi-arm tagged object intersections', async() =>
@@ -392,16 +393,54 @@ describe( 'Parse Fixes & Regressions', () =>
         expect( mod.parseNumTpl( '"val_-1.5e2"' )).toBe( 'val_-1.5e2' );
         expect( mod.assertNumTpl( 'val_-1.5e2' )).toBe( 'val_-1.5e2' );
         expect( mod.parseNumTpl( '"val_42"' )).toBe( 'val_42' );
-        expect(() => mod.parseNumTpl( '"val_abc"' )).toThrow();
-        expect(() => mod.assertNumTpl( 'val_abc' )).toThrow();
+        expect(() => mod.parseNumTpl( '"val_abc"' )).toThrow( /val_\$\{number\}/ );
+        expect(() => mod.assertNumTpl( 'val_abc' )).toThrow( /val_\$\{number\}/ );
 
         expect( mod.parseSlotTpl( '"prefix_a_1"' )).toBe( 'prefix_a_1' );
         expect( mod.parseSlotTpl( '"prefix_b_2"' )).toBe( 'prefix_b_2' );
         expect( mod.assertSlotTpl( 'prefix_a_2' )).toBe( 'prefix_a_2' );
-        expect(() => mod.parseSlotTpl( '"prefix_c_1"' )).toThrow();
-        expect(() => mod.parseSlotTpl( '"prefix_a_3"' )).toThrow();
-        expect(() => mod.assertSlotTpl( 'prefix_c_1' )).toThrow();
-        expect(() => mod.assertSlotTpl( 'prefix_a_3' )).toThrow();
+        expect(() => mod.parseSlotTpl( '"prefix_c_1"' )).toThrow( /prefix_/ );
+        expect(() => mod.parseSlotTpl( '"prefix_a_3"' )).toThrow( /prefix_/ );
+        expect(() => mod.assertSlotTpl( 'prefix_c_1' )).toThrow( /prefix_/ );
+        expect(() => mod.assertSlotTpl( 'prefix_a_3' )).toThrow( /prefix_/ );
+    });
+
+    it( 'supports Default<bigint> (positive and negative) and custom non-__brand phantom intersections across assert, validate, and parse', async() =>
+    {
+        const mod = await emitAndImport<{
+            assertBigDef  : ( val: unknown ) => { pos : bigint, neg : bigint }
+            valBigDef     : ( val: unknown ) => any
+            parseBigDef   : ( json: string ) => { pos : bigint, neg : bigint }
+            assertCustom  : ( val: unknown ) => string
+            parseCustom   : ( json: string ) => string
+            parseSetBrand : ( json: string ) => Set<string>
+        }>( `
+            import { assert, validate, parse, constraint, tag } from '../src/index.js';
+            interface WithBigDefaults {
+                pos?: bigint & tag.Default<10n>;
+                neg?: bigint & tag.Default<-5n>;
+            }
+            type CustomBrandedStr = string & { readonly __customBrand?: unique symbol } & constraint.MinLength<3>;
+            type CustomBrandedSet = Set<string> & { readonly __customBrand?: unique symbol } & constraint.MinItems<1>;
+            export const assertBigDef = ( val: unknown ) => assert<WithBigDefaults>( val ) as { pos: bigint; neg: bigint };
+            export const valBigDef = ( val: unknown ) => validate<WithBigDefaults>( val );
+            export const parseBigDef = ( json: string ) => parse<WithBigDefaults>( json ) as { pos: bigint; neg: bigint };
+            export const assertCustom = ( val: unknown ) => assert<CustomBrandedStr>( val );
+            export const parseCustom = ( json: string ) => parse<CustomBrandedStr>( json );
+            export const parseSetBrand = ( json: string ) => parse<CustomBrandedSet>( json );
+        `, 'temp_parse_bigint_defaults_and_custom_brand' );
+
+        expect( mod.assertBigDef({})).toEqual({ pos : 10n, neg : -5n });
+        expect( mod.valBigDef({}).data ).toEqual({ pos : 10n, neg : -5n });
+        expect( mod.parseBigDef( '{}' )).toEqual({ pos : 10n, neg : -5n });
+
+        expect( mod.assertCustom( 'abc' )).toBe( 'abc' );
+        expect( mod.parseCustom( '"abc"' )).toBe( 'abc' );
+        expect(() => mod.assertCustom( 'ab' )).toThrow( /MinLength<3>/ );
+        expect(() => mod.parseCustom( '"ab"' )).toThrow( /MinLength<3>/ );
+
+        expect( mod.parseSetBrand( '["item"]' )).toEqual( new Set([ 'item' ]));
+        expect(() => mod.parseSetBrand( '[]' )).toThrow( /MinItems<1>/ );
     });
 });
 

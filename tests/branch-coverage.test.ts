@@ -641,6 +641,31 @@ describe( 'Branch coverage edges', () =>
             expect( validate( fn, { id : 1, x_ok : 'hi', extra : 2 }, { mode : 'strict' }).success ).toBe( false );
             expect( validate( fn, { id : 1, x_ok : 'hi', extra : 2 }, { mode : 'strip', mutate : true }).data ).toEqual({ id : 1, x_ok : 'hi' });
             expect( validate( fn, { id : 1, x_ok : 'hi', extra : 2 }, { mode : 'relaxed' }).data ).toEqual({ id : 1, x_ok : 'hi', extra : 2 });
+
+            // Set maxItems & Map minProperties/maxProperties & Map key error path in validators
+            const setCtx = { success : true, errors : [] as any[], mode : 'strict' as const };
+            validators.maxItems( new Set([ 1, 2, 3 ]), 's', setCtx, 2 );
+            expect( setCtx.success ).toBe( false );
+            expect( setCtx.errors[0].error ).toBe( 'MaxItems<2>' );
+
+            const mapMinCtx = { success : true, errors : [] as any[], mode : 'strict' as const };
+            validators.minProperties( new Map([[ 'a', 1 ]]), 'm', mapMinCtx, 2 );
+            expect( mapMinCtx.success ).toBe( false );
+            expect( mapMinCtx.errors[0].error ).toBe( 'MinProperties<2>' );
+
+            const mapMaxCtx = { success : true, errors : [] as any[], mode : 'strict' as const };
+            validators.maxProperties( new Map([[ 'a', 1 ], [ 'b', 2 ]]), 'm', mapMaxCtx, 1 );
+            expect( mapMaxCtx.success ).toBe( false );
+            expect( mapMaxCtx.errors[0].error ).toBe( 'MaxProperties<1>' );
+
+            const mapKeyErrCtx = { success : true, errors : [] as any[], mode : 'strict' as const };
+            validators.map( new Map<any, any>([[ 123, 'ok' ]]), 'myMap', mapKeyErrCtx, validators.string, validators.string );
+            expect( mapKeyErrCtx.success ).toBe( false );
+            expect( mapKeyErrCtx.errors[0].path ).toBe( 'myMap.key(123)' );
+
+            // Non-plain-objects (Date, Set, Array) are ignored by minProperties/maxProperties in applyParseConstraints
+            const d = new Date();
+            expect( applyParseConstraints( d, 'd', [{ type : 'minProperties', value : 1 }, { type : 'maxProperties', value : 0 }])).toBe( d );
         });
     });
 });

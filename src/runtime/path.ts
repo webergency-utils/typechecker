@@ -163,7 +163,7 @@ export function getValueAtPath( obj: any, path: string ): any
         }
         else
         {
-            current = current[part];
+            current = Object.hasOwn( current, part ) ? current[part] : undefined;
         }
     }
 

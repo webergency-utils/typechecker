@@ -224,5 +224,19 @@ describe( 'Static Diagnostics Idempotency', () =>
         expect( highlighted ).toBe( 'age' );
         expect( sourceFile.text.slice( diags[0].start! - 2, diags[0].start! + diags[0].length! + 2 )).toBe( '{ age, ' );
     });
+
+    it( 'unwraps Promise<T> on async expression-bodied arrow functions and handles non-integer numbers against MultipleOf<bigint> without throwing RangeError', () =>
+    {
+        const { diags } = diagnosticsFor( `
+            import { constraint } from './src/index.js';
+            const asyncArrowBad = async (): Promise<number & constraint.Minimum<10>> => 5;
+            const asyncArrowOk = async (): Promise<number & constraint.Minimum<10>> => 15;
+            const floatBigMult: number & constraint.MultipleOf<2n> = 1.5;
+        ` );
+
+        expect( diags ).toHaveLength( 2 );
+        expect( String( diags[0].messageText )).toContain( 'Value 5 does not satisfy Minimum<10>' );
+        expect( String( diags[1].messageText )).toContain( 'Value 1.5 does not satisfy MultipleOf<2>' );
+    });
 });
 

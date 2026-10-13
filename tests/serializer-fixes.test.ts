@@ -697,6 +697,55 @@ describe( 'Serializer Fixes & Regressions', () =>
             export const run = ( m: Map<ObjKey, string> ) => stringify<Map<ObjKey, string>>( m );
         `, 'temp_ser_invalid_map_key' )).toThrow( /Map key type .* is not supported/ );
     });
+
+    it( 'serializes deeply nested Map<string, Map<string, number>> and Set<Set<string>> in JSON and query modes without variable shadowing or TDZ errors', async() =>
+    {
+        const mod = await emitAndImport<{
+            serNestedMapJson  : ( v: any ) => string
+            serNestedMapQuery : ( v: any ) => string
+            serNestedSetJson  : ( v: any ) => string
+            serNestedSetQuery : ( v: any ) => string
+            serCustomBrand    : ( v: any ) => string
+        }>( `
+            import { stringify, constraint } from '../src/index.js';
+            type NestedMap = Map<string, Map<string, number>>;
+            type NestedSet = { groups: Set<Set<string>> };
+            type CustomBrandStr = string & { readonly __customBrand?: unique symbol } & constraint.MinLength<2>;
+            export const serNestedMapJson = ( v: NestedMap ) => stringify<NestedMap>( v );
+            export const serNestedMapQuery = ( v: NestedMap ) => stringify<NestedMap>( v, { format: 'query' } );
+            export const serNestedSetJson = ( v: NestedSet ) => stringify<NestedSet>( v );
+            export const serNestedSetQuery = ( v: NestedSet ) => stringify<NestedSet>( v, { format: 'query' } );
+            export const serCustomBrand = ( v: CustomBrandStr ) => stringify<CustomBrandStr>( v );
+        `, 'temp_ser_deeply_nested_map_set' );
+
+        const nestedMap = new Map<string, Map<string, number>>([
+            [ 'outer1', new Map([[ 'innerA', 1 ], [ 'innerB', 2 ]]) ],
+            [ 'outer2', new Map([[ 'innerC', 3 ]]) ]
+        ]);
+        expect( mod.serNestedMapJson( nestedMap )).toBe( '{"outer1":{"innerA":1,"innerB":2},"outer2":{"innerC":3}}' );
+        expect( mod.serNestedMapQuery( nestedMap )).toBe( 'outer1%5BinnerA%5D=1&outer1%5BinnerB%5D=2&outer2%5BinnerC%5D=3' );
+
+        // Error path preserves both outer key and inner key without shadowing
+        const badNestedMap = new Map<string, Map<string, any>>([
+            [ 'outer1', new Map([[ 'innerA', 1 ]]) ],
+            [ 'outer2', new Map([[ 'innerBad', 'not-a-number' ]]) ]
+        ]);
+        expect(() => mod.serNestedMapJson( badNestedMap )).toThrow( /"\[outer2\]\[innerBad\]".*Type<number>/ );
+
+        const nestedSet = {
+            groups : new Set([ new Set([ 'a', 'b' ]), new Set([ 'c' ]) ])
+        };
+        expect( mod.serNestedSetJson( nestedSet )).toBe( '{"groups":[["a","b"],["c"]]}' );
+        expect( mod.serNestedSetQuery( nestedSet )).toBe( 'groups%5B%5D%5B%5D=a&groups%5B%5D%5B%5D=b&groups%5B%5D%5B%5D=c' );
+
+        // Error path preserves outer Set index and inner Set index without shadowing
+        const badNestedSet = {
+            groups : new Set([ new Set([ 'a' ]), new Set([ 123 as any ]) ])
+        };
+        expect(() => mod.serNestedSetJson( badNestedSet )).toThrow( /"groups\[1\]\[0\]".*Type<string>/ );
+
+        expect( mod.serCustomBrand( 'hello' )).toBe( '"hello"' );
+    });
 });
 
 

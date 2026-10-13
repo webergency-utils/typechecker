@@ -1,5 +1,5 @@
-import { validators, isMultipleOfNumber, hasUniqueItems } from './validators.js';
-import { getCachedPattern } from './regex.js';
+import { validators, isMultipleOfNumber, hasUniqueItems, isPlainObject } from './validators.js';
+import { getCachedPattern, testRegex } from './regex.js';
 import { resolvePath, hasPath } from './path.js';
 import type { CoercionKind } from './validators.js';
 import
@@ -602,7 +602,7 @@ export function applyParseConstraints(
 
                 if( !regex ){ throw new ParseError( path, msg || 'UnsafePattern' ) }
 
-                if( !regex.test( v ))
+                if( !testRegex( regex, v ))
                 {
                     throw new ParseError( path, msg || `Pattern<'${c.value}'>` );
                 }
@@ -626,7 +626,7 @@ export function applyParseConstraints(
                 throw new ParseError( path, msg || `MaxItems<${c.value}>` );
             }
         }
-        else if( c.type === 'minProperties' && v !== null && typeof v === 'object' )
+        else if( c.type === 'minProperties' && ( v instanceof Map || isPlainObject( v )))
         {
             const size = v instanceof Map ? v.size : Object.keys( v ).length;
 
@@ -635,7 +635,7 @@ export function applyParseConstraints(
                 throw new ParseError( path, msg || `MinProperties<${c.value}>` );
             }
         }
-        else if( c.type === 'maxProperties' && v !== null && typeof v === 'object' )
+        else if( c.type === 'maxProperties' && ( v instanceof Map || isPlainObject( v )))
         {
             const size = v instanceof Map ? v.size : Object.keys( v ).length;
 

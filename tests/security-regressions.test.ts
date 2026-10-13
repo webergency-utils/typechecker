@@ -297,9 +297,23 @@ describe( 'Security and correctness regressions', () =>
         expect(( resRelaxed as any ).polluted ).toBeUndefined();
         expect(({} as any ).polluted ).toBeUndefined();
 
-        const resRecord = mod.parseRecord( '{"safe":1,"__proto__":{"polluted":true}}' );
+        const resRecord = mod.parseRecord( '{"safe":1,"__proto__":{"polluted":true},"constructor":"ctorVal","prototype":"protoVal"}' );
         expect( Object.getPrototypeOf( resRecord )).toBe( Object.prototype );
         expect( Object.hasOwn( resRecord, '__proto__' )).toBe( true );
+        expect( Object.hasOwn( resRecord, 'constructor' )).toBe( true );
+        expect( Object.hasOwn( resRecord, 'prototype' )).toBe( true );
+        expect( resRecord.constructor ).toBe( 'ctorVal' );
+        expect( resRecord.prototype ).toBe( 'protoVal' );
         expect(( resRecord as any ).polluted ).toBeUndefined();
+    });
+
+    it( 'does not satisfy Requires constraint via inherited Object.prototype properties like toString', () =>
+    {
+        const root = { child : { a : 1 } };
+        const ctx = context( root );
+        validators.requires( root.child, 'child', ctx, [ 'toString' ]);
+
+        expect( ctx.success ).toBe( false );
+        expect( ctx.errors[0].error ).toBe( 'Requires<toString>' );
     });
 });

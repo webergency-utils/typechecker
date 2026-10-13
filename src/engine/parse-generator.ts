@@ -648,7 +648,7 @@ function buildValidationCore(
         const reVar = `__re_${hoisted.length}`;
         hoisted.push( `const ${reVar} = __tcRuntime.getCachedPattern( ${JSON.stringify( regexStr )} );` );
 
-        return `( function( v, path ){ if( typeof v !== "string" || !${reVar}.test( v ) ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( expected )} ); } return v; })( ${varName}, ${p} )`;
+        return `( function( v, path ){ if( !${reVar} ){ throw new __tcRuntime.ParseError( path, "UnsafePattern" ); } if( typeof v !== "string" || !__tcRuntime.testRegex( ${reVar}, v ) ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( expected )} ); } return v; })( ${varName}, ${p} )`;
     }
 
     if( symbolName && BUFFER_LIKE.has( symbolName ))

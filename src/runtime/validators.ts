@@ -198,7 +198,7 @@ const report = ( ctx: ValidationContext, path: string, expected: string, value: 
  * keys from. Prototype identity is irrelevant — `process.env`, class instances, and null-proto
  * objects are all fine. Known exotics (Date, Map, arrays, …) have dedicated validators instead.
  */
-function isPlainObject( v: any ): boolean 
+export function isPlainObject( v: any ): boolean 
 {
     if( v === null || typeof v !== 'object' || Array.isArray( v )) { return false }
 

@@ -814,7 +814,12 @@ export function objectToAst( val: any ): ts.Expression
 
     if( typeof val === 'boolean' ) { return val ? ts.factory.createTrue() : ts.factory.createFalse() }
 
-    if( typeof val === 'bigint' ) { return ts.factory.createBigIntLiteral( val.toString() + 'n' ) }
+    if( typeof val === 'bigint' )
+    {
+        return val < 0n
+            ? ts.factory.createPrefixUnaryExpression( ts.SyntaxKind.MinusToken, ts.factory.createBigIntLiteral(( -val ).toString() + 'n' ))
+            : ts.factory.createBigIntLiteral( val.toString() + 'n' );
+    }
 
     if( Array.isArray( val )) 
     {

@@ -329,16 +329,37 @@ export function stringIndexType( type: ts.Type, checker: ts.TypeChecker ): ts.Ty
     return checker.getIndexInfoOfType( type, ts.IndexKind.String )?.type;
 }
 
+function isMergeableObjectType( t: ts.Type, checker: ts.TypeChecker ): boolean
+{
+    if( isConstraintOnlyType( t, checker ) || isBrandOnlyType( t, checker )){ return false }
+
+    const flags = typeof t.getFlags === 'function' ? t.getFlags() : 0;
+    const isObj = (( flags & ts.TypeFlags.Object ) !== 0 ) || ( typeof ( t as any ).isClassOrInterface === 'function' && ( t as any ).isClassOrInterface());
+
+    if( !isObj ){ return false }
+
+    if( typeof checker.isArrayType === 'function' && checker.isArrayType( t )){ return false }
+
+    if( typeof checker.isTupleType === 'function' && checker.isTupleType( t )){ return false }
+
+    if( typeof t.getCallSignatures === 'function' && t.getCallSignatures().length > 0 && ( typeof t.getConstructSignatures !== 'function' || t.getConstructSignatures().length === 0 ))
+    {
+        return false;
+    }
+
+    const symName = typeSymbolName( t );
+
+    if( symName === 'Date' || symName === 'Set' || symName === 'Map' || symName === 'RegExp' || symName === 'Promise' || ( symName !== undefined && BUFFER_LIKE.has( symName )))
+    {
+        return false;
+    }
+
+    return true;
+}
+
 export function tryMergeObjectTypes( types: readonly ts.Type[], checker: ts.TypeChecker ): MergedObjectInfo | undefined
 {
-    const objectTypes = types.filter( t =>
-    {
-        if( isConstraintOnlyType( t, checker ) || isBrandOnlyType( t, checker )){ return false }
-
-        const flags = t.getFlags();
-
-        return (( flags & ts.TypeFlags.Object ) !== 0 ) || ( typeof ( t as any ).isClassOrInterface === 'function' && ( t as any ).isClassOrInterface());
-    });
+    const objectTypes = types.filter( t => isMergeableObjectType( t, checker ));
 
     if( objectTypes.length < 2 ){ return undefined }
 
@@ -667,6 +688,20 @@ function synthesizeIntersection( original: ts.Type, types: ts.Type[]): ts.Type
         });
 }
 
+function resolveBaseCandidates( original: ts.Type, candidates: ts.Type[], checker: ts.TypeChecker ): ts.Type
+{
+    if( candidates.length === 1 ){ return candidates[0] }
+
+    if( tryMergeObjectTypes( candidates, checker ))
+    {
+        return synthesizeIntersection( original, candidates );
+    }
+
+    const nonObject = candidates.find( c => !isMergeableObjectType( c, checker ));
+
+    return nonObject ?? candidates[0];
+}
+
 /**
  * Peel tag / brand phantoms from an intersection. Returns base runtime type + constraints.
  * Brand-only arms are dropped. Constraint-only arms contribute tags only.
@@ -706,12 +741,7 @@ export function peelTaggedIntersection(
 
         if( withoutBrand.length === arms.length || withoutBrand.length === 0 ){ return undefined }
 
-        if( withoutBrand.length === 1 )
-        {
-            return { base : withoutBrand[0], constraints : [], hasTags : false };
-        }
-
-        return { base : synthesizeIntersection( type, withoutBrand ), constraints : [], hasTags : false };
+        return { base : resolveBaseCandidates( type, withoutBrand, checker ), constraints : [], hasTags : false };
     }
 
     if( constraints.length === 0 && baseCandidates.length === 0 ){ return undefined }
@@ -723,13 +753,9 @@ export function peelTaggedIntersection(
         // tags only — fall through toward any
         base = { getFlags : () => ts.TypeFlags.Any } as any;
     }
-    else if( baseCandidates.length === 1 )
-    {
-        base = baseCandidates[0];
-    }
     else
     {
-        base = synthesizeIntersection( type, baseCandidates );
+        base = resolveBaseCandidates( type, baseCandidates, checker );
     }
 
     return { base, constraints : mergeTagConstraints( constraints ), hasTags : constraints.length > 0 };

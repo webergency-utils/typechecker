@@ -244,9 +244,23 @@ export function evaluateStaticConstraints(
         {
             const v = constant.value;
             const n = c.value;
-            const ok = ( typeof v === 'bigint' || typeof n === 'bigint' )
-                ? BigInt( n ) !== 0n && BigInt( v ) % BigInt( n ) === 0n
-                : isMultipleOfNumber( v, n );
+            let ok: boolean;
+
+            if( typeof v === 'bigint' || typeof n === 'bigint' )
+            {
+                if(( typeof v === 'number' && !Number.isInteger( v )) || ( typeof n === 'number' && !Number.isInteger( n )))
+                {
+                    ok = false;
+                }
+                else
+                {
+                    ok = BigInt( n ) !== 0n && BigInt( v ) % BigInt( n ) === 0n;
+                }
+            }
+            else
+            {
+                ok = isMultipleOfNumber( v, n );
+            }
 
             if( !ok )
             {
