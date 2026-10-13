@@ -93,14 +93,40 @@ export function joinPathSegments( segments: string[]): string
 
 export function resolvePath( currentPath: string, targetPath: string ): string
 {
+    if( targetPath.startsWith( '/' ))
+    {
+        return targetPath.substring( 1 );
+    }
+
     if( !targetPath.startsWith( '.' ))
     {
         return targetPath;
     }
 
-    const dotsMatch = targetPath.match( /^\.+/ )!;
-    const dots = dotsMatch[0].length;
-    const targetClean = targetPath.substring( dots );
+    let dots = 0;
+    let targetClean = targetPath;
+
+    if( targetPath.startsWith( '../' ) || targetPath.startsWith( './' ))
+    {
+        while( targetClean.startsWith( '../' ) || targetClean.startsWith( './' ))
+        {
+            if( targetClean.startsWith( '../' ))
+            {
+                dots += 1;
+                targetClean = targetClean.substring( 3 );
+            }
+            else
+            {
+                targetClean = targetClean.substring( 2 );
+            }
+        }
+    }
+    else
+    {
+        const dotsMatch = targetPath.match( /^\.+/ )!;
+        dots = dotsMatch[0].length;
+        targetClean = targetPath.substring( dots );
+    }
 
     const currentParts = tokenizePath( currentPath );
     const baseParts = currentParts.slice( 0, Math.max( 0, currentParts.length - dots ));

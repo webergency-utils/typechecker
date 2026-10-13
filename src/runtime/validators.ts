@@ -427,7 +427,7 @@ function commitContainer( target: any, source: any ): boolean
     return false;
 }
 
-function isMultipleOfNumber( v: number, n: number ): boolean 
+export function isMultipleOfNumber( v: number, n: number ): boolean 
 {
     if( n === 0 || !Number.isFinite( n )) { return false }
 
@@ -1078,6 +1078,167 @@ function uniqueContentHash( value: any, seen?: WeakSet<object> ): number | undef
     }
 
     return h >>> 0;
+}
+
+export function hasUniqueItems( v: any[] ): boolean
+{
+    let seenStrings: Set<string> | undefined;
+    let seenNumbers: Set<number> | undefined;
+    let seenBigints: Set<bigint> | undefined;
+    let seenDates: Set<number> | undefined;
+    let seenRegex: Set<string> | undefined;
+    let seenNull = false;
+    let seenUndefined = false;
+    let seenTrue = false;
+    let seenFalse = false;
+    let seenNegZero = false;
+    const firstByHash = new Map<number, any>();
+    const collisionBuckets = new Map<number, any[]>();
+    const complex: any[] = [];
+
+    for( let i = 0; i < v.length; i++ )
+    {
+        const item = v[i];
+
+        if( item === null )
+        {
+            if( seenNull ){ return false }
+
+            seenNull = true;
+            continue;
+        }
+
+        if( item === undefined )
+        {
+            if( seenUndefined ){ return false }
+
+            seenUndefined = true;
+            continue;
+        }
+
+        const type = typeof item;
+
+        if( type === 'string' )
+        {
+            seenStrings ??= new Set();
+
+            if( seenStrings.has( item )){ return false }
+
+            seenStrings.add( item );
+            continue;
+        }
+
+        if( type === 'number' )
+        {
+            if( Object.is( item, -0 ))
+            {
+                if( seenNegZero ){ return false }
+
+                seenNegZero = true;
+                continue;
+            }
+
+            seenNumbers ??= new Set();
+
+            if( seenNumbers.has( item )){ return false }
+
+            seenNumbers.add( item );
+            continue;
+        }
+
+        if( type === 'boolean' )
+        {
+            if( item )
+            {
+                if( seenTrue ){ return false }
+
+                seenTrue = true;
+            }
+            else
+            {
+                if( seenFalse ){ return false }
+
+                seenFalse = true;
+            }
+
+            continue;
+        }
+
+        if( type === 'bigint' )
+        {
+            seenBigints ??= new Set();
+
+            if( seenBigints.has( item )){ return false }
+
+            seenBigints.add( item );
+            continue;
+        }
+
+        if( type === 'object' )
+        {
+            if( item instanceof Date )
+            {
+                const time = item.getTime();
+                seenDates ??= new Set();
+
+                if( seenDates.has( time )){ return false }
+
+                seenDates.add( time );
+                continue;
+            }
+
+            if( item instanceof RegExp )
+            {
+                const key = `${item.source}/${item.flags}`;
+                seenRegex ??= new Set();
+
+                if( seenRegex.has( key )){ return false }
+
+                seenRegex.add( key );
+                continue;
+            }
+
+            const hash = uniqueContentHash( item );
+
+            if( hash !== undefined )
+            {
+                const first = firstByHash.get( hash );
+
+                if( first === undefined )
+                {
+                    firstByHash.set( hash, item );
+                    continue;
+                }
+
+                const bucket = collisionBuckets.get( hash );
+
+                if( !bucket )
+                {
+                    if( deepEqual( item, first )){ return false }
+
+                    collisionBuckets.set( hash, [first, item]);
+                    continue;
+                }
+
+                for( let j = 0; j < bucket.length; j++ )
+                {
+                    if( deepEqual( item, bucket[j])){ return false }
+                }
+
+                bucket.push( item );
+                continue;
+            }
+        }
+
+        for( let j = 0; j < complex.length; j++ )
+        {
+            if( deepEqual( item, complex[j])){ return false }
+        }
+
+        complex.push( item );
+    }
+
+    return true;
 }
 
 export const validators = {
@@ -1795,228 +1956,9 @@ export const validators = {
 
     uniqueItems : ( v: any[], path: string, ctx: ValidationContext, message?: string ) => 
     {
-        // Typed scalar sets avoid per-item string encoding (SameValueZero for numbers,
-        // with an explicit -0 flag because Set collapses -0 with 0).
-        let seenStrings: Set<string> | undefined;
-        let seenNumbers: Set<number> | undefined;
-        let seenBigints: Set<bigint> | undefined;
-        let seenDates: Set<number> | undefined;
-        let seenRegex: Set<string> | undefined;
-        let seenNull = false;
-        let seenUndefined = false;
-        let seenTrue = false;
-        let seenFalse = false;
-        let seenNegZero = false;
-        // First item per hash; collision buckets allocated only when a hash repeats.
-        const firstByHash = new Map<number, any>();
-        const collisionBuckets = new Map<number, any[]>();
-        const complex: any[] = [];
-
-        for( let i = 0; i < v.length; i++ )
+        if( !hasUniqueItems( v ))
         {
-            const item = v[i];
-
-            if( item === null )
-            {
-                if( seenNull )
-                {
-                    report( ctx, path, 'UniqueItems', v, message );
-
-                    return v;
-                }
-
-                seenNull = true;
-                continue;
-            }
-
-            if( item === undefined )
-            {
-                if( seenUndefined )
-                {
-                    report( ctx, path, 'UniqueItems', v, message );
-
-                    return v;
-                }
-
-                seenUndefined = true;
-                continue;
-            }
-
-            const type = typeof item;
-
-            if( type === 'string' )
-            {
-                seenStrings ??= new Set();
-
-                if( seenStrings.has( item ))
-                {
-                    report( ctx, path, 'UniqueItems', v, message );
-
-                    return v;
-                }
-
-                seenStrings.add( item );
-                continue;
-            }
-
-            if( type === 'number' )
-            {
-                if( Object.is( item, -0 ))
-                {
-                    if( seenNegZero )
-                    {
-                        report( ctx, path, 'UniqueItems', v, message );
-
-                        return v;
-                    }
-
-                    seenNegZero = true;
-                    continue;
-                }
-
-                seenNumbers ??= new Set();
-
-                if( seenNumbers.has( item ))
-                {
-                    report( ctx, path, 'UniqueItems', v, message );
-
-                    return v;
-                }
-
-                seenNumbers.add( item );
-                continue;
-            }
-
-            if( type === 'boolean' )
-            {
-                if( item )
-                {
-                    if( seenTrue )
-                    {
-                        report( ctx, path, 'UniqueItems', v, message );
-
-                        return v;
-                    }
-
-                    seenTrue = true;
-                }
-                else
-                {
-                    if( seenFalse )
-                    {
-                        report( ctx, path, 'UniqueItems', v, message );
-
-                        return v;
-                    }
-
-                    seenFalse = true;
-                }
-
-                continue;
-            }
-
-            if( type === 'bigint' )
-            {
-                seenBigints ??= new Set();
-
-                if( seenBigints.has( item ))
-                {
-                    report( ctx, path, 'UniqueItems', v, message );
-
-                    return v;
-                }
-
-                seenBigints.add( item );
-                continue;
-            }
-
-            if( type === 'object' )
-            {
-                if( item instanceof Date )
-                {
-                    const time = item.getTime();
-                    seenDates ??= new Set();
-
-                    if( seenDates.has( time ))
-                    {
-                        report( ctx, path, 'UniqueItems', v, message );
-
-                        return v;
-                    }
-
-                    seenDates.add( time );
-                    continue;
-                }
-
-                if( item instanceof RegExp )
-                {
-                    const key = `${item.source}/${item.flags}`;
-                    seenRegex ??= new Set();
-
-                    if( seenRegex.has( key ))
-                    {
-                        report( ctx, path, 'UniqueItems', v, message );
-
-                        return v;
-                    }
-
-                    seenRegex.add( key );
-                    continue;
-                }
-
-                const hash = uniqueContentHash( item );
-
-                if( hash !== undefined )
-                {
-                    const first = firstByHash.get( hash );
-
-                    if( first === undefined )
-                    {
-                        firstByHash.set( hash, item );
-                        continue;
-                    }
-
-                    const bucket = collisionBuckets.get( hash );
-
-                    if( !bucket )
-                    {
-                        if( deepEqual( item, first ))
-                        {
-                            report( ctx, path, 'UniqueItems', v, message );
-
-                            return v;
-                        }
-
-                        collisionBuckets.set( hash, [first, item]);
-                        continue;
-                    }
-
-                    for( let j = 0; j < bucket.length; j++ )
-                    {
-                        if( deepEqual( item, bucket[j]))
-                        {
-                            report( ctx, path, 'UniqueItems', v, message );
-
-                            return v;
-                        }
-                    }
-
-                    bucket.push( item );
-                    continue;
-                }
-            }
-
-            for( let j = 0; j < complex.length; j++ )
-            {
-                if( deepEqual( item, complex[j]))
-                {
-                    report( ctx, path, 'UniqueItems', v, message );
-
-                    return v;
-                }
-            }
-
-            complex.push( item );
+            report( ctx, path, 'UniqueItems', v, message );
         }
 
         return v;

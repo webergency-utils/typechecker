@@ -277,4 +277,29 @@ describe( 'Security and correctness regressions', () =>
         expect( result ).toBe( input );
         expect( input ).toEqual({ n : 5, ok : false });
     });
+
+    it( 'preserves __proto__ as an own property without mutating prototype in parse relaxed mode and index signatures', async() =>
+    {
+        const { emitAndImport } = await import( './helpers/compile.js' );
+        const mod = await emitAndImport<{
+            parseRelaxed : ( json: string ) => any
+            parseRecord  : ( json: string ) => any
+        }>( `
+            import { parse } from '../src/index.js';
+            interface Basic { name: string }
+            export const parseRelaxed = ( json: string ) => parse<Basic>( json, { mode: 'relaxed' } );
+            export const parseRecord = ( json: string ) => parse<Record<string, any>>( json );
+        `, 'temp_parse_proto_safety' );
+
+        const resRelaxed = mod.parseRelaxed( '{"name":"alice","__proto__":{"polluted":true}}' );
+        expect( Object.getPrototypeOf( resRelaxed )).toBe( Object.prototype );
+        expect( Object.hasOwn( resRelaxed, '__proto__' )).toBe( true );
+        expect(( resRelaxed as any ).polluted ).toBeUndefined();
+        expect(({} as any ).polluted ).toBeUndefined();
+
+        const resRecord = mod.parseRecord( '{"safe":1,"__proto__":{"polluted":true}}' );
+        expect( Object.getPrototypeOf( resRecord )).toBe( Object.prototype );
+        expect( Object.hasOwn( resRecord, '__proto__' )).toBe( true );
+        expect(( resRecord as any ).polluted ).toBeUndefined();
+    });
 });

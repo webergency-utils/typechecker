@@ -31,6 +31,7 @@ import {
 } from './customFns.js';
 import {
     BUFFER_LIKE,
+    buildTemplateLiteralRegex,
     collectConstraintsFromProps,
     enumMemberTypes,
     getPropertyType,
@@ -61,7 +62,7 @@ function applyConstraintsToJsonSchema(
 {
     for( const c of constraints )
     {
-        if( c.type === 'default' ){ target.default = c.value }
+        if( c.type === 'default' ){ target.default = typeof c.value === 'bigint' ? Number( c.value ) : c.value }
         else if( c.type === 'requires' ){ target.requires = c.value }
         else if(
             c.type === 'minLength' || c.type === 'maxLength' ||
@@ -73,7 +74,10 @@ function applyConstraintsToJsonSchema(
             c.type === 'minContains' || c.type === 'maxContains'
         )
         {
-            if( c.value !== undefined ){ target[c.type] = c.value }
+            if( c.value !== undefined )
+            {
+                target[c.type] = typeof c.value === 'bigint' ? Number( c.value ) : c.value;
+            }
         }
         else if( c.type === 'uniqueItems' ){ target.uniqueItems = true }
         else if( c.type === 'contains' && c.nestedType && checker && defs && visited && counts && circularHashes )
@@ -495,26 +499,7 @@ function buildValidatorScoped(
     }
     else if( flags & ts.TypeFlags.TemplateLiteral ) 
     {
-        const templateType = type as ts.TemplateLiteralType;
-        let regexStr = '^';
-
-        for( let i = 0; i < templateType.texts.length; i++ ) 
-        {
-            regexStr += templateType.texts[i].replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
-
-            if( i < templateType.types.length ) 
-            {
-                const subType = templateType.types[i];
-                const subFlags = subType.getFlags();
-
-                if( subFlags & ts.TypeFlags.String ) { regexStr += '.*' }
-                else if( subFlags & ts.TypeFlags.Number ) { regexStr += '[0-9]+(\\.[0-9]+)?' }
-                else if( subFlags & ts.TypeFlags.BigInt ) { regexStr += '[0-9]+' }
-                else if( subFlags & ts.TypeFlags.Boolean ) { regexStr += '(true|false)' }
-                else { regexStr += '.*' }
-            }
-        }
-        regexStr += '$';
+        const regexStr = buildTemplateLiteralRegex( type as ts.TemplateLiteralType );
         result = wrapOptionTransform( createTemplateLiteralCheck( regexStr, checker.typeToString( type )), 'string' );
     }
     else if( type.isStringLiteral()) 

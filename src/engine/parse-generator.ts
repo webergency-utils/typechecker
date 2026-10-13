@@ -5,6 +5,7 @@ import
 {
     assertValidMapKeyType,
     BUFFER_LIKE,
+    buildTemplateLiteralRegex,
     constraintTagNames,
     enumMemberTypes,
     getTypeProps,
@@ -245,6 +246,29 @@ export function generateParseCode(
     return `( function( input, options ){ const path = ""; const reviver = options && options.reviver; const transform = options && options.transform; const text = __tcRuntime.expectString( input, path ); let obj; try { obj = JSON.parse( text ); } catch( e ){ throw new __tcRuntime.ParseError( path, "Invalid JSON: " + e.message ); } if( reviver ){ obj = __tcRuntime.reviveTree( obj, reviver ); } return ${body}; })`;
 }
 
+function serializeConstraintValue( v: any ): string
+{
+    if( typeof v === 'bigint' ){ return `${v}n` }
+
+    return JSON.stringify( v );
+}
+
+function serializeConstraints( list: ParsedConstraint[] ): string
+{
+    const items = list.map( c =>
+    {
+        const parts = [ `type: ${JSON.stringify( c.type )}` ];
+
+        if( c.value !== undefined ){ parts.push( `value: ${serializeConstraintValue( c.value )}` ) }
+
+        if( c.message !== undefined ){ parts.push( `message: ${JSON.stringify( c.message )}` ) }
+
+        return `{ ${parts.join( ', ' )} }`;
+    });
+
+    return `[${items.join( ', ' )}]`;
+}
+
 function wrapConstraints(
     innerFactory : ( varName: string, pathExpr: string ) => string,
     constraints  : ParsedConstraint[],
@@ -344,7 +368,7 @@ function wrapConstraints(
         ? `__v = __tcRuntime.applyParseTransform( __v, p, transform, ${JSON.stringify( kind )}, ${JSON.stringify( tags )}, root ); `
         : '';
 
-    return `( function( raw, p, root ){ let __v = __tcRuntime.applyParseConstraints( raw, p, ${JSON.stringify( early )}, ${JSON.stringify( from )} ); ${customTransformCode}__v = ${inner}; ${optionCode}__v = __tcRuntime.applyParseConstraints( __v, p, ${JSON.stringify( late )}, ${JSON.stringify( from )} ); ${nestedConstraintCode}${customConstraintCode}return __v; })( ${varName}, ${pathExpr || '""'}, ${rootExpr} )`;
+    return `( function( raw, p, root ){ let __v = __tcRuntime.applyParseConstraints( raw, p, ${serializeConstraints( early )}, ${JSON.stringify( from )}, root ); ${customTransformCode}__v = ${inner}; ${optionCode}__v = __tcRuntime.applyParseConstraints( __v, p, ${serializeConstraints( late )}, ${JSON.stringify( from )}, root ); ${nestedConstraintCode}${customConstraintCode}return __v; })( ${varName}, ${pathExpr || '""'}, ${rootExpr} )`;
 }
 
 function buildValidation(
@@ -593,26 +617,7 @@ function buildValidationCore(
 
     if( flags & ts.TypeFlags.TemplateLiteral )
     {
-        const templateType = type as ts.TemplateLiteralType;
-        let regexStr = '^';
-
-        for( let i = 0; i < templateType.texts.length; i++ )
-        {
-            regexStr += templateType.texts[i].replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
-
-            if( i < templateType.types.length )
-            {
-                const subType = templateType.types[i];
-                const subFlags = subType.getFlags();
-
-                if( subFlags & ts.TypeFlags.String ){ regexStr += '.*' }
-                else if( subFlags & ts.TypeFlags.Number ){ regexStr += '[0-9]+(\\.[0-9]+)?' }
-                else if( subFlags & ts.TypeFlags.BigInt ){ regexStr += '[0-9]+' }
-                else if( subFlags & ts.TypeFlags.Boolean ){ regexStr += '(true|false)' }
-                else { regexStr += '.*' }
-            }
-        }
-        regexStr += '$';
+        const regexStr = buildTemplateLiteralRegex( type as ts.TemplateLiteralType );
         const expected = checker.typeToString( type );
 
         return `( function( v, path ){ if( typeof v !== "string" || !( new RegExp( ${JSON.stringify( regexStr )} ) ).test( v ) ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( expected )} ); } return v; })( ${varName}, ${p} )`;
@@ -754,15 +759,15 @@ function buildObjectValidation(
         if( indexType )
         {
             const idxCode = buildValidation( indexType, checker, mode, from, 'o[k]', '( p ? p + "." + k : k )', rootExpr, scope, visited );
-            extraHandling = `for( const k in o ){ if( !__keys.has( k ) ){ res[k] = ${idxCode}; } }`;
+            extraHandling = `for( const k of Object.keys( o ) ){ if( !__keys.has( k ) ){ const __iv = ${idxCode}; if( k === "__proto__" || k === "constructor" || k === "prototype" ){ Object.defineProperty( res, k, { value: __iv, enumerable: true, configurable: true, writable: true } ); } else { res[k] = __iv; } } }`;
         }
         else if( mode === 'strict' )
         {
-            extraHandling = 'for( const k in o ){ if( !__keys.has( k ) ){ throw new __tcRuntime.ParseError( p, "PropertyNotAllowed<" + k + ">" ); } }';
+            extraHandling = 'for( const k of Object.keys( o ) ){ if( !__keys.has( k ) ){ throw new __tcRuntime.ParseError( p, "PropertyNotAllowed<" + k + ">" ); } }';
         }
         else
         {
-            extraHandling = 'for( const k in o ){ if( !__keys.has( k ) ){ res[k] = o[k]; } }';
+            extraHandling = 'for( const k of Object.keys( o ) ){ if( !__keys.has( k ) ){ if( k === "__proto__" || k === "constructor" || k === "prototype" ){ Object.defineProperty( res, k, { value: o[k], enumerable: true, configurable: true, writable: true } ); } else { res[k] = o[k]; } } }';
         }
     }
 

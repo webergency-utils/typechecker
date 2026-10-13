@@ -1,5 +1,6 @@
-import { validators } from './validators.js';
+import { validators, isMultipleOfNumber, hasUniqueItems } from './validators.js';
 import { getCachedPattern } from './regex.js';
+import { resolvePath, hasPath } from './path.js';
 import type { CoercionKind } from './validators.js';
 import
 {
@@ -480,7 +481,8 @@ export function applyParseConstraints(
     val         : any,
     path        : string,
     constraints : ParseConstraint[],
-    from?       : 'json' | 'query' | 'string'
+    from?       : 'json' | 'query' | 'string',
+    root?       : any
 ): any
 {
     let v = val;
@@ -540,35 +542,53 @@ export function applyParseConstraints(
         }
         else if( c.type === 'minimum' )
         {
-            if( typeof v === 'number' && v < c.value )
+            if(( typeof v === 'number' || typeof v === 'bigint' ) && v < c.value )
             {
                 throw new ParseError( path, msg || `Minimum<${c.value}>` );
             }
         }
         else if( c.type === 'maximum' )
         {
-            if( typeof v === 'number' && v > c.value )
+            if(( typeof v === 'number' || typeof v === 'bigint' ) && v > c.value )
             {
                 throw new ParseError( path, msg || `Maximum<${c.value}>` );
             }
         }
         else if( c.type === 'exclusiveMinimum' )
         {
-            if( typeof v === 'number' && v <= c.value )
+            if(( typeof v === 'number' || typeof v === 'bigint' ) && v <= c.value )
             {
                 throw new ParseError( path, msg || `ExclusiveMinimum<${c.value}>` );
             }
         }
         else if( c.type === 'exclusiveMaximum' )
         {
-            if( typeof v === 'number' && v >= c.value )
+            if(( typeof v === 'number' || typeof v === 'bigint' ) && v >= c.value )
             {
                 throw new ParseError( path, msg || `ExclusiveMaximum<${c.value}>` );
             }
         }
         else if( c.type === 'multipleOf' )
         {
-            if( typeof v === 'number' && c.value !== 0 && v % c.value !== 0 )
+            if( typeof v === 'bigint' || typeof c.value === 'bigint' )
+            {
+                try
+                {
+                    const divisor = BigInt( c.value );
+
+                    if( divisor === 0n || BigInt( v ) % divisor !== 0n )
+                    {
+                        throw new ParseError( path, msg || `MultipleOf<${c.value}>` );
+                    }
+                }
+                catch( e )
+                {
+                    if( e instanceof ParseError ){ throw e }
+
+                    throw new ParseError( path, msg || `MultipleOf<${c.value}>` );
+                }
+            }
+            else if( typeof v === 'number' && !isMultipleOfNumber( v, c.value ))
             {
                 throw new ParseError( path, msg || `MultipleOf<${c.value}>` );
             }
@@ -635,7 +655,7 @@ export function applyParseConstraints(
                 errors  : [] as { path : string, value : any, error : string }[],
                 mode    : 'strict' as const,
                 from,
-                root    : v
+                root    : root !== undefined ? root : v
             };
             v = validators.format( v, path, ctx as any, c.value, msg );
 
@@ -647,10 +667,13 @@ export function applyParseConstraints(
         else if( c.type === 'requires' )
         {
             const keys = Array.isArray( c.value ) ? c.value : [c.value];
+            const rootTarget = root !== undefined ? root : v;
 
             for( const key of keys )
             {
-                if( v == null || v[key] === undefined )
+                const resolved = resolvePath( path, key );
+
+                if( !hasPath( rootTarget, resolved ))
                 {
                     throw new ParseError( path, msg || `Requires<${key}>` );
                 }
@@ -658,21 +681,9 @@ export function applyParseConstraints(
         }
         else if( c.type === 'uniqueItems' )
         {
-            if( Array.isArray( v ))
+            if( Array.isArray( v ) && !hasUniqueItems( v ))
             {
-                const seen = new Set<string>();
-
-                for( const item of v )
-                {
-                    const key = JSON.stringify( item );
-
-                    if( seen.has( key ))
-                    {
-                        throw new ParseError( path, msg || 'UniqueItems' );
-                    }
-
-                    seen.add( key );
-                }
+                throw new ParseError( path, msg || 'UniqueItems' );
             }
         }
     }

@@ -299,6 +299,110 @@ describe( 'Parse Fixes & Regressions', () =>
             export const run = ( json: string ) => parse<Map<ObjKey, string>>( json );
         `, 'temp_parse_invalid_map_key' )).toThrow( /Map key type .* is not supported/ );
     });
+
+    it( 'matches assert on MultipleOf floats/zero, bigint constraints, relative/root Requires, and order-independent UniqueItems', async() =>
+    {
+        const mod = await emitAndImport<{
+            parseFloatMult : ( json: string ) => number
+            parseZeroMult  : ( json: string ) => number
+            parseBigCon    : ( json: string ) => bigint
+            parseRelReq    : ( json: string ) => any
+            assertRelReq   : ( val: unknown ) => any
+            parseRootReq   : ( json: string ) => any
+            assertRootReq  : ( val: unknown ) => any
+            parseUniqueObj : ( json: string ) => any[]
+        }>( `
+            import { parse, assert, constraint } from '../src/index.js';
+            type BigCon = bigint
+                & constraint.Minimum<10n>
+                & constraint.Maximum<100n>
+                & constraint.ExclusiveMinimum<5n>
+                & constraint.ExclusiveMaximum<105n>
+                & constraint.MultipleOf<5n>;
+            interface RelReqDoc {
+                sibling?: string;
+                nested: { val: number } & constraint.Requires<'.sibling'>;
+            }
+            interface RootReqDoc {
+                top?: { flag?: boolean };
+                deep: { item: { id: string } & constraint.Requires<'top.flag'> };
+            }
+            export const parseFloatMult = ( json: string ) => parse<number & constraint.MultipleOf<0.1>>( json );
+            export const parseZeroMult = ( json: string ) => parse<number & constraint.MultipleOf<0>>( json );
+            export const parseBigCon = ( json: string ) => parse<BigCon>( json );
+            export const parseRelReq = ( json: string ) => parse<RelReqDoc>( json );
+            export const assertRelReq = ( val: unknown ) => assert<RelReqDoc>( val );
+            export const parseRootReq = ( json: string ) => parse<RootReqDoc>( json );
+            export const assertRootReq = ( val: unknown ) => assert<RootReqDoc>( val );
+            export const parseUniqueObj = ( json: string ) => parse<Array<{ a: number; b: number }> & constraint.UniqueItems>( json );
+        `, 'temp_parse_constraints_parity' );
+
+        // Floating-point MultipleOf<0.1> on 0.3
+        expect( mod.parseFloatMult( '0.3' )).toBe( 0.3 );
+        expect(() => mod.parseFloatMult( '0.35' )).toThrow( /MultipleOf<0\.1>/ );
+
+        // MultipleOf<0> rejects
+        expect(() => mod.parseZeroMult( '5' )).toThrow( /MultipleOf<0>/ );
+
+        // BigInt constraints
+        expect( mod.parseBigCon( '"15"' )).toBe( 15n );
+        expect(() => mod.parseBigCon( '"5"' )).toThrow( /Minimum<10>/ );
+        expect(() => mod.parseBigCon( '"105"' )).toThrow( /Maximum<100>/ );
+        expect(() => mod.parseBigCon( '"12"' )).toThrow( /MultipleOf<5>/ );
+
+        // Relative and root Requires (matching assert)
+        expect( mod.parseRelReq( '{"sibling":"ok","nested":{"val":1}}' )).toEqual({ sibling : 'ok', nested : { val : 1 } });
+        expect( mod.assertRelReq({ sibling : 'ok', nested : { val : 1 } })).toEqual({ sibling : 'ok', nested : { val : 1 } });
+        expect(() => mod.parseRelReq( '{"nested":{"val":1}}' )).toThrow( /Requires<\.sibling>/ );
+        expect(() => mod.assertRelReq({ nested : { val : 1 } })).toThrow( /Requires<\.sibling>/ );
+
+        expect( mod.parseRootReq( '{"top":{"flag":true},"deep":{"item":{"id":"x"}}}' )).toEqual({
+            top  : { flag : true },
+            deep : { item : { id : 'x' } }
+        });
+        expect( mod.assertRootReq({ top : { flag : true }, deep : { item : { id : 'x' } } })).toEqual({
+            top  : { flag : true },
+            deep : { item : { id : 'x' } }
+        });
+        expect(() => mod.parseRootReq( '{"top":{},"deep":{"item":{"id":"x"}}}' )).toThrow( /Requires<top\.flag>/ );
+        expect(() => mod.assertRootReq({ top : {}, deep : { item : { id : 'x' } } })).toThrow( /Requires<top\.flag>/ );
+
+        // Order-independent UniqueItems on objects
+        expect( mod.parseUniqueObj( '[{"a":1,"b":2},{"a":1,"b":3}]' )).toHaveLength( 2 );
+        expect(() => mod.parseUniqueObj( '[{"a":1,"b":2},{"b":2,"a":1}]' )).toThrow( /UniqueItems/ );
+    });
+
+    it( 'validates template literals with negative/scientific numbers and finite literal union slots in parse and assert', async() =>
+    {
+        const mod = await emitAndImport<{
+            parseNumTpl   : ( json: string ) => string
+            assertNumTpl  : ( val: unknown ) => string
+            parseSlotTpl  : ( json: string ) => string
+            assertSlotTpl : ( val: unknown ) => string
+        }>( `
+            import { parse, assert } from '../src/index.js';
+            type NumTpl = \`val_\${number}\`;
+            type SlotTpl = \`prefix_\${'a' | 'b'}_\${1 | 2}\`;
+            export const parseNumTpl = ( json: string ) => parse<NumTpl>( json );
+            export const assertNumTpl = ( val: unknown ) => assert<NumTpl>( val );
+            export const parseSlotTpl = ( json: string ) => parse<SlotTpl>( json );
+            export const assertSlotTpl = ( val: unknown ) => assert<SlotTpl>( val );
+        `, 'temp_parse_template_literal_parity' );
+
+        expect( mod.parseNumTpl( '"val_-1.5e2"' )).toBe( 'val_-1.5e2' );
+        expect( mod.assertNumTpl( 'val_-1.5e2' )).toBe( 'val_-1.5e2' );
+        expect( mod.parseNumTpl( '"val_42"' )).toBe( 'val_42' );
+        expect(() => mod.parseNumTpl( '"val_abc"' )).toThrow();
+        expect(() => mod.assertNumTpl( 'val_abc' )).toThrow();
+
+        expect( mod.parseSlotTpl( '"prefix_a_1"' )).toBe( 'prefix_a_1' );
+        expect( mod.parseSlotTpl( '"prefix_b_2"' )).toBe( 'prefix_b_2' );
+        expect( mod.assertSlotTpl( 'prefix_a_2' )).toBe( 'prefix_a_2' );
+        expect(() => mod.parseSlotTpl( '"prefix_c_1"' )).toThrow();
+        expect(() => mod.parseSlotTpl( '"prefix_a_3"' )).toThrow();
+        expect(() => mod.assertSlotTpl( 'prefix_c_1' )).toThrow();
+        expect(() => mod.assertSlotTpl( 'prefix_a_3' )).toThrow();
+    });
 });
 
 

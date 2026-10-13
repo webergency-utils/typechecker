@@ -396,6 +396,11 @@ export function getTagPropertyValue( type: ts.Type ): any
     const actual = stripUndefinedFromType( type );
     let val = ( actual as any ).value;
 
+    if(( actual.getFlags() & ts.TypeFlags.BigIntLiteral ) && val && typeof val === 'object' && typeof val.base10Value === 'string' )
+    {
+        val = BigInt( `${val.negative ? '-' : ''}${val.base10Value}` );
+    }
+
     if( val === undefined && ( actual.getFlags() & ts.TypeFlags.BooleanLiteral ))
     {
         val = ( actual as any ).intrinsicName === 'true';
@@ -825,4 +830,71 @@ export function assertValidMapKeyType( type: ts.Type, checker: ts.TypeChecker ):
         'Map keys must be string, number, boolean, bigint, template literal, enum, or a literal/union of these.'
     );
 }
+
+function templateSlotRegex( subType: ts.Type ): string
+{
+    const subFlags = typeof subType.getFlags === 'function' ? subType.getFlags() : 0;
+
+    if( subFlags & ts.TypeFlags.String ){ return '.*' }
+
+    if( subFlags & ts.TypeFlags.Number ){ return '[+-]?(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?' }
+
+    if( subFlags & ts.TypeFlags.BigInt ){ return '[+-]?[0-9]+' }
+
+    if( subFlags & ts.TypeFlags.Boolean ){ return '(true|false)' }
+
+    if( typeof subType.isStringLiteral === 'function' && subType.isStringLiteral())
+    {
+        return String( subType.value ).replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
+    }
+
+    if( typeof subType.isNumberLiteral === 'function' && subType.isNumberLiteral())
+    {
+        return String( subType.value ).replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
+    }
+
+    if( subFlags & ts.TypeFlags.BooleanLiteral )
+    {
+        return ( subType as any ).intrinsicName === 'true' ? 'true' : 'false';
+    }
+
+    if( subFlags & ts.TypeFlags.BigIntLiteral )
+    {
+        const raw = ( subType as any ).value;
+        const lit = typeof raw === 'object' && raw ? `${raw.negative ? '-' : ''}${raw.base10Value}` : String( raw );
+
+        return lit.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
+    }
+
+    if( subFlags & ts.TypeFlags.Null ){ return 'null' }
+
+    if( subFlags & ts.TypeFlags.Undefined ){ return 'undefined' }
+
+    if( typeof subType.isUnion === 'function' && subType.isUnion())
+    {
+        return `(?:${subType.types.map( t => templateSlotRegex( t )).join( '|' )})`;
+    }
+
+    return '.*';
+}
+
+export function buildTemplateLiteralRegex( templateType: ts.TemplateLiteralType ): string
+{
+    let regexStr = '^';
+
+    for( let i = 0; i < templateType.texts.length; i++ )
+    {
+        regexStr += templateType.texts[i].replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
+
+        if( i < templateType.types.length )
+        {
+            regexStr += templateSlotRegex( templateType.types[i] );
+        }
+    }
+
+    regexStr += '$';
+
+    return regexStr;
+}
+
 
