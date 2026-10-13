@@ -74,9 +74,17 @@ function runtimeCall( runtimeNs: string, method: string, args: ts.Expression[]):
     );
 }
 
-function argOrUndefined( args: ts.NodeArray<ts.Expression>, index: number ): ts.Expression
+function visitArgOrUndefined(
+    args    : ts.NodeArray<ts.Expression>,
+    index   : number,
+    visitor : ts.Visitor
+): ts.Expression
 {
-    return args[index] || ts.factory.createIdentifier( 'undefined' );
+    const arg = args[index];
+
+    if( !arg ){ return ts.factory.createIdentifier( 'undefined' ) }
+
+    return ts.visitNode( arg, visitor ) as ts.Expression;
 }
 
 function getPropName( prop: ts.ObjectLiteralElementLike ): string | undefined
@@ -372,31 +380,19 @@ export default function transformer( program: ts.Program )
                                     );
                                 }
 
-                                const inputArg = node.arguments[0];
+                                const inputVisitorResult = visitArgOrUndefined( node.arguments, 0, visitor );
 
-                                if( inputArg )
-                                {
-                                    const inputVisitorResult = ts.visitNode( inputArg, visitor ) as ts.Expression;
-
-                                    return ts.factory.createCallExpression( serRef, undefined, [inputVisitorResult, visitedOpts]);
-                                }
+                                return ts.factory.createCallExpression( serRef, undefined, [ inputVisitorResult, visitedOpts ]);
                             }
 
                             if( fnName === 'parse' )
                             {
                                 const options = parseParseOptions( node.arguments[1], checker );
                                 const parseRef = buildParser( type, checker, parserCache, hash, options, customFns );
-                                const inputArg = node.arguments[0];
-                                const visitedOpts = node.arguments[1]
-                                    ? ts.visitNode( node.arguments[1], visitor ) as ts.Expression
-                                    : ts.factory.createIdentifier( 'undefined' );
+                                const inputVisitorResult = visitArgOrUndefined( node.arguments, 0, visitor );
+                                const visitedOpts = visitArgOrUndefined( node.arguments, 1, visitor );
 
-                                if( inputArg )
-                                {
-                                    const inputVisitorResult = ts.visitNode( inputArg, visitor ) as ts.Expression;
-
-                                    return ts.factory.createCallExpression( parseRef, undefined, [inputVisitorResult, visitedOpts]);
-                                }
+                                return ts.factory.createCallExpression( parseRef, undefined, [ inputVisitorResult, visitedOpts ]);
                             }
 
                             if( fnName === 'jsonSchema' )
@@ -417,11 +413,11 @@ export default function transformer( program: ts.Program )
                                     buildValidator( type, checker, validatorCache, hash, customFns );
                                 }
 
-                                const inputArg = argOrUndefined( node.arguments, 0 );
-                                const optionsArg = argOrUndefined( node.arguments, 1 );
+                                const inputArg = visitArgOrUndefined( node.arguments, 0, visitor );
+                                const optionsArg = visitArgOrUndefined( node.arguments, 1, visitor );
                                 const validatorRef = ts.factory.createIdentifier( `__val_${hash}` );
 
-                                return runtimeCall( emitNames.runtimeNs, fnName, [validatorRef, inputArg, optionsArg]);
+                                return runtimeCall( emitNames.runtimeNs, fnName, [ validatorRef, inputArg, optionsArg ]);
                             }
                         }
                     }

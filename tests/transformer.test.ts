@@ -786,5 +786,52 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).not.toContain( 'registerValidator' );
         expect( compiled ).not.toContain( 'getValidator' );
     });
+
+    it( 'should recursively transform nested AOT macro calls inside validation arguments and options (U2)', () =>
+    {
+        const code = `
+            import { validate, assert, is, parse, stringify } from '../src/index.js';
+            interface Inner { id: number }
+            interface Outer { inner: Inner }
+            const r1 = validate<Outer>({ inner: assert<Inner>({ id: 1 }) });
+            const r2 = is<Outer>(parse<Outer>('{"inner":{"id":1}}'));
+            const r3 = validate<Outer>(
+                { inner: assert<Inner>(parse<Inner>('{"id":1}')) },
+                assert<{ mode: 'strict' }>({ mode: 'strict' })
+            );
+            const r4 = stringify<Outer>(assert<Outer>({ inner: { id: 1 } }));
+        `;
+        const compiled = compileAndTransform( code );
+
+        expect( compiled ).not.toContain( 'assert<Inner>' );
+        expect( compiled ).not.toContain( 'parse<Outer>' );
+        expect( compiled ).not.toContain( 'parse<Inner>' );
+        expect( compiled ).not.toContain( 'assert<Outer>' );
+        expect( compiled ).not.toContain( "assert<{ mode: 'strict' }>" );
+        expect( compiled ).toContain( '__tcRuntime.validate(' );
+        expect( compiled ).toContain( '__tcRuntime.assert(' );
+        expect( compiled ).toContain( '__tcRuntime.is(' );
+        expect( compiled ).toContain( '__parse_' );
+        expect( compiled ).toContain( '__ser_' );
+    });
+
+    it( 'should transform zero-argument parse<T>() and stringify<T>() calls with undefined input (U2)', () =>
+    {
+        const code = `
+            import { parse, stringify } from '../src/index.js';
+            interface User { id: number }
+            // @ts-expect-error testing 0-arg runtime call
+            const p = parse<User>();
+            // @ts-expect-error testing 0-arg runtime call
+            const s = stringify<User>();
+        `;
+        const compiled = compileAndTransform( code );
+
+        expect( compiled ).not.toContain( 'parse<User>()' );
+        expect( compiled ).not.toContain( 'stringify<User>()' );
+        expect( compiled ).toMatch( /__parse_[a-f0-9]+_strip_json\(undefined, undefined\)/ );
+        expect( compiled ).toMatch( /__ser_[a-f0-9]+_strip_json\(undefined, undefined\)/ );
+    });
 });
+
 
