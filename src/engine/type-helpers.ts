@@ -128,6 +128,39 @@ export function typeSymbolName( type: ts.Type ): string | undefined
     return typeof symbol?.name === 'string' ? symbol.name : undefined;
 }
 
+export function minifyTypeString( str: string ): string
+{
+    return str
+        .replace( /\{\s+/g, '{' )
+        .replace( /\s+\}/g, '}' )
+        .replace( /;\s*\}/g, '}' )
+        .replace( /;\s+/g, ',' )
+        .replace( /:\s+/g, ':' )
+        .replace( /\s+\|\s+/g, '|' );
+}
+
+export function unionExpectedLabel( type: ts.Type, checker: ts.TypeChecker ): string
+{
+    const aliasName = type.aliasSymbol && typeof type.aliasSymbol.getName === 'function'
+        ? type.aliasSymbol.getName()
+        : undefined;
+    const name = aliasName || typeSymbolName( type );
+
+    if( name && !name.startsWith( '__' ) && /^[A-Za-z_][A-Za-z0-9_]*$/.test( name ))
+    {
+        return `Type<${name}>`;
+    }
+
+    try
+    {
+        return `Type<${minifyTypeString( checker.typeToString( type ))}>`;
+    }
+    catch
+    {
+        return 'Type<Union>';
+    }
+}
+
 export function typeHasDefaultTag( type: ts.Type, checker: ts.TypeChecker ): boolean
 {
     if( typeof type.isUnionOrIntersection === 'function' && type.isUnionOrIntersection())

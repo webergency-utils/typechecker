@@ -1651,5 +1651,58 @@ describe( 'Validators', () =>
             expect( okCtx.success ).toBe( true );
         });
     });
+
+    describe( 'Path and Type-Label Helpers (U1)', () =>
+    {
+        it( 'should expose canonical path utilities from src/runtime/path.ts and re-exports', async () =>
+        {
+            const pathMod: any = await import( '../src/runtime/path.js' );
+            const valMod: any = await import( '../src/runtime/validators.js' );
+            const trMod: any = await import( '../src/runtime/transform.js' );
+
+            expect( typeof pathMod.tokenizePath ).toBe( 'function' );
+            expect( typeof pathMod.joinPathSegments ).toBe( 'function' );
+            expect( typeof pathMod.isIndexSegment ).toBe( 'function' );
+            expect( typeof pathMod.resolvePath ).toBe( 'function' );
+            expect( typeof pathMod.getValueAtPath ).toBe( 'function' );
+            expect( typeof pathMod.hasPath ).toBe( 'function' );
+
+            expect( valMod.resolvePath ).toBe( pathMod.resolvePath );
+            expect( valMod.getValueAtPath ).toBe( pathMod.getValueAtPath );
+            expect( valMod.hasPath ).toBe( pathMod.hasPath );
+            expect( trMod.valueAtPath ).toBe( pathMod.getValueAtPath );
+
+            expect( pathMod.tokenizePath( '' )).toEqual([]);
+            expect( pathMod.tokenizePath( '.a.b[0].c' )).toEqual([ 'a', 'b', '[0]', 'c' ]);
+            expect( pathMod.tokenizePath( 'a[unclosed' )).toEqual([ 'a', '[unclosed' ]);
+            expect( pathMod.joinPathSegments([ 'a', '[0]', 'b' ])).toBe( 'a[0].b' );
+            expect( pathMod.isIndexSegment( '[0]' )).toBe( true );
+            expect( pathMod.isIndexSegment( '0' )).toBe( false );
+
+            expect( pathMod.resolvePath( 'user.profile.email', '.name' )).toBe( 'user.profile.name' );
+            expect( pathMod.resolvePath( 'user.profile.email', '..id' )).toBe( 'user.id' );
+            expect( pathMod.resolvePath( 'user.profile.email', 'rootField' )).toBe( 'rootField' );
+
+            const sample = { user : { id : 7, items : [{ code : 'ok' }], undef : undefined } };
+            expect( pathMod.getValueAtPath( sample, '' )).toBe( sample );
+            expect( pathMod.getValueAtPath( sample, 'user.items[0].code' )).toBe( 'ok' );
+            expect( pathMod.getValueAtPath( sample, 'user.items[5].code' )).toBeUndefined();
+            expect( pathMod.getValueAtPath( null, 'user.id' )).toBeUndefined();
+            expect( pathMod.hasPath( sample, 'user.id' )).toBe( true );
+            expect( pathMod.hasPath( sample, 'user.undef' )).toBe( false );
+            expect( pathMod.hasPath( sample, 'user.missing' )).toBe( false );
+            expect( pathMod.hasPath( null, 'user.id' )).toBe( false );
+        });
+
+        it( 'should expose canonical minifyTypeString and unionExpectedLabel from src/engine/type-helpers.ts', async () =>
+        {
+            const thMod: any = await import( '../src/engine/type-helpers.js' );
+
+            expect( typeof thMod.minifyTypeString ).toBe( 'function' );
+            expect( typeof thMod.unionExpectedLabel ).toBe( 'function' );
+            expect( thMod.minifyTypeString( '{ a: string; b: number; } | null' )).toBe( '{a:string,b:number}|null' );
+        });
+    });
 });
+
 

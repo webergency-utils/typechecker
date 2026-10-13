@@ -37,6 +37,7 @@ import {
     getTypeProps,
     isConstraintOnlyType,
     isNativeEnumType,
+    minifyTypeString,
     peelTaggedIntersection,
     tryMergeObjectTypes,
     tryTaggedUnionTypes,
@@ -46,17 +47,6 @@ import {
     type ParsedConstraint
 } from './type-helpers.js';
 import { createHash } from 'crypto';
-
-function minifyTypeString( str: string ): string 
-{
-    return str
-        .replace( /\{\s+/g, '{' )
-        .replace( /\s+\}/g, '}' )
-        .replace( /;\s*\}/g, '}' )
-        .replace( /;\s+/g, ',' )
-        .replace( /:\s+/g, ':' )
-        .replace( /\s+\|\s+/g, '|' );
-}
 
 /** Map peeled tag constraints onto JSON Schema / x-extension fields. */
 function applyConstraintsToJsonSchema(

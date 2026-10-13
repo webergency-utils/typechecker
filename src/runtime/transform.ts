@@ -1,4 +1,13 @@
 import type { CoercionKind } from './validators.js';
+import
+{
+    isIndexSegment,
+    tokenizePath,
+    joinPathSegments,
+    getValueAtPath as valueAtPath
+}
+    from './path.js';
+export { valueAtPath };
 
 export type JsonReviver = ( this: any, key: string, value: any ) => any;
 export type JsonReplacer = ( this: any, key: string, value: any ) => any;
@@ -179,113 +188,3 @@ export function makeTransformContext(
     return { key, path, parent, root, index, tags, type : kind };
 }
 
-function isIndexSegment( seg: string ): boolean
-{
-    return seg.startsWith( '[' ) && seg.endsWith( ']' );
-}
-
-function tokenizePath( path: string ): string[]
-{
-    const cleanPath = path.startsWith( '.' ) ? path.substring( 1 ) : path;
-
-    if( !cleanPath ){ return [] }
-
-    const segments: string[] = [];
-    let buf = '';
-
-    for( let i = 0; i < cleanPath.length; i++ )
-    {
-        const ch = cleanPath[i];
-
-        if( ch === '.' )
-        {
-            if( buf )
-            {
-                segments.push( buf );
-                buf = '';
-            }
-        }
-        else if( ch === '[' )
-        {
-            if( buf )
-            {
-                segments.push( buf );
-                buf = '';
-            }
-
-            const end = cleanPath.indexOf( ']', i );
-
-            if( end === -1 )
-            {
-                buf += cleanPath.substring( i );
-                break;
-            }
-
-            segments.push( cleanPath.substring( i, end + 1 ));
-            i = end;
-        }
-        else
-        {
-            buf += ch;
-        }
-    }
-
-    if( buf ){ segments.push( buf ) }
-
-    return segments;
-}
-
-function joinPathSegments( segments: string[]): string
-{
-    let result = '';
-
-    for( const seg of segments )
-    {
-        if( seg.startsWith( '[' ))
-        {
-            result += seg;
-        }
-        else if( result )
-        {
-            result += '.' + seg;
-        }
-        else
-        {
-            result = seg;
-        }
-    }
-
-    return result;
-}
-
-function valueAtPath( obj: any, path: string ): any
-{
-    if( !obj || typeof obj !== 'object' ){ return undefined }
-
-    const parts = tokenizePath( path );
-
-    if( parts.length === 0 ){ return obj }
-
-    let current = obj;
-
-    for( let i = 0; i < parts.length; i++ )
-    {
-        if( current === null || current === undefined || typeof current !== 'object' )
-        {
-            return undefined;
-        }
-
-        const part = parts[i];
-
-        if( part.startsWith( '[' ) && part.endsWith( ']' ))
-        {
-            current = current[parseInt( part.slice( 1, -1 ), 10 )];
-        }
-        else
-        {
-            current = current[part];
-        }
-    }
-
-    return current;
-}
