@@ -19,9 +19,9 @@ describe( 'plugin', () =>
         // Arrange
         const sourceText = `
             import { assert } from './index.js';
-            type Age = number & { __min?: 18 };
+            type Age = number & { __minimum?: 18 };
             const age = 10 as Age;
-            assert<Age>(age);
+            assert<Age>( 12 );
         `;
         const fileName = '/virtual/plugin-user.ts';
         const sourceFile = ts.createSourceFile( fileName, sourceText, ts.ScriptTarget.Latest, true );
@@ -63,7 +63,9 @@ describe( 'plugin', () =>
 
         // Assert
         expect( diagnostics[0]).toBe( baseDiagnostics[0]);
-        expect( Array.isArray( diagnostics )).toBe( true );
+        expect( diagnostics.length ).toBe( 3 );
+        expect( String( diagnostics[1].messageText )).toContain( 'Minimum<18>' );
+        expect( String( diagnostics[2].messageText )).toContain( 'Minimum<18>' );
     });
 
     it( 'should skip declaration files node_modules and missing programs', () => 
