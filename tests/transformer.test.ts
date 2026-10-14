@@ -4,38 +4,33 @@ import * as fs from 'fs';
 import * as path from 'path';
 import transformer from '../src/transformer.js';
 
+import { getCachedCompilerHost } from './helpers/compile.js';
+
 describe( 'Transformer Call Expression Replacements', () => 
 {
     function compileAndTransform( sourceCode: string ): string 
     {
         const tempFile = path.resolve( './temp_test_file.ts' );
-        fs.writeFileSync( tempFile, sourceCode );
+        const virtualFiles = new Map<string, string>();
+        virtualFiles.set( tempFile, sourceCode );
 
-        try 
-        {
-            const program = ts.createProgram([tempFile], {
-                target           : ts.ScriptTarget.ES2022,
-                module           : ts.ModuleKind.NodeNext,
-                moduleResolution : ts.ModuleResolutionKind.NodeNext,
-                skipLibCheck     : true
-            });
+        const opts = {
+            target           : ts.ScriptTarget.ES2022,
+            module           : ts.ModuleKind.NodeNext,
+            moduleResolution : ts.ModuleResolutionKind.NodeNext,
+            skipLibCheck     : true
+        };
 
-            const sourceFile = program.getSourceFile( tempFile );
+        const host = getCachedCompilerHost( opts, virtualFiles );
+        const program = ts.createProgram([tempFile], opts, host );
+        const sourceFile = program.getSourceFile( tempFile );
 
-            if( !sourceFile ) { throw new Error( 'Could not load source file' ) }
+        if( !sourceFile ) { throw new Error( 'Could not load source file' ) }
 
-            const result = ts.transform( sourceFile, [transformer( program )]);
-            const printer = ts.createPrinter();
+        const result = ts.transform( sourceFile, [transformer( program )]);
+        const printer = ts.createPrinter();
 
-            return printer.printFile( result.transformed[0]);
-        }
-        finally 
-        {
-            if( fs.existsSync( tempFile )) 
-            {
-                fs.unlinkSync( tempFile );
-            }
-        }
+        return printer.printFile( result.transformed[0]);
     }
 
     it( 'should transform validate with a string ValidationMode', () => 
@@ -615,32 +610,28 @@ describe( 'Transformer Call Expression Replacements', () =>
     function compileAndEmit( sourceCode: string, module: ts.ModuleKind ): string
     {
         const tempFile = path.resolve( './temp_emit_file.ts' );
-        fs.writeFileSync( tempFile, sourceCode );
+        const virtualFiles = new Map<string, string>();
+        virtualFiles.set( tempFile, sourceCode );
 
-        try
+        const opts = {
+            target       : ts.ScriptTarget.ES2022,
+            module,
+            skipLibCheck : true
+        };
+        const host = getCachedCompilerHost( opts, virtualFiles );
+        const program = ts.createProgram([tempFile], opts, host );
+        const sourceFile = program.getSourceFile( tempFile );
+
+        if( !sourceFile ){ throw new Error( 'Could not load source file' ) }
+
+        let emitted = '';
+
+        program.emit( sourceFile, ( fileName, text ) =>
         {
-            const program = ts.createProgram([tempFile], {
-                target       : ts.ScriptTarget.ES2022,
-                module,
-                skipLibCheck : true
-            });
-            const sourceFile = program.getSourceFile( tempFile );
+            if( fileName.endsWith( '.js' )){ emitted = text }
+        }, undefined, false, { before : [transformer( program )] });
 
-            if( !sourceFile ){ throw new Error( 'Could not load source file' ) }
-
-            let emitted = '';
-
-            program.emit( sourceFile, ( fileName, text ) =>
-            {
-                if( fileName.endsWith( '.js' )){ emitted = text }
-            }, undefined, false, { before : [transformer( program )] });
-
-            return emitted;
-        }
-        finally
-        {
-            if( fs.existsSync( tempFile )){ fs.unlinkSync( tempFile ) }
-        }
+        return emitted;
     }
 
     function topLevelBindings( compiled: string ): string[]

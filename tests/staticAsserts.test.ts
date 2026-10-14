@@ -9,6 +9,8 @@ import {
     tryGetConstantValue
 } from '../src/engine/staticAsserts.js';
 
+import { getCachedCompilerHost } from './helpers/compile.js';
+
 describe( 'Static constraint diagnostics', () => 
 {
     let tempCounter = 0;
@@ -16,33 +18,27 @@ describe( 'Static constraint diagnostics', () =>
     function diagnosticsFor( sourceCode: string ): ts.Diagnostic[] 
     {
         const tempFile = path.resolve( `./temp_static_assert_${process.pid}_${++tempCounter}.ts` );
-        fs.writeFileSync( tempFile, sourceCode );
+        const virtualFiles = new Map<string, string>();
+        virtualFiles.set( tempFile, sourceCode );
 
-        try 
-        {
-            const program = ts.createProgram([tempFile], {
-                target           : ts.ScriptTarget.ES2022,
-                module           : ts.ModuleKind.NodeNext,
-                moduleResolution : ts.ModuleResolutionKind.NodeNext,
-                skipLibCheck     : true,
-                strict           : true
-            });
+        const opts = {
+            target           : ts.ScriptTarget.ES2022,
+            module           : ts.ModuleKind.NodeNext,
+            moduleResolution : ts.ModuleResolutionKind.NodeNext,
+            skipLibCheck     : true,
+            strict           : true
+        };
 
-            transformer( program );
+        const host = getCachedCompilerHost( opts, virtualFiles );
+        const program = ts.createProgram([tempFile], opts, host );
 
-            const sourceFile = program.getSourceFile( tempFile );
+        transformer( program );
 
-            if( !sourceFile ){ throw new Error( 'Could not load source file' ) }
+        const sourceFile = program.getSourceFile( tempFile );
 
-            return program.getSemanticDiagnostics( sourceFile ).filter( d => d.source === 'webergency-typechecker' );
-        }
-        finally 
-        {
-            if( fs.existsSync( tempFile )) 
-            {
-                fs.unlinkSync( tempFile );
-            }
-        }
+        if( !sourceFile ){ throw new Error( 'Could not load source file' ) }
+
+        return program.getSemanticDiagnostics( sourceFile ).filter( d => d.source === 'webergency-typechecker' );
     }
 
     function messages( diags: ts.Diagnostic[]): string[] 

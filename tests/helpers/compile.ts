@@ -52,42 +52,89 @@ export function getCjsTransformer( program: ts.Program ): ( context: ts.Transfor
     return transformerSource( program );
 }
 
+const defaultHost = ts.createCompilerHost( COMPILER_OPTIONS );
+const libSourceFileCache = new Map<string, ts.SourceFile>();
+
+export function getCachedCompilerHost(
+    options: ts.CompilerOptions,
+    virtualFiles?: Map<string, string>
+): ts.CompilerHost
+{
+    const baseHost = options === COMPILER_OPTIONS ? defaultHost : ts.createCompilerHost( options );
+
+    return {
+        ...baseHost,
+        getSourceFile( fileName, languageVersion, onError, shouldCreateNewSourceFile )
+        {
+            if( virtualFiles && virtualFiles.has( fileName ))
+            {
+                return ts.createSourceFile( fileName, virtualFiles.get( fileName )!, languageVersion, true );
+            }
+
+            if( fileName.includes( 'node_modules/typescript/lib/' ))
+            {
+                let cached = libSourceFileCache.get( fileName );
+
+                if( !cached )
+                {
+                    cached = baseHost.getSourceFile( fileName, languageVersion, onError, shouldCreateNewSourceFile );
+
+                    if( cached )
+                    {
+                        libSourceFileCache.set( fileName, cached );
+                    }
+                }
+
+                return cached;
+            }
+
+            return baseHost.getSourceFile( fileName, languageVersion, onError, shouldCreateNewSourceFile );
+        },
+        fileExists( fileName )
+        {
+            if( virtualFiles && virtualFiles.has( fileName )){ return true }
+
+            return baseHost.fileExists( fileName );
+        },
+        readFile( fileName )
+        {
+            if( virtualFiles && virtualFiles.has( fileName )){ return virtualFiles.get( fileName )! }
+
+            return baseHost.readFile( fileName );
+        }
+    };
+}
+
 /**
  * Transform a snippet and print the result using the built transformer.
  */
 export function compileAndTransform( sourceCode: string, tempName: string, mode: 'esm' | 'cjs' = 'esm' ): string
 {
     const file = path.resolve( `./${tempName}.ts` );
+    const virtualFiles = new Map<string, string>();
+    virtualFiles.set( file, sourceCode );
 
-    fs.writeFileSync( file, sourceCode );
+    const opts = mode === 'cjs'
+        ? {
+            target           : ts.ScriptTarget.ES2022,
+            module           : ts.ModuleKind.CommonJS,
+            moduleResolution : ts.ModuleResolutionKind.Node10,
+            strict           : true,
+            skipLibCheck     : true,
+            types            : ['node']
+        }
+        : COMPILER_OPTIONS;
 
-    try
-    {
-        const opts = mode === 'cjs'
-            ? {
-                target           : ts.ScriptTarget.ES2022,
-                module           : ts.ModuleKind.CommonJS,
-                moduleResolution : ts.ModuleResolutionKind.Node10,
-                strict           : true,
-                skipLibCheck     : true,
-                types            : ['node']
-            }
-            : COMPILER_OPTIONS;
+    const host = getCachedCompilerHost( opts, virtualFiles );
+    const program = ts.createProgram([file], opts, host );
+    const sourceFile = program.getSourceFile( file );
 
-        const program = ts.createProgram([file], opts );
-        const sourceFile = program.getSourceFile( file );
+    if( !sourceFile ){ throw new Error( `Could not load ${file}` ) }
 
-        if( !sourceFile ){ throw new Error( `Could not load ${file}` ) }
+    const tf = mode === 'cjs' ? getCjsTransformer( program ) : getEsmTransformer( program );
+    const result = ts.transform( sourceFile, [tf]);
 
-        const tf = mode === 'cjs' ? getCjsTransformer( program ) : getEsmTransformer( program );
-        const result = ts.transform( sourceFile, [tf]);
-
-        return ts.createPrinter().printFile( result.transformed[0]);
-    }
-    finally
-    {
-        if( fs.existsSync( file )){ fs.unlinkSync( file ) }
-    }
+    return ts.createPrinter().printFile( result.transformed[0]);
 }
 
 /**
@@ -122,7 +169,8 @@ export function emitWithTransformer(
         }
 
         const entry = path.join( dir, 'main.ts' );
-        const program = ts.createProgram([entry], opts );
+        const host = getCachedCompilerHost( opts );
+        const program = ts.createProgram([entry], opts, host );
         let output = '';
         const tf = mode === 'cjs' ? getCjsTransformer( program ) : getEsmTransformer( program );
 

@@ -5,6 +5,8 @@ import * as path from 'path';
 import transformer from '../src/transformer.js';
 import { installStaticConstraintDiagnostics } from '../src/engine/staticAsserts.js';
 
+import { getCachedCompilerHost } from './helpers/compile.js';
+
 describe( 'Static Diagnostics Idempotency', () =>
 {
     let tempCounter = 0;
@@ -17,82 +19,70 @@ describe( 'Static Diagnostics Idempotency', () =>
             type Small = number & constraint.Maximum<10>;
             const val: Small = 99;
         `;
-        fs.writeFileSync( tempFile, sourceCode );
+        const virtualFiles = new Map<string, string>();
+        virtualFiles.set( tempFile, sourceCode );
 
-        try
-        {
-            const program = ts.createProgram([tempFile], {
-                target           : ts.ScriptTarget.ES2022,
-                module           : ts.ModuleKind.NodeNext,
-                moduleResolution : ts.ModuleResolutionKind.NodeNext,
-                skipLibCheck     : true,
-                strict           : true
-            });
+        const opts = {
+            target           : ts.ScriptTarget.ES2022,
+            module           : ts.ModuleKind.NodeNext,
+            moduleResolution : ts.ModuleResolutionKind.NodeNext,
+            skipLibCheck     : true,
+            strict           : true
+        };
 
-            // Call first time
-            const first = installStaticConstraintDiagnostics( program );
+        const host = getCachedCompilerHost( opts, virtualFiles );
+        const program = ts.createProgram([tempFile], opts, host );
 
-            // Call second time
-            const second = installStaticConstraintDiagnostics( program );
+        // Call first time
+        const first = installStaticConstraintDiagnostics( program );
 
-            expect( first ).toBe( second );
+        // Call second time
+        const second = installStaticConstraintDiagnostics( program );
 
-            // Also call transformer multiple times
-            transformer( program );
-            transformer( program );
+        expect( first ).toBe( second );
 
-            const sourceFile = program.getSourceFile( tempFile );
+        // Also call transformer multiple times
+        transformer( program );
+        transformer( program );
 
-            if( !sourceFile ){ throw new Error( 'Could not load source file' ) }
+        const sourceFile = program.getSourceFile( tempFile );
 
-            const diags = program.getSemanticDiagnostics( sourceFile )
-                .filter( d => d.source === 'webergency-typechecker' );
+        if( !sourceFile ){ throw new Error( 'Could not load source file' ) }
 
-            expect( diags.length ).toBe( 1 );
-            expect( String( diags[0].messageText )).toContain( 'does not satisfy Maximum<10>' );
-        }
-        finally
-        {
-            if( fs.existsSync( tempFile ))
-            {
-                fs.unlinkSync( tempFile );
-            }
-        }
+        const diags = program.getSemanticDiagnostics( sourceFile )
+            .filter( d => d.source === 'webergency-typechecker' );
+
+        expect( diags.length ).toBe( 1 );
+        expect( String( diags[0].messageText )).toContain( 'does not satisfy Maximum<10>' );
     });
 
     function diagnosticsFor( sourceCode: string ): { diags : ts.Diagnostic[], sourceFile : ts.SourceFile }
     {
         const tempFile = path.resolve( `./temp_static_fixes_${process.pid}_${++tempCounter}.ts` );
-        fs.writeFileSync( tempFile, sourceCode );
+        const virtualFiles = new Map<string, string>();
+        virtualFiles.set( tempFile, sourceCode );
 
-        try
-        {
-            const program = ts.createProgram([tempFile], {
-                target           : ts.ScriptTarget.ES2022,
-                module           : ts.ModuleKind.NodeNext,
-                moduleResolution : ts.ModuleResolutionKind.NodeNext,
-                skipLibCheck     : true,
-                strict           : true
-            });
+        const opts = {
+            target           : ts.ScriptTarget.ES2022,
+            module           : ts.ModuleKind.NodeNext,
+            moduleResolution : ts.ModuleResolutionKind.NodeNext,
+            skipLibCheck     : true,
+            strict           : true
+        };
 
-            transformer( program );
+        const host = getCachedCompilerHost( opts, virtualFiles );
+        const program = ts.createProgram([tempFile], opts, host );
 
-            const sourceFile = program.getSourceFile( tempFile );
+        transformer( program );
 
-            if( !sourceFile ){ throw new Error( 'Could not load source file' ) }
+        const sourceFile = program.getSourceFile( tempFile );
 
-            const diags = program.getSemanticDiagnostics( sourceFile )
-                .filter( d => d.source === 'webergency-typechecker' );
+        if( !sourceFile ){ throw new Error( 'Could not load source file' ) }
 
-            return { diags, sourceFile };
-        }
-        finally
-        {
-            if( fs.existsSync( tempFile ))
-            {
-                fs.unlinkSync( tempFile );
-            }
-        }
+        const diags = program.getSemanticDiagnostics( sourceFile )
+            .filter( d => d.source === 'webergency-typechecker' );
+
+        return { diags, sourceFile };
     }
 
     it( 'reports diagnostics on satisfies and as assertions including as const inside satisfies', () =>
