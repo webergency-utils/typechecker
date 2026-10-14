@@ -214,6 +214,84 @@ describe( 'compileSchema', () =>
             expect( ctx.success ).toBe( true );
             expect( result.extra ).toEqual({ nested : true });
         });
+
+        it( 'should validate closed objects in a single pass without duplicate strict errors or extra Set allocations', () =>
+        {
+            // Arrange
+            const fn = getOrCompileSchema({
+                type                 : 'object',
+                properties           : { id : { type : 'number' }, name : { type : 'string' } },
+                required             : ['id'],
+                additionalProperties : false
+            });
+
+            // Act — strict mode with unknown keys reports each unknown key exactly once
+            fn({ id : 1, name : 'ok', rogue1 : true, rogue2 : 42 }, 'user', ctx );
+
+            // Assert
+            expect( ctx.success ).toBe( false );
+            expect( ctx.errors ).toEqual([
+                { path : 'user', error : 'PropertyNotAllowed<rogue1>', value : true },
+                { path : 'user', error : 'PropertyNotAllowed<rogue2>', value : 42 }
+            ]);
+
+            // Arrange — strip mode with mutate: true removes unknown keys in place
+            const stripCtx: ValidationContext = { success : true, errors : [], mode : 'strip', mutate : true };
+            const mutableInput: Record<string, unknown> = { id : 2, extra : 'drop-me' };
+
+            // Act
+            const stripped = fn( mutableInput, '', stripCtx );
+
+            // Assert
+            expect( stripCtx.success ).toBe( true );
+            expect( stripped ).toBe( mutableInput );
+            expect( mutableInput ).toEqual({ id : 2 });
+
+            // Arrange — relaxed mode preserves unknown keys safely
+            const relaxedCtx: ValidationContext = { success : true, errors : [], mode : 'relaxed' };
+
+            // Act
+            const relaxed = fn({ id : 3, extra : 'keep-me' }, '', relaxedCtx );
+
+            // Assert
+            expect( relaxedCtx.success ).toBe( true );
+            expect( relaxed ).toEqual({ id : 3, extra : 'keep-me' });
+        });
+
+        it( 'should use full evaluation path when patternProperties is combined with additionalProperties: false', () =>
+        {
+            // Arrange
+            const fn = getOrCompileSchema({
+                type                 : 'object',
+                properties           : { id : { type : 'number' } },
+                patternProperties    : { '^meta_' : { type : 'string' } },
+                required             : ['id'],
+                additionalProperties : false
+            });
+
+            // Act — strict mode accepts matching pattern property and rejects unknown property
+            const ok = fn({ id : 1, meta_tag : 'v1' }, '', ctx );
+            const badCtx: ValidationContext = { success : true, errors : [], mode : 'strict' };
+            fn({ id : 1, meta_tag : 'v1', rogue : 9 }, 'obj', badCtx );
+
+            // Assert
+            expect( ctx.success ).toBe( true );
+            expect( ok ).toEqual({ id : 1, meta_tag : 'v1' });
+            expect( badCtx.success ).toBe( false );
+            expect( badCtx.errors ).toEqual([
+                { path : 'obj', error : 'PropertyNotAllowed<rogue>', value : 9 }
+            ]);
+
+            // Act — strip and relaxed modes on patternProperties + additionalProperties: false
+            const stripCtx: ValidationContext = { success : true, errors : [], mode : 'strip', mutate : true };
+            const stripTarget: Record<string, unknown> = { id : 2, meta_ok : 'yes', rogue : 'drop' };
+            fn( stripTarget, '', stripCtx );
+            expect( stripTarget ).toEqual({ id : 2, meta_ok : 'yes' });
+
+            const relaxedCtx: ValidationContext = { success : true, errors : [], mode : 'relaxed' };
+            const relaxedOut = fn({ id : 3, meta_ok : 'yes', rogue : 'keep' }, '', relaxedCtx );
+            expect( relaxedOut ).toEqual({ id : 3, meta_ok : 'yes', rogue : 'keep' });
+        });
     });
 
     describe( 'refs and const', () => 

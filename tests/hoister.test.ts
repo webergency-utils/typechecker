@@ -230,6 +230,72 @@ describe( 'hoister', () =>
         expect( printed.match( /const __ser_dup =/g )?.length ).toBe( 1 );
         expect( printed.match( /const __parse_dup =/g )?.length ).toBe( 1 );
     });
+
+    it( 'should hoist static Set and getCachedPattern allocations outside per-call parser and serializer functions', async() =>
+    {
+        const { compileAndTransform } = await import( './helpers/compile.js' );
+
+        const parseCode = compileAndTransform( `
+            import { parse, constraint } from './src/index.js';
+            interface Item {
+                id: \`item_\${number}\`;
+                code: string & constraint.Pattern<'^[A-Z]{3}$'>;
+            }
+            interface Order {
+                orderId: string;
+                item: Item;
+            }
+            export function run( raw: string ) {
+                return parse<Order>( raw, { mode: 'strict' } );
+            }
+        `, 'temp_hoist_parse_static' );
+
+        const fnInputIdx = parseCode.indexOf( 'function (input, options)' );
+        const setIdx = parseCode.indexOf( 'new Set(' );
+        const cachedPatIdx = parseCode.indexOf( 'getCachedPattern(' );
+
+        expect( fnInputIdx ).toBeGreaterThan( 0 );
+        expect( setIdx ).toBeGreaterThan( 0 );
+        expect( cachedPatIdx ).toBeGreaterThan( 0 );
+        expect( setIdx ).toBeLessThan( fnInputIdx );
+        expect( cachedPatIdx ).toBeLessThan( fnInputIdx );
+
+        const serJsonCode = compileAndTransform( `
+            import { stringify } from './src/index.js';
+            interface Order {
+                orderId: string;
+                item: { id: string; qty: number };
+            }
+            export function dump( v: Order ) {
+                return stringify<Order>( v, { mode: 'strict' } );
+            }
+        `, 'temp_hoist_ser_json_static' );
+
+        const serFnIdx = serJsonCode.indexOf( 'function (input, options)' );
+        const serSetIdx = serJsonCode.indexOf( 'new Set(' );
+
+        expect( serFnIdx ).toBeGreaterThan( 0 );
+        expect( serSetIdx ).toBeGreaterThan( 0 );
+        expect( serSetIdx ).toBeLessThan( serFnIdx );
+
+        const serQueryCode = compileAndTransform( `
+            import { stringify } from './src/index.js';
+            interface QueryOrder {
+                orderId: string;
+                item: { id: string; qty: number };
+            }
+            export function dumpQuery( v: QueryOrder ) {
+                return stringify<QueryOrder>( v, { format: 'query', mode: 'strict' } );
+            }
+        `, 'temp_hoist_ser_query_static' );
+
+        const serQueryFnIdx = serQueryCode.indexOf( 'function (input, options)' );
+        const serQuerySetIdx = serQueryCode.indexOf( 'new Set(' );
+
+        expect( serQueryFnIdx ).toBeGreaterThan( 0 );
+        expect( serQuerySetIdx ).toBeGreaterThan( 0 );
+        expect( serQuerySetIdx ).toBeLessThan( serQueryFnIdx );
+    });
 });
 
 describe( 'resolveEmitNames', () =>

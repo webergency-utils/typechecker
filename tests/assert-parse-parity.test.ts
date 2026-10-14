@@ -53,7 +53,8 @@ function canonicalizeFailure( path: string, code: string ): CanonicalFailure
         if( c === 'Type<string>' || c === 'Type<number>' || c === 'Type<boolean>' ||
             c === 'Type<bigint>' || c === 'Type<Object>' || c === 'Type<Array>' ||
             c === 'Type<Date>' || c === 'Type<null>' || c === 'Type<undefined>' ||
-            c === 'Type<never>' || c === 'Type<symbol>' || c === 'Type<function>' )
+            c === 'Type<never>' || c === 'Type<symbol>' || c === 'Type<function>' ||
+            c === 'Type<Set>' || c === 'Type<Map>' )
         {
             return { path : p, code : c };
         }
@@ -118,6 +119,18 @@ function objectToQuery( input: unknown ): string
             for( const item of value )
             {
                 parts.push( `${encodeURIComponent( key )}=${encodeURIComponent( String( item ))}` );
+            }
+
+            continue;
+        }
+
+        if( typeof value === 'object' && value !== null )
+        {
+            for( const [ subKey, subVal ] of Object.entries( value as Record<string, unknown> ))
+            {
+                if( subVal === undefined ){ continue }
+
+                parts.push( `${encodeURIComponent( `${key}[${subKey}]` )}=${encodeURIComponent( String( subVal ))}` );
             }
 
             continue;
@@ -205,6 +218,13 @@ describe( 'assert ↔ parse parity', () =>
         queryDefaults    : ParityFns
         nestedCustom     : ParityFns
         intersectionObjs : ParityFns
+        setMapJson       : ParityFns
+        setMapQuery      : ParityFns
+        bigintLitJson    : ParityFns
+        floatMultiple    : ParityFns
+        bigintBoundsJson : ParityFns
+        relRequires      : ParityFns
+        uniqueObjs       : ParityFns
     };
 
     beforeAll( async() =>
@@ -533,10 +553,86 @@ describe( 'assert ↔ parse parity', () =>
                 ( v ) => validate<NestedCustom>( v, { mode: 'strip' } )
             );
 
+            interface SetMapRow
+            {
+                tags : Set<string> & constraint.MinItems<1>
+                meta : Map<string, number>
+            }
+
+            interface BigIntLitRow
+            {
+                id  : 10n
+                neg : -42n
+            }
+
+            interface FloatMultipleRow
+            {
+                step : number & constraint.MultipleOf<0.1>
+            }
+
+            interface BigIntBoundsRow
+            {
+                amount : bigint & constraint.Minimum<10n> & constraint.MultipleOf<5n>
+            }
+
+            interface RelRequiresRow
+            {
+                flag? : boolean
+                sub   : ( { val : number } & constraint.Requires<'/flag'> )
+            }
+
+            interface UniqueObjsRow
+            {
+                items : { a : number, b : number }[] & constraint.UniqueItems
+            }
+
             export const intersectionObjs = wrap(
                 ( v ) => assert<IntersectionObjs>( v, { mode: 'strip' } ),
                 ( v ) => parse<IntersectionObjs>( v, { mode: 'strip' } ),
                 ( v ) => validate<IntersectionObjs>( v, { mode: 'strip' } )
+            );
+
+            export const setMapJson = wrap(
+                ( v ) => assert<SetMapRow>( v, { mode: 'strip', from: 'json' } ),
+                ( v ) => parse<SetMapRow>( v, { mode: 'strip', from: 'json' } ),
+                ( v ) => validate<SetMapRow>( v, { mode: 'strip', from: 'json' } )
+            );
+
+            export const setMapQuery = wrap(
+                ( v ) => assert<SetMapRow>( v, { mode: 'strip', from: 'query' } ),
+                ( v ) => parse<SetMapRow>( v, { mode: 'strip', from: 'query' } ),
+                ( v ) => validate<SetMapRow>( v, { mode: 'strip', from: 'query' } ),
+                'query'
+            );
+
+            export const bigintLitJson = wrap(
+                ( v ) => assert<BigIntLitRow>( v, { mode: 'strip', from: 'json' } ),
+                ( v ) => parse<BigIntLitRow>( v, { mode: 'strip', from: 'json' } ),
+                ( v ) => validate<BigIntLitRow>( v, { mode: 'strip', from: 'json' } )
+            );
+
+            export const floatMultiple = wrap(
+                ( v ) => assert<FloatMultipleRow>( v, { mode: 'strip' } ),
+                ( v ) => parse<FloatMultipleRow>( v, { mode: 'strip' } ),
+                ( v ) => validate<FloatMultipleRow>( v, { mode: 'strip' } )
+            );
+
+            export const bigintBoundsJson = wrap(
+                ( v ) => assert<BigIntBoundsRow>( v, { mode: 'strip', from: 'json' } ),
+                ( v ) => parse<BigIntBoundsRow>( v, { mode: 'strip', from: 'json' } ),
+                ( v ) => validate<BigIntBoundsRow>( v, { mode: 'strip', from: 'json' } )
+            );
+
+            export const relRequires = wrap(
+                ( v ) => assert<RelRequiresRow>( v, { mode: 'strip' } ),
+                ( v ) => parse<RelRequiresRow>( v, { mode: 'strip' } ),
+                ( v ) => validate<RelRequiresRow>( v, { mode: 'strip' } )
+            );
+
+            export const uniqueObjs = wrap(
+                ( v ) => assert<UniqueObjsRow>( v, { mode: 'strip' } ),
+                ( v ) => parse<UniqueObjsRow>( v, { mode: 'strip' } ),
+                ( v ) => validate<UniqueObjsRow>( v, { mode: 'strip' } )
             );
         `, 'temp_assert_parse_parity' );
     }, 60_000 );
@@ -875,10 +971,60 @@ describe( 'assert ↔ parse parity', () =>
         {
             expectParitySuccess( mod.intersectionObjs, { a : 'x', b : 1 });
         });
+
+        it( 'Set<string> and Map<string, number> in JSON and query modes', () =>
+        {
+            expectParitySuccess( mod.setMapJson, { tags : [ 'a', 'b' ], meta : { x : 1, y : 2 } });
+            expectParitySuccess( mod.setMapQuery, { tags : [ 'a', 'b' ], meta : { x : '1', y : '2' } });
+        });
+
+        it( 'BigIntLiteral, float MultipleOf, bigint bounds, root Requires, and object UniqueItems', () =>
+        {
+            expectParitySuccess( mod.bigintLitJson, { id : '10', neg : '-42' });
+            expectParitySuccess( mod.floatMultiple, { step : 0.3 });
+            expectParitySuccess( mod.bigintBoundsJson, { amount : '15' });
+            expectParitySuccess( mod.relRequires, { flag : true, sub : { val : 1 } });
+            expectParitySuccess( mod.uniqueObjs, { items : [ { a : 1, b : 2 }, { a : 1, b : 3 } ] });
+        });
     });
 
     describe( 'extended shapes (failures)', () =>
     {
+        it( 'Set MinItems and Map value failure parity', () =>
+        {
+            expectParityThrow( mod.setMapJson, { tags : [], meta : { x : 1 } }, {
+                path : 'tags', code : 'MinItems<1>'
+            });
+            expectParityThrow( mod.setMapJson, { tags : [ 'a' ], meta : { x : 'bad' } }, {
+                path : 'meta[x]', code : 'Type<number>'
+            });
+        });
+
+        it( 'BigIntLiteral, float MultipleOf, bigint bounds, root Requires, and reordered-key UniqueItems failure parity', () =>
+        {
+            expectParityThrow( mod.bigintLitJson, { id : '11', neg : '-42' }, {
+                path : 'id', code : 'Literal<10n>'
+            });
+            expectParityThrow( mod.bigintLitJson, { id : '10', neg : '-41' }, {
+                path : 'neg', code : 'Literal<-42n>'
+            });
+            expectParityThrow( mod.floatMultiple, { step : 0.35 }, {
+                path : 'step', code : 'MultipleOf<0.1>'
+            });
+            expectParityThrow( mod.bigintBoundsJson, { amount : '5' }, {
+                path : 'amount', code : 'Minimum<10>'
+            });
+            expectParityThrow( mod.bigintBoundsJson, { amount : '12' }, {
+                path : 'amount', code : 'MultipleOf<5>'
+            });
+            expectParityThrow( mod.relRequires, { sub : { val : 1 } }, {
+                path : 'sub', code : 'Requires</flag>'
+            });
+            expectParityThrow( mod.uniqueObjs, { items : [ { a : 1, b : 2 }, { b : 2, a : 1 } ] }, {
+                path : 'items', code : 'UniqueItems'
+            });
+        });
+
         it( 'tuple wrong length', () =>
         {
             expectParityThrow( mod.tuplesStrip, [ 'a' ]);

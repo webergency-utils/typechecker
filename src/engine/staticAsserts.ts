@@ -1,6 +1,7 @@
 import ts from 'typescript';
+import { hasUniqueItems, isMultipleOfNumber } from '../runtime/validators.js';
 import { TagName } from './tagKeys.js';
-import { collectConstraintsFromProps, getTypeProps } from './type-helpers.js';
+import { collectConstraintsFromProps, getTypeProps, peelTaggedIntersection } from './type-helpers.js';
 
 export interface IStaticConstraint
 {
@@ -16,6 +17,12 @@ const STATICALLY_CHECKED: ReadonlySet<string> = new Set<TagName>([
     'minItems', 'maxItems', 'uniqueItems',
     'minProperties', 'maxProperties'
 ]);
+
+const STATIC_MACRO_FUNCTIONS: ReadonlySet<string> = new Set([
+    'is', 'assert', 'assertGuard', 'validate', 'stringify'
+]);
+
+const MAX_STATIC_DEPTH = 8;
 
 /**
  * Extract Minimum / Length / Items-style constraints from a (possibly intersected) type.
@@ -72,6 +79,42 @@ function unwrapExpression( expr: ts.Expression ): ts.Expression
     return expr;
 }
 
+function tryGetConstantObject( obj: ts.ObjectLiteralExpression ): Record<string, any> | undefined
+{
+    const entries: [ string, any ][] = [];
+
+    for( const prop of obj.properties )
+    {
+        if( !ts.isPropertyAssignment( prop )){ return undefined }
+
+        const name = prop.name;
+
+        if( !ts.isIdentifier( name ) && !ts.isStringLiteral( name )){ return undefined }
+
+        const inner = unwrapExpression( prop.initializer );
+
+        if( ts.isObjectLiteralExpression( inner ))
+        {
+            const nested = tryGetConstantObject( inner );
+
+            if( !nested ){ return undefined }
+
+            entries.push([ name.text, nested ]);
+            continue;
+        }
+
+        const c = tryGetConstantValue( inner );
+
+        if( !c || c.kind === 'object' ){ return undefined }
+
+        entries.push([ name.text, c.value ]);
+    }
+
+    entries.sort(( a, b ) => a[0].localeCompare( b[0]));
+
+    return Object.fromEntries( entries );
+}
+
 /**
  * Resolve a compile-time constant from an expression, or undefined if not constant.
  */
@@ -114,12 +157,23 @@ export function tryGetConstantValue( expr: ts.Expression ): ConstantValue | unde
         {
             if( ts.isSpreadElement( el )){ return undefined }
 
-            const c = tryGetConstantValue( el );
+            const unwrappedEl = unwrapExpression( el );
 
-            if( !c ){ return undefined }
+            if( ts.isObjectLiteralExpression( unwrappedEl ))
+            {
+                const objVal = tryGetConstantObject( unwrappedEl );
 
-            if( c.kind === 'array' ){ items.push( c.value ) }
-            else { items.push( c.value ) }
+                if( !objVal ){ return undefined }
+
+                items.push( objVal );
+                continue;
+            }
+
+            const c = tryGetConstantValue( unwrappedEl );
+
+            if( !c || c.kind === 'object' ){ return undefined }
+
+            items.push( c.value );
         }
 
         return { kind : 'array', value : items };
@@ -194,13 +248,18 @@ export function evaluateStaticConstraints(
 
             if( typeof v === 'bigint' || typeof n === 'bigint' )
             {
-                ok = BigInt( v ) % BigInt( n ) === 0n;
+                if(( typeof v === 'number' && !Number.isInteger( v )) || ( typeof n === 'number' && !Number.isInteger( n )))
+                {
+                    ok = false;
+                }
+                else
+                {
+                    ok = BigInt( n ) !== 0n && BigInt( v ) % BigInt( n ) === 0n;
+                }
             }
             else
             {
-                const q = v / n;
-
-                ok = Math.abs( q - Math.round( q )) <= 1e-8 * Math.max( 1, Math.abs( q ));
+                ok = isMultipleOfNumber( v, n );
             }
 
             if( !ok )
@@ -238,18 +297,9 @@ export function evaluateStaticConstraints(
         }
         else if( c.type === 'uniqueItems' && constant.kind === 'array' )
         {
-            const seen = new Set();
-
-            for( const item of constant.value )
+            if( !hasUniqueItems( constant.value ))
             {
-                const key = typeof item === 'object' && item !== null ? JSON.stringify( item ) : item;
-
-                if( seen.has( key ))
-                {
-                    errors.push( c.message || 'Array does not satisfy UniqueItems' );
-                    break;
-                }
-                seen.add( key );
+                errors.push( c.message || 'Array does not satisfy UniqueItems' );
             }
         }
         else if( c.type === 'minProperties' && constant.kind === 'object' )
@@ -294,69 +344,197 @@ function createDiagnostic( node: ts.Node, message: string ): ts.Diagnostic
 }
 
 function checkExpressionAgainstType(
-    expr: ts.Expression,
-    type: ts.Type,
-    checker: ts.TypeChecker,
-    diagnostics: ts.Diagnostic[]
+    expr        : ts.Expression,
+    type        : ts.Type,
+    checker     : ts.TypeChecker,
+    diagnostics : ts.Diagnostic[],
+    anchorNode? : ts.Node,
+    depth       : number = 0
 )
 {
+    if( depth > MAX_STATIC_DEPTH ){ return }
+
     const constraints = extractStaticConstraints( type, checker );
+    const unwrapped = unwrapExpression( expr );
 
-    if( constraints.length === 0 )
+    if( constraints.length > 0 )
     {
-        // Still recurse into object literals for nested tagged properties
-        if( ts.isObjectLiteralExpression( unwrapExpression( expr )))
-        {
-            checkObjectLiteral( unwrapExpression( expr ) as ts.ObjectLiteralExpression, type, checker, diagnostics );
-        }
+        const constant = tryGetConstantValue( expr );
+        const target = anchorNode ?? unwrapped;
 
-        return;
+        if( constant )
+        {
+            for( const msg of evaluateStaticConstraints( constant, constraints ))
+            {
+                diagnostics.push( createDiagnostic( target, msg ));
+            }
+        }
+        else if( ts.isArrayLiteralExpression( unwrapped ) && !unwrapped.elements.some( ts.isSpreadElement ))
+        {
+            const lengthOnly = constraints.filter( c => c.type === 'minItems' || c.type === 'maxItems' );
+
+            for( const msg of evaluateStaticConstraints(
+                { kind : 'array', value : new Array( unwrapped.elements.length ) },
+                lengthOnly
+            ))
+            {
+                diagnostics.push( createDiagnostic( target, msg ));
+            }
+        }
     }
 
-    const constant = tryGetConstantValue( expr );
-
-    if( constant )
+    if( ts.isObjectLiteralExpression( unwrapped ))
     {
-        for( const msg of evaluateStaticConstraints( constant, constraints ))
-        {
-            diagnostics.push( createDiagnostic( expr, msg ));
-        }
+        checkObjectLiteral( unwrapped, type, checker, diagnostics, anchorNode, depth );
+    }
+    else if( ts.isArrayLiteralExpression( unwrapped ))
+    {
+        checkArrayLiteral( unwrapped, type, checker, diagnostics, anchorNode, depth );
+    }
+}
 
-        if( constant.kind !== 'object' ){ return }
+function checkArrayLiteral(
+    arr         : ts.ArrayLiteralExpression,
+    type        : ts.Type,
+    checker     : ts.TypeChecker,
+    diagnostics : ts.Diagnostic[],
+    anchorNode? : ts.Node,
+    depth       : number = 0
+)
+{
+    const peeled = peelTaggedIntersection( type, checker );
+    let baseType = peeled ? peeled.base : type;
+
+    if( typeof baseType.isIntersection === 'function' && baseType.isIntersection())
+    {
+        const arrayArm = baseType.types.find( t => checker.isTupleType( t ) || checker.isArrayType( t ));
+
+        if( arrayArm ){ baseType = arrayArm }
     }
 
-    if( ts.isObjectLiteralExpression( unwrapExpression( expr )))
+    if( checker.isTupleType( baseType ))
     {
-        checkObjectLiteral( unwrapExpression( expr ) as ts.ObjectLiteralExpression, type, checker, diagnostics );
+        const typeArgs = checker.getTypeArguments( baseType as ts.TypeReference );
+
+        for( let i = 0; i < arr.elements.length; i++ )
+        {
+            const el = arr.elements[i];
+
+            if( ts.isSpreadElement( el )){ continue }
+
+            const slotType = typeArgs[i] ?? checker.getIndexTypeOfType( baseType, ts.IndexKind.Number );
+
+            if( slotType )
+            {
+                checkExpressionAgainstType( el, slotType, checker, diagnostics, anchorNode, depth + 1 );
+            }
+        }
+    }
+    else if( checker.isArrayType( baseType ))
+    {
+        const elemType = checker.getTypeArguments( baseType as ts.TypeReference )[0]
+            ?? checker.getIndexTypeOfType( baseType, ts.IndexKind.Number );
+
+        if( !elemType ){ return }
+
+        for( const el of arr.elements )
+        {
+            if( ts.isSpreadElement( el )){ continue }
+
+            checkExpressionAgainstType( el, elemType, checker, diagnostics, anchorNode, depth + 1 );
+        }
     }
 }
 
 function checkObjectLiteral(
-    obj: ts.ObjectLiteralExpression,
-    type: ts.Type,
-    checker: ts.TypeChecker,
-    diagnostics: ts.Diagnostic[]
+    obj         : ts.ObjectLiteralExpression,
+    type        : ts.Type,
+    checker     : ts.TypeChecker,
+    diagnostics : ts.Diagnostic[],
+    anchorNode? : ts.Node,
+    depth       : number = 0
 )
 {
     for( const prop of obj.properties )
     {
-        if( !ts.isPropertyAssignment( prop )){ continue }
+        if( ts.isPropertyAssignment( prop ))
+        {
+            const name = prop.name;
 
-        const name = prop.name;
+            if( !ts.isIdentifier( name ) && !ts.isStringLiteral( name )){ continue }
 
-        if( !ts.isIdentifier( name ) && !ts.isStringLiteral( name )){ continue }
+            const propName = name.text;
+            const symbol = checker.getPropertyOfType( type, propName );
 
-        const propName = name.text;
-        const symbol = checker.getPropertyOfType( type, propName );
+            if( !symbol ){ continue }
 
-        if( !symbol ){ continue }
+            const propType = getSymbolType( checker, symbol );
 
-        const propType = getSymbolType( checker, symbol );
+            if( !propType ){ continue }
 
-        if( !propType ){ continue }
+            checkExpressionAgainstType( prop.initializer, propType, checker, diagnostics, anchorNode, depth + 1 );
+        }
+        else if( ts.isShorthandPropertyAssignment( prop ))
+        {
+            const propName = prop.name.text;
+            const symbol = checker.getPropertyOfType( type, propName );
 
-        checkExpressionAgainstType( prop.initializer, propType, checker, diagnostics );
+            if( !symbol ){ continue }
+
+            const propType = getSymbolType( checker, symbol );
+
+            if( !propType ){ continue }
+
+            const valueSymbol = checker.getShorthandAssignmentValueSymbol( prop );
+            const decl = valueSymbol?.valueDeclaration;
+
+            if( !decl || !ts.isVariableDeclaration( decl ) || !decl.initializer ){ continue }
+
+            if( !decl.parent || !ts.isVariableDeclarationList( decl.parent )){ continue }
+
+            if(( decl.parent.flags & ts.NodeFlags.Const ) === 0 ){ continue }
+
+            checkExpressionAgainstType(
+                decl.initializer,
+                propType,
+                checker,
+                diagnostics,
+                anchorNode ?? prop,
+                depth + 1
+            );
+        }
     }
+}
+
+function findEnclosingFunction( node: ts.Node ): ts.FunctionLikeDeclaration | undefined
+{
+    let current = node.parent;
+
+    while( current )
+    {
+        if( ts.isFunctionLike( current ))
+        {
+            return current as ts.FunctionLikeDeclaration;
+        }
+
+        current = current.parent;
+    }
+
+    return undefined;
+}
+
+function resolveReturnCheckType( fn: ts.FunctionLikeDeclaration, checker: ts.TypeChecker ): ts.Type
+{
+    const rawType = checker.getTypeFromTypeNode( fn.type! );
+    const isAsync = ts.canHaveModifiers( fn )
+        && ( ts.getModifiers( fn )?.some( m => m.kind === ts.SyntaxKind.AsyncKeyword ) ?? false );
+
+    if( isAsync && typeof ( checker as any ).getAwaitedType === 'function' )
+    {
+        return ( checker as any ).getAwaitedType( rawType ) ?? rawType;
+    }
+
+    return rawType;
 }
 
 /**
@@ -367,30 +545,120 @@ export function collectStaticConstraintDiagnostics(
     checker: ts.TypeChecker
 ): ts.Diagnostic[]
 {
-    const diagnostics: ts.Diagnostic[] = [];
+    const rawDiagnostics: ts.Diagnostic[] = [];
+    const helperBindings = new Map<string, string>();
+    const helperNamespaces = new Set<string>();
+
+    for( const statement of sourceFile.statements )
+    {
+        if( !ts.isImportDeclaration( statement )){ continue }
+
+        const moduleName = ts.isStringLiteral( statement.moduleSpecifier )
+            ? statement.moduleSpecifier.text
+            : '';
+        const isTypecheckerImport = moduleName === '@webergency-utils/typechecker' ||
+            /(?:^|\/)(?:src\/)?index\.(?:js|ts)$/.test( moduleName );
+
+        if( !isTypecheckerImport ){ continue }
+
+        const bindings = statement.importClause?.namedBindings;
+
+        if( bindings && ts.isNamedImports( bindings ))
+        {
+            for( const element of bindings.elements )
+            {
+                const importedName = element.propertyName?.text || element.name.text;
+
+                if( STATIC_MACRO_FUNCTIONS.has( importedName ))
+                {
+                    helperBindings.set( element.name.text, importedName );
+                }
+            }
+        }
+        else if( bindings && ts.isNamespaceImport( bindings ))
+        {
+            helperNamespaces.add( bindings.name.text );
+        }
+    }
 
     const visit = ( node: ts.Node ) =>
     {
         if( ts.isVariableDeclaration( node ) && node.type && node.initializer )
         {
             const type = checker.getTypeFromTypeNode( node.type );
-            checkExpressionAgainstType( node.initializer, type, checker, diagnostics );
+            checkExpressionAgainstType( node.initializer, type, checker, rawDiagnostics );
         }
         else if( ts.isPropertyDeclaration( node ) && node.type && node.initializer )
         {
             const type = checker.getTypeFromTypeNode( node.type );
-            checkExpressionAgainstType( node.initializer, type, checker, diagnostics );
+            checkExpressionAgainstType( node.initializer, type, checker, rawDiagnostics );
         }
         else if( ts.isParameter( node ) && node.type && node.initializer )
         {
             const type = checker.getTypeFromTypeNode( node.type );
-            checkExpressionAgainstType( node.initializer, type, checker, diagnostics );
+            checkExpressionAgainstType( node.initializer, type, checker, rawDiagnostics );
+        }
+        else if( ts.isAsExpression( node ) || ts.isSatisfiesExpression( node ))
+        {
+            const type = checker.getTypeFromTypeNode( node.type );
+            checkExpressionAgainstType( node.expression, type, checker, rawDiagnostics );
+        }
+        else if( ts.isReturnStatement( node ) && node.expression )
+        {
+            const enclosingFn = findEnclosingFunction( node );
+
+            if( enclosingFn && enclosingFn.type )
+            {
+                const returnType = resolveReturnCheckType( enclosingFn, checker );
+                checkExpressionAgainstType( node.expression, returnType, checker, rawDiagnostics );
+            }
+        }
+        else if( ts.isArrowFunction( node ) && node.type && !ts.isBlock( node.body ))
+        {
+            const returnType = resolveReturnCheckType( node, checker );
+            checkExpressionAgainstType( node.body, returnType, checker, rawDiagnostics );
+        }
+        else if( ts.isCallExpression( node ) && node.typeArguments?.[0] && node.arguments[0])
+        {
+            let fnName: string | undefined;
+
+            if( ts.isIdentifier( node.expression ))
+            {
+                fnName = helperBindings.get( node.expression.text );
+            }
+            else if(
+                ts.isPropertyAccessExpression( node.expression ) &&
+                ts.isIdentifier( node.expression.expression ) &&
+                helperNamespaces.has( node.expression.expression.text )
+            )
+            {
+                fnName = node.expression.name.text;
+            }
+
+            if( fnName && STATIC_MACRO_FUNCTIONS.has( fnName ))
+            {
+                const type = checker.getTypeFromTypeNode( node.typeArguments[0]);
+                checkExpressionAgainstType( node.arguments[0], type, checker, rawDiagnostics );
+            }
         }
 
         ts.forEachChild( node, visit );
     };
 
     visit( sourceFile );
+
+    const seen = new Set<string>();
+    const diagnostics: ts.Diagnostic[] = [];
+
+    for( const d of rawDiagnostics )
+    {
+        const key = `${d.start}:${d.length}:${String( d.messageText )}`;
+
+        if( seen.has( key )){ continue }
+
+        seen.add( key );
+        diagnostics.push( d );
+    }
 
     return diagnostics;
 }

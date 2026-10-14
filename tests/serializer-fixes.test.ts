@@ -184,16 +184,33 @@ describe( 'Serializer Fixes & Regressions', () =>
         expect( paths ).toContain( 'items[2]' );
     });
 
-    it( 'throws a compile-time error when passing a recursive type to serializer or stringify', () =>
+    it( 'serializes a recursive type correctly', async() =>
     {
-        expect(() => compileAndTransform( `
+        const mod = await emitAndImport<{
+            ser : ( input: any ) => string
+        }>( `
             import { serializer } from '../src/index.js';
             interface TreeNode {
                 value: number;
                 children?: TreeNode[];
             }
             export const ser = serializer<TreeNode>();
-        `, 'temp_ser_recursive_error' )).toThrow( /Recursive\/cyclic type .* is not supported by ahead-of-time serializer codegen/ );
+        `, 'temp_ser_recursive_success' );
+
+        const out = mod.ser({
+            value    : 1,
+            children : [
+                { value : 2 },
+                { value : 3, children : [{ value : 4 }] }
+            ]
+        });
+        expect( JSON.parse( out )).toEqual({
+            value    : 1,
+            children : [
+                { value : 2 },
+                { value : 3, children : [{ value : 4 }] }
+            ]
+        });
     });
 
     it( 'evaluates more specific object shapes before empty {} in strip mode union serialization', async() =>
@@ -487,4 +504,265 @@ describe( 'Serializer Fixes & Regressions', () =>
             config : {}
         });
     });
+
+    it( 'enforces BigIntLiteral equality including negative literals and unions in JSON and query modes', async() =>
+    {
+        const mod = await emitAndImport<{
+            serTen   : ( v: any, transform?: any ) => string
+            serTenQ  : ( v: any, transform?: any ) => string
+            serNeg   : ( v: any ) => string
+            serUnion : ( v: any ) => string
+        }>( `
+            import { stringify, tag } from '../src/index.js';
+            export const serTen = ( v: 10n & tag<'bigten'>, transform?: any ) =>
+                stringify<10n & tag<'bigten'>>( v, { transform } );
+            export const serTenQ = ( v: { n: 10n & tag<'bigten'> }, transform?: any ) =>
+                stringify<{ n: 10n & tag<'bigten'> }>( v, { format: 'query', transform } );
+            export const serNeg = ( v: -42n ) => stringify<-42n>( v );
+            export const serUnion = ( v: 1n | 2n ) => stringify<1n | 2n>( v );
+        `, 'temp_ser_bigint_literal' );
+
+        expect( mod.serTen( 10n )).toBe( '10' );
+        expect(() => mod.serTen( 11n as any )).toThrow( /Literal<10n>/ );
+
+        const seenTags: string[][] = [];
+        expect( mod.serTen( 9n as any, ( val: any, ctx: any ) =>
+        {
+            seenTags.push( ctx.tags );
+
+            return val + 1n;
+        })).toBe( '10' );
+        expect( seenTags ).toContainEqual([ 'bigten' ]);
+
+        expect( mod.serTenQ({ n : 10n })).toBe( 'n=10' );
+        expect(() => mod.serTenQ({ n : 11n as any })).toThrow( /Literal<10n>/ );
+
+        expect( mod.serNeg( -42n )).toBe( '-42' );
+        expect(() => mod.serNeg( 42n as any )).toThrow( /Literal<-42n>/ );
+
+        expect( mod.serUnion( 1n )).toBe( '1' );
+        expect( mod.serUnion( 2n )).toBe( '2' );
+        expect(() => mod.serUnion( 3n as any )).toThrow();
+    });
+
+    it( 'preserves all arms and invokes tag transform hooks on multi-arm tagged object intersections', async() =>
+    {
+        const mod = await emitAndImport<{
+            serTwoJson   : ( v: any, transform?: any ) => string
+            serTwoQuery  : ( v: any, transform?: any ) => string
+            serThreeJson : ( v: any, transform?: any ) => string
+        }>( `
+            import { stringify, tag } from '../src/index.js';
+            interface A { a: string }
+            interface B { b: number }
+            interface C { c: boolean }
+            type MergedTwo = A & B & tag<'audit'>;
+            type MergedThree = A & B & C & tag<'tri'>;
+            export const serTwoJson = ( v: MergedTwo, transform?: any ) =>
+                stringify<MergedTwo>( v, { transform } );
+            export const serTwoQuery = ( v: MergedTwo, transform?: any ) =>
+                stringify<MergedTwo>( v, { format: 'query', transform } );
+            export const serThreeJson = ( v: MergedThree, transform?: any ) =>
+                stringify<MergedThree>( v, { transform } );
+        `, 'temp_ser_multi_arm_tagged_intersection' );
+
+        const seenJsonTags: string[][] = [];
+        const jsonOut = mod.serTwoJson({ a : 'hello', b : 42 }, ( val: any, ctx: any ) =>
+        {
+            if( ctx.tags.length > 0 )
+            {
+                seenJsonTags.push( ctx.tags );
+
+                return { ...val, b : val.b + 1 };
+            }
+
+            return val;
+        });
+        expect( JSON.parse( jsonOut )).toEqual({ a : 'hello', b : 43 });
+        expect( seenJsonTags ).toContainEqual([ 'audit' ]);
+
+        const seenQueryTags: string[][] = [];
+        const queryOut = mod.serTwoQuery({ a : 'hello', b : 42 }, ( val: any, ctx: any ) =>
+        {
+            if( ctx.tags.length > 0 )
+            {
+                seenQueryTags.push( ctx.tags );
+
+                return { ...val, b : val.b + 1 };
+            }
+
+            return val;
+        });
+        const params = new URLSearchParams( queryOut );
+        expect( params.get( 'a' )).toBe( 'hello' );
+        expect( params.get( 'b' )).toBe( '43' );
+        expect( seenQueryTags ).toContainEqual([ 'audit' ]);
+
+        const seenThreeTags: string[][] = [];
+        const threeOut = mod.serThreeJson({ a : 'x', b : 7, c : true }, ( val: any, ctx: any ) =>
+        {
+            if( ctx.tags.length > 0 ){ seenThreeTags.push( ctx.tags ) }
+
+            return val;
+        });
+        expect( JSON.parse( threeOut )).toEqual({ a : 'x', b : 7, c : true });
+        expect( seenThreeTags ).toContainEqual([ 'tri' ]);
+    });
+
+    it( 'serializes and round-trips Set<T> and Map<K, V> in JSON and query modes with exact error paths', async() =>
+    {
+        const mod = await emitAndImport<{
+            serSetStr         : ( v: any ) => string
+            serSetQuery       : ( v: any ) => string
+            parseSetQuery     : ( qs: string ) => { tags : Set<string> }
+            serMapStrNum      : ( v: any ) => string
+            serMapNumBool     : ( v: any ) => string
+            serMapNumBoolQ    : ( v: any ) => string
+            parseMapNumBoolQ  : ( qs: string ) => { m : Map<number, boolean> }
+            serMapLit         : ( v: any ) => string
+            serNested         : ( v: any ) => string
+            parseNested       : ( json: string ) => Map<string, Set<number>>
+            serRootMapQuery   : ( v: any ) => string
+            parseRootMapQuery : ( qs: string ) => Map<string, string>
+            serTaggedSet      : ( v: any, tf?: any ) => string
+            serTaggedMap      : ( v: any, tf?: any ) => string
+        }>( `
+            import { stringify, parse, tag } from '../src/index.js';
+            export const serSetStr = ( v: Set<string> ) => stringify<Set<string>>( v );
+            export const serSetQuery = ( v: { tags: Set<string> } ) => stringify<{ tags: Set<string> }>( v, { format: 'query' } );
+            export const parseSetQuery = ( qs: string ) => parse<{ tags: Set<string> }>( qs, { from: 'query' } );
+            export const serMapStrNum = ( v: Map<string, number> ) => stringify<Map<string, number>>( v );
+            export const serMapNumBool = ( v: Map<number, boolean> ) => stringify<Map<number, boolean>>( v );
+            export const serMapNumBoolQ = ( v: { m: Map<number, boolean> } ) => stringify<{ m: Map<number, boolean> }>( v, { format: 'query' } );
+            export const parseMapNumBoolQ = ( qs: string ) => parse<{ m: Map<number, boolean> }>( qs, { from: 'query' } );
+            export const serMapLit = ( v: Map<'a' | 'b', string> ) => stringify<Map<'a' | 'b', string>>( v );
+            export const serNested = ( v: Map<string, Set<number>> ) => stringify<Map<string, Set<number>>>( v );
+            export const parseNested = ( json: string ) => parse<Map<string, Set<number>>>( json );
+            export const serRootMapQuery = ( v: Map<string, string> ) => stringify<Map<string, string>>( v, { format: 'query' } );
+            export const parseRootMapQuery = ( qs: string ) => parse<Map<string, string>>( qs, { from: 'query' } );
+            export const serTaggedSet = ( v: Set<string> & tag<'mySet'>, transform?: any ) =>
+                stringify<Set<string> & tag<'mySet'>>( v, { transform } );
+            export const serTaggedMap = ( v: Map<string, number> & tag<'myMap'>, transform?: any ) =>
+                stringify<Map<string, number> & tag<'myMap'>>( v, { transform } );
+        `, 'temp_ser_set_map' );
+
+        // Set<string> JSON & Query
+        expect( mod.serSetStr( new Set([ 'a', 'b' ]))).toBe( '["a","b"]' );
+        expect( mod.serSetStr( new Set())).toBe( '[]' );
+        expect(() => mod.serSetStr([ 'a', 'b' ] as any )).toThrow( /Type<Set>/ );
+        expect(() => mod.serSetStr( new Set([ 'ok', 42 as any ]))).toThrow( /"\[1\]".*Type<string>/ );
+
+        const qsSet = mod.serSetQuery({ tags : new Set([ 'x', 'y' ]) });
+        expect( mod.parseSetQuery( qsSet ).tags ).toEqual( new Set([ 'x', 'y' ]));
+        expect(() => mod.serSetQuery({ tags : [ 'x' ] as any })).toThrow( /Type<Set>/ );
+
+        // Map<string, number> & Map<number, boolean> & Map<'a' | 'b', string>
+        expect( mod.serMapStrNum( new Map([[ 'a', 1 ], [ 'b', 2 ]]))).toBe( '{"a":1,"b":2}' );
+        expect( mod.serMapStrNum( new Map())).toBe( '{}' );
+        expect(() => mod.serMapStrNum({ a : 1 } as any )).toThrow( /Type<Map>/ );
+        expect(() => mod.serMapStrNum( new Map([[ 'a', 'bad' as any ]]))).toThrow( /"\[a\]".*Type<number>/ );
+
+        expect( mod.serMapNumBool( new Map([[ 1, true ], [ 2, false ]]))).toBe( '{"1":true,"2":false}' );
+        expect(() => mod.serMapNumBool( new Map([[ 'bad' as any, true ]]))).toThrow( /\.key\(bad\).*Type<number>/ );
+
+        const qsMapNum = mod.serMapNumBoolQ({ m : new Map([[ 1, true ], [ 2, false ]]) });
+        expect( mod.parseMapNumBoolQ( qsMapNum ).m ).toEqual( new Map([[ 1, true ], [ 2, false ]]));
+
+        expect( mod.serMapLit( new Map([[ 'a', 'alpha' ], [ 'b', 'beta' ]]))).toBe( '{"a":"alpha","b":"beta"}' );
+        expect(() => mod.serMapLit( new Map([[ 'c' as any, 'gamma' ]]))).toThrow( /\.key\(c\)/ );
+
+        // Nested Map<string, Set<number>> round-trip
+        const nestedInput = new Map<string, Set<number>>([
+            [ 'g1', new Set([ 10, 20 ]) ],
+            [ 'g2', new Set() ]
+        ]);
+        const nestedJson = mod.serNested( nestedInput );
+        expect( nestedJson ).toBe( '{"g1":[10,20],"g2":[]}' );
+        expect( mod.parseNested( nestedJson )).toEqual( nestedInput );
+
+        // Root Map<string, string> in query mode
+        const rootMap = new Map([[ 'foo', 'bar' ], [ 'baz', 'qux' ]]);
+        const rootQs = mod.serRootMapQuery( rootMap );
+        expect( rootQs ).toBe( 'foo=bar&baz=qux' );
+        expect( mod.parseRootMapQuery( rootQs )).toEqual( rootMap );
+
+        // Tagged Set & Map transform hooks
+        const seenKinds: Array<{ type : string, tags : string[] }> = [];
+        expect( mod.serTaggedSet( new Set([ 'a' ]), ( val: any, ctx: any ) =>
+        {
+            if( ctx.tags.length > 0 ){ seenKinds.push({ type : ctx.type, tags : ctx.tags }) }
+
+            return val;
+        })).toBe( '["a"]' );
+        expect( mod.serTaggedMap( new Map([[ 'k', 1 ]]), ( val: any, ctx: any ) =>
+        {
+            if( ctx.tags.length > 0 ){ seenKinds.push({ type : ctx.type, tags : ctx.tags }) }
+
+            return val;
+        })).toBe( '{"k":1}' );
+        expect( seenKinds ).toEqual([
+            { type : 'Set', tags : [ 'mySet' ] },
+            { type : 'Map', tags : [ 'myMap' ] }
+        ]);
+    });
+
+    it( 'throws a compile-time error when Map has a non-primitive key type in stringify', () =>
+    {
+        expect(() => compileAndTransform( `
+            import { stringify } from '../src/index.js';
+            interface ObjKey { id: number }
+            export const run = ( m: Map<ObjKey, string> ) => stringify<Map<ObjKey, string>>( m );
+        `, 'temp_ser_invalid_map_key' )).toThrow( /Map key type .* is not supported/ );
+    });
+
+    it( 'serializes deeply nested Map<string, Map<string, number>> and Set<Set<string>> in JSON and query modes without variable shadowing or TDZ errors', async() =>
+    {
+        const mod = await emitAndImport<{
+            serNestedMapJson  : ( v: any ) => string
+            serNestedMapQuery : ( v: any ) => string
+            serNestedSetJson  : ( v: any ) => string
+            serNestedSetQuery : ( v: any ) => string
+            serCustomBrand    : ( v: any ) => string
+        }>( `
+            import { stringify, constraint } from '../src/index.js';
+            type NestedMap = Map<string, Map<string, number>>;
+            type NestedSet = { groups: Set<Set<string>> };
+            type CustomBrandStr = string & { readonly __customBrand?: unique symbol } & constraint.MinLength<2>;
+            export const serNestedMapJson = ( v: NestedMap ) => stringify<NestedMap>( v );
+            export const serNestedMapQuery = ( v: NestedMap ) => stringify<NestedMap>( v, { format: 'query' } );
+            export const serNestedSetJson = ( v: NestedSet ) => stringify<NestedSet>( v );
+            export const serNestedSetQuery = ( v: NestedSet ) => stringify<NestedSet>( v, { format: 'query' } );
+            export const serCustomBrand = ( v: CustomBrandStr ) => stringify<CustomBrandStr>( v );
+        `, 'temp_ser_deeply_nested_map_set' );
+
+        const nestedMap = new Map<string, Map<string, number>>([
+            [ 'outer1', new Map([[ 'innerA', 1 ], [ 'innerB', 2 ]]) ],
+            [ 'outer2', new Map([[ 'innerC', 3 ]]) ]
+        ]);
+        expect( mod.serNestedMapJson( nestedMap )).toBe( '{"outer1":{"innerA":1,"innerB":2},"outer2":{"innerC":3}}' );
+        expect( mod.serNestedMapQuery( nestedMap )).toBe( 'outer1%5BinnerA%5D=1&outer1%5BinnerB%5D=2&outer2%5BinnerC%5D=3' );
+
+        // Error path preserves both outer key and inner key without shadowing
+        const badNestedMap = new Map<string, Map<string, any>>([
+            [ 'outer1', new Map([[ 'innerA', 1 ]]) ],
+            [ 'outer2', new Map([[ 'innerBad', 'not-a-number' ]]) ]
+        ]);
+        expect(() => mod.serNestedMapJson( badNestedMap )).toThrow( /"\[outer2\]\[innerBad\]".*Type<number>/ );
+
+        const nestedSet = {
+            groups : new Set([ new Set([ 'a', 'b' ]), new Set([ 'c' ]) ])
+        };
+        expect( mod.serNestedSetJson( nestedSet )).toBe( '{"groups":[["a","b"],["c"]]}' );
+        expect( mod.serNestedSetQuery( nestedSet )).toBe( 'groups%5B%5D%5B%5D=a&groups%5B%5D%5B%5D=b&groups%5B%5D%5B%5D=c' );
+
+        // Error path preserves outer Set index and inner Set index without shadowing
+        const badNestedSet = {
+            groups : new Set([ new Set([ 'a' ]), new Set([ 123 as any ]) ])
+        };
+        expect(() => mod.serNestedSetJson( badNestedSet )).toThrow( /"groups\[1\]\[0\]".*Type<string>/ );
+
+        expect( mod.serCustomBrand( 'hello' )).toBe( '"hello"' );
+    });
 });
+
+

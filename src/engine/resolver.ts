@@ -31,12 +31,14 @@ import {
 } from './customFns.js';
 import {
     BUFFER_LIKE,
+    buildTemplateLiteralRegex,
     collectConstraintsFromProps,
     enumMemberTypes,
     getPropertyType,
     getTypeProps,
     isConstraintOnlyType,
     isNativeEnumType,
+    minifyTypeString,
     peelTaggedIntersection,
     tryMergeObjectTypes,
     tryTaggedUnionTypes,
@@ -46,17 +48,6 @@ import {
     type ParsedConstraint
 } from './type-helpers.js';
 import { createHash } from 'crypto';
-
-function minifyTypeString( str: string ): string 
-{
-    return str
-        .replace( /\{\s+/g, '{' )
-        .replace( /\s+\}/g, '}' )
-        .replace( /;\s*\}/g, '}' )
-        .replace( /;\s+/g, ',' )
-        .replace( /:\s+/g, ':' )
-        .replace( /\s+\|\s+/g, '|' );
-}
 
 /** Map peeled tag constraints onto JSON Schema / x-extension fields. */
 function applyConstraintsToJsonSchema(
@@ -71,7 +62,7 @@ function applyConstraintsToJsonSchema(
 {
     for( const c of constraints )
     {
-        if( c.type === 'default' ){ target.default = c.value }
+        if( c.type === 'default' ){ target.default = typeof c.value === 'bigint' ? Number( c.value ) : c.value }
         else if( c.type === 'requires' ){ target.requires = c.value }
         else if(
             c.type === 'minLength' || c.type === 'maxLength' ||
@@ -83,7 +74,10 @@ function applyConstraintsToJsonSchema(
             c.type === 'minContains' || c.type === 'maxContains'
         )
         {
-            if( c.value !== undefined ){ target[c.type] = c.value }
+            if( c.value !== undefined )
+            {
+                target[c.type] = typeof c.value === 'bigint' ? Number( c.value ) : c.value;
+            }
         }
         else if( c.type === 'uniqueItems' ){ target.uniqueItems = true }
         else if( c.type === 'contains' && c.nestedType && checker && defs && visited && counts && circularHashes )
@@ -230,7 +224,7 @@ function tryTaggedUnion(
 
     if( !tagged ){ return undefined }
 
-    const byTag: [string | number, ts.Expression][] = tagged.arms.map(( arm, i ) => [arm.tag, checks[i]]);
+    const byTag: [string | number | boolean, ts.Expression][] = tagged.arms.map(( arm, i ) => [arm.tag, checks[i]]);
 
     return createTaggedUnionCheck( tagged.key, byTag, expected );
 }
@@ -257,6 +251,16 @@ function constrainedBaseKind( type: ts.Type, checker: ts.TypeChecker ): { baseNa
     if( typeSymbolName( type ) === 'Date' )
     {
         return { baseName : 'date', baseType : type };
+    }
+
+    if( typeSymbolName( type ) === 'Set' )
+    {
+        return { baseName : 'set', baseType : type };
+    }
+
+    if( typeSymbolName( type ) === 'Map' )
+    {
+        return { baseName : 'map', baseType : type };
     }
 
     if( typeof checker.isArrayType === 'function' && checker.isArrayType( type ))
@@ -360,7 +364,7 @@ function buildValidatorScoped(
 
             if( kind )
             {
-                if( kind.baseName === 'array' && kind.baseType )
+                if(( kind.baseName === 'array' || kind.baseName === 'set' || kind.baseName === 'map' ) && kind.baseType )
                 {
                     const baseValidator = buildValidatorScoped( kind.baseType, checker, validatorsMap, scope );
                     result = createConstrainedPrimitiveCheck( kind.baseName, constraints, baseValidator );
@@ -495,26 +499,7 @@ function buildValidatorScoped(
     }
     else if( flags & ts.TypeFlags.TemplateLiteral ) 
     {
-        const templateType = type as ts.TemplateLiteralType;
-        let regexStr = '^';
-
-        for( let i = 0; i < templateType.texts.length; i++ ) 
-        {
-            regexStr += templateType.texts[i].replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
-
-            if( i < templateType.types.length ) 
-            {
-                const subType = templateType.types[i];
-                const subFlags = subType.getFlags();
-
-                if( subFlags & ts.TypeFlags.String ) { regexStr += '.*' }
-                else if( subFlags & ts.TypeFlags.Number ) { regexStr += '[0-9]+(\\.[0-9]+)?' }
-                else if( subFlags & ts.TypeFlags.BigInt ) { regexStr += '[0-9]+' }
-                else if( subFlags & ts.TypeFlags.Boolean ) { regexStr += '(true|false)' }
-                else { regexStr += '.*' }
-            }
-        }
-        regexStr += '$';
+        const regexStr = buildTemplateLiteralRegex( type as ts.TemplateLiteralType );
         result = wrapOptionTransform( createTemplateLiteralCheck( regexStr, checker.typeToString( type )), 'string' );
     }
     else if( type.isStringLiteral()) 
@@ -829,7 +814,12 @@ export function objectToAst( val: any ): ts.Expression
 
     if( typeof val === 'boolean' ) { return val ? ts.factory.createTrue() : ts.factory.createFalse() }
 
-    if( typeof val === 'bigint' ) { return ts.factory.createBigIntLiteral( val.toString() + 'n' ) }
+    if( typeof val === 'bigint' )
+    {
+        return val < 0n
+            ? ts.factory.createPrefixUnaryExpression( ts.SyntaxKind.MinusToken, ts.factory.createBigIntLiteral(( -val ).toString() + 'n' ))
+            : ts.factory.createBigIntLiteral( val.toString() + 'n' );
+    }
 
     if( Array.isArray( val )) 
     {

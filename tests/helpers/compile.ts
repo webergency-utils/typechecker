@@ -168,10 +168,8 @@ export async function emitAndImport<T extends Record<string, unknown> = Record<s
         const patched = output
             .replace( '@webergency-utils/typechecker/runtime', pathToFileURL( runtimeDist ).href )
             .replace( /from ['"]\.\.\/src\/index(?:\.js)?['"]/g, `from '${pathToFileURL( indexDist ).href}'` )
-            .replace( /from ['"]\.\/src\/index(?:\.js)?['"]/g, `from '${pathToFileURL( indexDist ).href}'` )
-            .replace( /from ['"]@webergency-utils\/typechecker['"]/g, `from '${pathToFileURL( indexDist ).href}'` );
+            .replace( /from ['"]\.\/src\/index(?:\.js)?['"]/g, `from '${pathToFileURL( indexDist ).href}'` );
         const file = path.join( dir, 'main.js' );
-
         fs.writeFileSync( file, patched );
 
         return await import( pathToFileURL( file ).href + '?t=' + Date.now()) as T;

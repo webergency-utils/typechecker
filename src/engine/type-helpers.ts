@@ -29,7 +29,7 @@ export const VERBATIM_CUSTOM_SCOPE: ICustomFunctionScope =
 export type TaggedUnionInfo =
     {
         key  : string
-        arms : { tag : string | number, type : ts.Type }[]
+        arms : { tag : string | number | boolean, type : ts.Type }[]
     };
 
 export type MergedPropInfo =
@@ -126,6 +126,39 @@ export function typeSymbolName( type: ts.Type ): string | undefined
     if( symbol && typeof symbol.getName === 'function' ){ return symbol.getName() }
 
     return typeof symbol?.name === 'string' ? symbol.name : undefined;
+}
+
+export function minifyTypeString( str: string ): string
+{
+    return str
+        .replace( /\{\s+/g, '{' )
+        .replace( /\s+\}/g, '}' )
+        .replace( /;\s*\}/g, '}' )
+        .replace( /;\s+/g, ',' )
+        .replace( /:\s+/g, ':' )
+        .replace( /\s+\|\s+/g, '|' );
+}
+
+export function unionExpectedLabel( type: ts.Type, checker: ts.TypeChecker ): string
+{
+    const aliasName = type.aliasSymbol && typeof type.aliasSymbol.getName === 'function'
+        ? type.aliasSymbol.getName()
+        : undefined;
+    const name = aliasName || typeSymbolName( type );
+
+    if( name && !name.startsWith( '__' ) && /^[A-Za-z_][A-Za-z0-9_]*$/.test( name ))
+    {
+        return `Type<${name}>`;
+    }
+
+    try
+    {
+        return `Type<${minifyTypeString( checker.typeToString( type ))}>`;
+    }
+    catch
+    {
+        return 'Type<Union>';
+    }
 }
 
 export function typeHasDefaultTag( type: ts.Type, checker: ts.TypeChecker ): boolean
@@ -231,11 +264,18 @@ export function isDiscriminableObject( type: ts.Type, checker: ts.TypeChecker ):
     return name !== 'Date' && name !== 'Set' && name !== 'Map' && name !== 'RegExp';
 }
 
-export function singleLiteralValue( type: ts.Type ): string | number | undefined
+export function singleLiteralValue( type: ts.Type ): string | number | boolean | undefined
 {
     if( typeof type.isStringLiteral === 'function' && type.isStringLiteral()){ return type.value }
 
     if( typeof type.isNumberLiteral === 'function' && type.isNumberLiteral()){ return type.value }
+
+    const flags = typeof type.getFlags === 'function' ? type.getFlags() : 0;
+
+    if(( flags & ts.TypeFlags.BooleanLiteral ) || ( type as any ).intrinsicName === 'true' || ( type as any ).intrinsicName === 'false' )
+    {
+        return ( type as any ).intrinsicName === 'true';
+    }
 
     return undefined;
 }
@@ -244,13 +284,13 @@ export function tryTaggedUnionTypes( members: readonly ts.Type[], checker: ts.Ty
 {
     if( members.length < 2 ){ return undefined }
 
-    const literalsByMember: Map<string, string | number>[] = [];
+    const literalsByMember: Map<string, string | number | boolean>[] = [];
 
     for( const member of members )
     {
         if( !isDiscriminableObject( member, checker )){ return undefined }
 
-        const literals = new Map<string, string | number>();
+        const literals = new Map<string, string | number | boolean>();
 
         for( const prop of getTypeProps( member, checker ))
         {
@@ -270,8 +310,8 @@ export function tryTaggedUnionTypes( members: readonly ts.Type[], checker: ts.Ty
 
     for( const key of literalsByMember[0].keys())
     {
-        const arms: { tag : string | number, type : ts.Type }[] = [];
-        const seen = new Set<string | number>();
+        const arms: { tag : string | number | boolean, type : ts.Type }[] = [];
+        const seen = new Set<string | number | boolean>();
 
         for( let i = 0; i < literalsByMember.length; i++ )
         {
@@ -296,16 +336,37 @@ export function stringIndexType( type: ts.Type, checker: ts.TypeChecker ): ts.Ty
     return checker.getIndexInfoOfType( type, ts.IndexKind.String )?.type;
 }
 
+function isMergeableObjectType( t: ts.Type, checker: ts.TypeChecker ): boolean
+{
+    if( isConstraintOnlyType( t, checker ) || isBrandOnlyType( t, checker )){ return false }
+
+    const flags = typeof t.getFlags === 'function' ? t.getFlags() : 0;
+    const isObj = (( flags & ts.TypeFlags.Object ) !== 0 ) || ( typeof ( t as any ).isClassOrInterface === 'function' && ( t as any ).isClassOrInterface());
+
+    if( !isObj ){ return false }
+
+    if( typeof checker.isArrayType === 'function' && checker.isArrayType( t )){ return false }
+
+    if( typeof checker.isTupleType === 'function' && checker.isTupleType( t )){ return false }
+
+    if( typeof t.getCallSignatures === 'function' && t.getCallSignatures().length > 0 && ( typeof t.getConstructSignatures !== 'function' || t.getConstructSignatures().length === 0 ))
+    {
+        return false;
+    }
+
+    const symName = typeSymbolName( t );
+
+    if( symName === 'Date' || symName === 'Set' || symName === 'Map' || symName === 'RegExp' || symName === 'Promise' || ( symName !== undefined && BUFFER_LIKE.has( symName )))
+    {
+        return false;
+    }
+
+    return true;
+}
+
 export function tryMergeObjectTypes( types: readonly ts.Type[], checker: ts.TypeChecker ): MergedObjectInfo | undefined
 {
-    const objectTypes = types.filter( t =>
-    {
-        if( isConstraintOnlyType( t, checker ) || isBrandOnlyType( t, checker )){ return false }
-
-        const flags = t.getFlags();
-
-        return (( flags & ts.TypeFlags.Object ) !== 0 ) || ( typeof ( t as any ).isClassOrInterface === 'function' && ( t as any ).isClassOrInterface());
-    });
+    const objectTypes = types.filter( t => isMergeableObjectType( t, checker ));
 
     if( objectTypes.length < 2 ){ return undefined }
 
@@ -347,8 +408,10 @@ export function tryMergeObjectTypes( types: readonly ts.Type[], checker: ts.Type
     return { props : [ ...propMap.values() ], indexType };
 }
 
-export function stripUndefinedFromType( type: ts.Type ): ts.Type
+export function stripUndefinedFromType( type: ts.Type | undefined ): ts.Type
 {
+    if( !type ){ return { getFlags : () => ts.TypeFlags.Any } as any }
+
     if( typeof type.isUnion !== 'function' || !type.isUnion()){ return type }
 
     const nonUndefined = type.types.filter( t => !( t.getFlags() & ts.TypeFlags.Undefined ));
@@ -362,6 +425,11 @@ export function getTagPropertyValue( type: ts.Type ): any
 {
     const actual = stripUndefinedFromType( type );
     let val = ( actual as any ).value;
+
+    if(( actual.getFlags() & ts.TypeFlags.BigIntLiteral ) && val && typeof val === 'object' && typeof val.base10Value === 'string' )
+    {
+        val = BigInt( `${val.negative ? '-' : ''}${val.base10Value}` );
+    }
 
     if( val === undefined && ( actual.getFlags() & ts.TypeFlags.BooleanLiteral ))
     {
@@ -408,17 +476,21 @@ export function collectConstraintsFromProps(
         if( pName.endsWith( '_message' ) && pName !== '__message' ){ continue }
 
         const declaration = prop.valueDeclaration || prop.declarations?.[0];
-        const pType = declaration ? checker.getTypeOfSymbolAtLocation( prop, declaration ) : ( prop as any ).type;
+        const pType = ( checker as any ).getTypeOfSymbol
+            ? ( checker as any ).getTypeOfSymbol( prop )
+            : ( declaration ? checker.getTypeOfSymbolAtLocation( prop, declaration ) : ( prop as any ).type );
         const actualType = stripUndefinedFromType( pType );
         const val = getTagPropertyValue( pType );
 
-        const msgProp = props.find( p => p.getName() === `${pName}_message` );
+        const msgProp = props.find(( p ) => p.getName() === `${pName}_message` );
         let constraintMsg: string | undefined;
 
         if( msgProp )
         {
             const msgDecl = msgProp.valueDeclaration || msgProp.declarations?.[0];
-            const msgType = msgDecl ? checker.getTypeOfSymbolAtLocation( msgProp, msgDecl ) : undefined;
+            const msgType = ( checker as any ).getTypeOfSymbol
+                ? ( checker as any ).getTypeOfSymbol( msgProp )
+                : ( msgDecl ? checker.getTypeOfSymbolAtLocation( msgProp, msgDecl ) : undefined );
             constraintMsg = msgType ? getStringLiteralValue( msgType ) : undefined;
         }
 
@@ -613,6 +685,36 @@ export function mergeTagConstraints( constraints: ParsedConstraint[]): ParsedCon
     return rest;
 }
 
+function synthesizeIntersection( original: ts.Type, types: ts.Type[]): ts.Type
+{
+    const proto = typeof original === 'object' && original !== null ? Object.getPrototypeOf( original ) : Object.prototype;
+
+    return Object.assign( Object.create( proto ), original,
+        {
+            id                    : undefined,
+            types,
+            flags                 : ts.TypeFlags.Intersection,
+            getFlags              : () => ts.TypeFlags.Intersection,
+            isIntersection        : () => true,
+            isUnion               : () => false,
+            isUnionOrIntersection : () => true
+        });
+}
+
+function resolveBaseCandidates( original: ts.Type, candidates: ts.Type[], checker: ts.TypeChecker ): ts.Type
+{
+    if( candidates.length === 1 ){ return candidates[0] }
+
+    if( tryMergeObjectTypes( candidates, checker ))
+    {
+        return synthesizeIntersection( original, candidates );
+    }
+
+    const nonObject = candidates.find( c => !isMergeableObjectType( c, checker ));
+
+    return nonObject ?? candidates[0];
+}
+
 /**
  * Peel tag / brand phantoms from an intersection. Returns base runtime type + constraints.
  * Brand-only arms are dropped. Constraint-only arms contribute tags only.
@@ -652,20 +754,7 @@ export function peelTaggedIntersection(
 
         if( withoutBrand.length === arms.length || withoutBrand.length === 0 ){ return undefined }
 
-        if( withoutBrand.length === 1 )
-        {
-            return { base : withoutBrand[0], constraints : [], hasTags : false };
-        }
-
-        const merged = tryMergeObjectTypes( withoutBrand, checker );
-
-        if( merged )
-        {
-            // Represent merged objects by synthesizing from first object arm — callers should use tryMergeObjectTypes on peel.base if intersection remains
-            return { base : withoutBrand[0], constraints : [], hasTags : false };
-        }
-
-        return { base : withoutBrand[0], constraints : [], hasTags : false };
+        return { base : resolveBaseCandidates( type, withoutBrand, checker ), constraints : [], hasTags : false };
     }
 
     if( constraints.length === 0 && baseCandidates.length === 0 ){ return undefined }
@@ -677,13 +766,9 @@ export function peelTaggedIntersection(
         // tags only — fall through toward any
         base = { getFlags : () => ts.TypeFlags.Any } as any;
     }
-    else if( baseCandidates.length === 1 )
-    {
-        base = baseCandidates[0];
-    }
     else
     {
-        base = baseCandidates[0];
+        base = resolveBaseCandidates( type, baseCandidates, checker );
     }
 
     return { base, constraints : mergeTagConstraints( constraints ), hasTags : constraints.length > 0 };
@@ -718,4 +803,139 @@ export function resolveWalkType( type: ts.Type, checker: ts.TypeChecker ): { typ
     }
 
     return { type, constraints : [] };
+}
+
+export function isValidMapKeyType( type: ts.Type, checker: ts.TypeChecker ): boolean
+{
+    let walk = type;
+
+    if( typeof walk.isIntersection === 'function' && walk.isIntersection())
+    {
+        const peeled = peelTaggedIntersection( walk, checker );
+
+        if( peeled ){ walk = peeled.base }
+    }
+
+    if( typeof walk.isUnion === 'function' && walk.isUnion())
+    {
+        return walk.types.length > 0 && walk.types.every( t => isValidMapKeyType( t, checker ));
+    }
+
+    const flags = typeof walk.getFlags === 'function' ? walk.getFlags() : 0;
+
+    if( flags & ( ts.TypeFlags.Any | ts.TypeFlags.Unknown )){ return true }
+
+    if(
+        flags & (
+            ts.TypeFlags.String |
+            ts.TypeFlags.Number |
+            ts.TypeFlags.Boolean |
+            ts.TypeFlags.BigInt |
+            ts.TypeFlags.StringLiteral |
+            ts.TypeFlags.NumberLiteral |
+            ts.TypeFlags.BooleanLiteral |
+            ts.TypeFlags.BigIntLiteral |
+            ts.TypeFlags.TemplateLiteral
+        )
+    )
+    {
+        return true;
+    }
+
+    if( typeof walk.isStringLiteral === 'function' && walk.isStringLiteral()){ return true }
+
+    if( typeof walk.isNumberLiteral === 'function' && walk.isNumberLiteral()){ return true }
+
+    if( isNativeEnumType( walk )){ return true }
+
+    return false;
+}
+
+export function assertValidMapKeyType( type: ts.Type, checker: ts.TypeChecker ): void
+{
+    if( isValidMapKeyType( type, checker )){ return }
+
+    let label = 'unknown';
+
+    try
+    {
+        label = checker.typeToString( type );
+    }
+    catch
+    { /* ignore */ }
+
+    throw new Error(
+        `[Webergency] Map key type '${label}' is not supported by ahead-of-time parse/serializer codegen; ` +
+        'Map keys must be string, number, boolean, bigint, template literal, enum, or a literal/union of these.'
+    );
+}
+
+function templateSlotRegex( subType: ts.Type ): string
+{
+    const subFlags = typeof subType.getFlags === 'function' ? subType.getFlags() : 0;
+
+    if( subFlags & ts.TypeFlags.String ){ return '.*' }
+
+    if( subFlags & ts.TypeFlags.Number ){ return '[+-]?(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?' }
+
+    if( subFlags & ts.TypeFlags.BigInt ){ return '[+-]?[0-9]+' }
+
+    if( subFlags & ts.TypeFlags.Boolean ){ return '(true|false)' }
+
+    if( typeof subType.isStringLiteral === 'function' && subType.isStringLiteral())
+    {
+        return String( subType.value ).replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
+    }
+
+    if( typeof subType.isNumberLiteral === 'function' && subType.isNumberLiteral())
+    {
+        return String( subType.value ).replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
+    }
+
+    if( subFlags & ts.TypeFlags.BooleanLiteral )
+    {
+        return ( subType as any ).intrinsicName === 'true' ? 'true' : 'false';
+    }
+
+    if( subFlags & ts.TypeFlags.BigIntLiteral )
+    {
+        return bigIntLiteralText( subType ).replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
+    }
+
+    if( subFlags & ts.TypeFlags.Null ){ return 'null' }
+
+    if( subFlags & ts.TypeFlags.Undefined ){ return 'undefined' }
+
+    if( typeof subType.isUnion === 'function' && subType.isUnion())
+    {
+        return `(?:${subType.types.map( t => templateSlotRegex( t )).join( '|' )})`;
+    }
+
+    return '.*';
+}
+
+export function buildTemplateLiteralRegex( templateType: ts.TemplateLiteralType ): string
+{
+    let regexStr = '^';
+
+    for( let i = 0; i < templateType.texts.length; i++ )
+    {
+        regexStr += templateType.texts[i].replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
+
+        if( i < templateType.types.length )
+        {
+            regexStr += templateSlotRegex( templateType.types[i]);
+        }
+    }
+
+    regexStr += '$';
+
+    return regexStr;
+}
+
+export function bigIntLiteralText( type: ts.Type ): string
+{
+    const raw = ( type as any ).value;
+
+    return typeof raw === 'object' && raw ? `${raw.negative ? '-' : ''}${raw.base10Value}` : String( raw );
 }

@@ -3,13 +3,15 @@ import { ValidationMode, type CoercionKind } from '../runtime/validators.js';
 import { type ICustomFunctionScope } from './customFns.js';
 import
 {
+    assertValidMapKeyType,
+    bigIntLiteralText,
     BUFFER_LIKE,
+    buildTemplateLiteralRegex,
     constraintTagNames,
     enumMemberTypes,
-    getTypeProps,
     isNativeEnumType,
-    isTagKey,
     mapStructuralProps,
+    minifyTypeString,
     ParsedConstraint,
     peelTaggedIntersection,
     safePropAccess,
@@ -18,6 +20,7 @@ import
     tryTaggedUnionTypes,
     typeHasDefaultTag,
     typeSymbolName,
+    unionExpectedLabel,
     VERBATIM_CUSTOM_SCOPE
 }
     from './type-helpers.js';
@@ -29,6 +32,14 @@ export interface ParseGeneratorOptions
     mode? : ValidationMode
     from? : ParseSource
 }
+
+type RecParseDef =
+    {
+        fnName : string
+        type   : ts.Type
+        mode   : ValidationMode
+        from   : ParseSource
+    };
 
 /** Query-style coercions shared by `from: 'query'` and `from: 'string'`. */
 function wantsQueryCoercion( from: ParseSource ): boolean
@@ -128,39 +139,6 @@ function assertStringSourceCompatible( type: ts.Type, checker: ts.TypeChecker, s
     );
 }
 
-function minifyTypeString( str: string ): string
-{
-    return str
-        .replace( /\{\s+/g, '{' )
-        .replace( /\s+\}/g, '}' )
-        .replace( /;\s*\}/g, '}' )
-        .replace( /;\s+/g, ',' )
-        .replace( /:\s+/g, ':' )
-        .replace( /\s+\|\s+/g, '|' );
-}
-
-function unionExpectedLabel( type: ts.Type, checker: ts.TypeChecker ): string
-{
-    const aliasName = type.aliasSymbol && typeof type.aliasSymbol.getName === 'function'
-        ? type.aliasSymbol.getName()
-        : undefined;
-    const name = aliasName || typeSymbolName( type );
-
-    if( name && !name.startsWith( '__' ) && /^[A-Za-z_][A-Za-z0-9_]*$/.test( name ))
-    {
-        return `Type<${name}>`;
-    }
-
-    try
-    {
-        return `Type<${minifyTypeString( checker.typeToString( type ))}>`;
-    }
-    catch
-    {
-        return 'Type<Union>';
-    }
-}
-
 /** Parenthesize path expressions so nested ternaries do not steal the appended segment. */
 function joinPath( pathExpr: string, segment: string ): string
 {
@@ -182,7 +160,9 @@ function coercionKindOf( type: ts.Type, checker: ts.TypeChecker ): CoercionKind
 
     if( flags & ts.TypeFlags.Number ){ return 'number' }
 
-    if( flags & ts.TypeFlags.BigInt || flags & ts.TypeFlags.BigIntLiteral ){ return 'bigint' }
+    if( flags & ts.TypeFlags.BigIntLiteral ){ return 'literal' }
+
+    if( flags & ts.TypeFlags.BigInt ){ return 'bigint' }
 
     if( flags & ts.TypeFlags.Boolean || flags & ts.TypeFlags.BooleanLiteral ){ return 'boolean' }
 
@@ -249,28 +229,86 @@ export function generateParseCode(
 {
     const mode = options.mode || 'strip';
     const from = options.from || 'json';
+    const hoisted: string[] = [];
+    const recDefs = new Map<number, RecParseDef>();
+    const wrapOuter = ( fnExpr: string ): string =>
+    {
+        const generatedRecFns = new Set<number>();
+
+        while( generatedRecFns.size < recDefs.size )
+        {
+            for( const [ id, def ] of recDefs.entries())
+            {
+                if( generatedRecFns.has( id )){ continue }
+
+                generatedRecFns.add( id );
+                const recVisited = new Set<number>();
+                const recBody = buildValidation( def.type, checker, def.mode, def.from, 'raw', 'p', 'root', scope, recVisited, hoisted, recDefs );
+                hoisted.push( `function ${def.fnName}( raw, p, root, transform ){ return ${recBody}; }` );
+            }
+        }
+
+        if( hoisted.length === 0 ){ return fnExpr }
+
+        return `( function(){ ${hoisted.join( ' ' )} return ${fnExpr}; })()`;
+    };
 
     if( from === 'string' )
     {
         assertStringSourceCompatible( type, checker, scope );
-        const body = buildValidation( type, checker, mode, 'string', 'input', 'path', 'input', scope );
+        const body = buildValidation( type, checker, mode, 'string', 'input', 'path', 'input', scope, new Set(), hoisted, recDefs );
 
         // Already-decoded scalar wire value — never parseQueryString / JSON.parse. Ignore reviver.
-        return `( function( raw, options ){ const path = ""; const transform = options && options.transform; const input = __tcRuntime.expectString( raw, path ); return ${body}; })`;
+        return wrapOuter( `( function( raw, options ){ const path = ""; const transform = options && options.transform; const input = __tcRuntime.expectString( raw, path ); return ${body}; })` );
     }
 
     if( from === 'query' )
     {
-        const body = buildValidation( type, checker, mode, 'query', 'rawQuery', 'path', 'rawQuery', scope );
+        const body = buildValidation( type, checker, mode, 'query', 'rawQuery', 'path', 'rawQuery', scope, new Set(), hoisted, recDefs );
 
         // Query text only — never starts with `?` (`url.search.slice(1)` / form body). Flag-keys stay flag-keys.
-        return `( function( input, options ){ const path = ""; const reviver = options && options.reviver; const transform = options && options.transform; const text = __tcRuntime.expectString( input, path ); let rawQuery = __tcRuntime.parseQueryString( text ); if( reviver ){ rawQuery = __tcRuntime.reviveTree( rawQuery, reviver ); } return ${body}; })`;
+        return wrapOuter( `( function( input, options ){ const path = ""; const reviver = options && options.reviver; const transform = options && options.transform; const text = __tcRuntime.expectString( input, path ); let rawQuery = __tcRuntime.parseQueryString( text ); if( reviver ){ rawQuery = __tcRuntime.reviveTree( rawQuery, reviver ); } return ${body}; })` );
     }
 
-    const body = buildValidation( type, checker, mode, 'json', 'obj', 'path', 'obj', scope );
+    const body = buildValidation( type, checker, mode, 'json', 'obj', 'path', 'obj', scope, new Set(), hoisted, recDefs );
 
     // JSON text only — always JSON.parse. Unquoted scalars belong on from:'string'.
-    return `( function( input, options ){ const path = ""; const reviver = options && options.reviver; const transform = options && options.transform; const text = __tcRuntime.expectString( input, path ); let obj; try { obj = JSON.parse( text ); } catch( e ){ throw new __tcRuntime.ParseError( path, "Invalid JSON: " + e.message ); } if( reviver ){ obj = __tcRuntime.reviveTree( obj, reviver ); } return ${body}; })`;
+    return wrapOuter( `( function( input, options ){ const path = ""; const reviver = options && options.reviver; const transform = options && options.transform; const text = __tcRuntime.expectString( input, path ); let obj; try { obj = JSON.parse( text ); } catch( e ){ throw new __tcRuntime.ParseError( path, "Invalid JSON: " + e.message ); } if( reviver ){ obj = __tcRuntime.reviveTree( obj, reviver ); } return ${body}; })` );
+}
+
+function serializeConstraintValue( v: any ): string
+{
+    if( typeof v === 'bigint' ){ return `${v}n` }
+
+    return JSON.stringify( v );
+}
+
+function serializeConstraints( list: ParsedConstraint[], hoisted: string[]): string
+{
+    if( list.length === 0 ){ return '[]' }
+
+    const items = list.map( c =>
+    {
+        const parts = [ `type: ${JSON.stringify( c.type )}` ];
+
+        if( c.value !== undefined ){ parts.push( `value: ${serializeConstraintValue( c.value )}` ) }
+
+        if( c.message !== undefined ){ parts.push( `message: ${JSON.stringify( c.message )}` ) }
+
+        if( c.type === 'pattern' && typeof c.value === 'string' )
+        {
+            const reVar = `__re_${hoisted.length}`;
+            hoisted.push( `const ${reVar} = __tcRuntime.getCachedPattern( ${JSON.stringify( c.value )} );` );
+            parts.push( `regex: ${reVar}` );
+        }
+
+        return `{ ${parts.join( ', ' )} }`;
+    });
+
+    const cVar = `__c_${hoisted.length}`;
+    hoisted.push( `const ${cVar} = [${items.join( ', ' )}];` );
+
+    return cVar;
 }
 
 function wrapConstraints(
@@ -285,7 +323,9 @@ function wrapConstraints(
     scope        : ICustomFunctionScope,
     kind         : CoercionKind,
     applyOption  : boolean,
-    visited?     : Set<number>
+    visited      : Set<number>,
+    hoisted      : string[],
+    recDefs      : Map<number, RecParseDef> = new Map()
 ): string
 {
     const tags = constraintTagNames( constraints );
@@ -347,7 +387,7 @@ function wrapConstraints(
     if( containsC?.nestedType )
     {
         const itemBody = buildValidation(
-            containsC.nestedType, checker, mode, from, 'item', 'itemP', rootExpr, scope, visited
+            containsC.nestedType, checker, mode, from, 'item', 'itemP', rootExpr, scope, visited, hoisted, recDefs
         );
         const minStr = minContains !== undefined ? String( minContains ) : '1';
         const maxStr = maxContains !== undefined ? String( maxContains ) : 'undefined';
@@ -359,7 +399,7 @@ function wrapConstraints(
     if( propertyNamesC?.nestedType )
     {
         const keyBody = buildValidation(
-            propertyNamesC.nestedType, checker, mode, from, 'key', 'keyP', rootExpr, scope, visited
+            propertyNamesC.nestedType, checker, mode, from, 'key', 'keyP', rootExpr, scope, visited, hoisted, recDefs
         );
         const msgArg = propertyNamesC.message !== undefined
             ? `, ${JSON.stringify( propertyNamesC.message )}`
@@ -368,11 +408,17 @@ function wrapConstraints(
             `__v = __tcRuntime.applyPropertyNames(__v, p, (key, keyP) => ${keyBody}${msgArg}); `;
     }
 
-    const optionCode = applyOption
+    const earlyInit = early.length > 0
+        ? `let __v = __tcRuntime.applyParseConstraints( raw, p, ${serializeConstraints( early, hoisted )}, ${JSON.stringify( from )}, root ); `
+        : 'let __v = raw; ';
+    const optionCode = ( applyOption || tags.length > 0 )
         ? `__v = __tcRuntime.applyParseTransform( __v, p, transform, ${JSON.stringify( kind )}, ${JSON.stringify( tags )}, root ); `
         : '';
+    const lateCode = late.length > 0
+        ? `__v = __tcRuntime.applyParseConstraints( __v, p, ${serializeConstraints( late, hoisted )}, ${JSON.stringify( from )}, root ); `
+        : '';
 
-    return `( function( raw, p, root ){ let __v = __tcRuntime.applyParseConstraints( raw, p, ${JSON.stringify( early )}, ${JSON.stringify( from )} ); ${customTransformCode}__v = ${inner}; ${optionCode}__v = __tcRuntime.applyParseConstraints( __v, p, ${JSON.stringify( late )}, ${JSON.stringify( from )} ); ${nestedConstraintCode}${customConstraintCode}return __v; })( ${varName}, ${pathExpr || '""'}, ${rootExpr} )`;
+    return `( function( raw, p, root ){ ${earlyInit}${customTransformCode}__v = ${inner}; ${optionCode}${lateCode}${nestedConstraintCode}${customConstraintCode}return __v; })( ${varName}, ${pathExpr || '""'}, ${rootExpr} )`;
 }
 
 function buildValidation(
@@ -384,7 +430,9 @@ function buildValidation(
     pathExpr : string,
     rootExpr : string,
     scope    : ICustomFunctionScope,
-    visited  : Set<number> = new Set()
+    visited  : Set<number> = new Set(),
+    hoisted  : string[] = [],
+    recDefs  : Map<number, RecParseDef> = new Map()
 ): string
 {
     const typeId = ( type as any ).id;
@@ -393,8 +441,16 @@ function buildValidation(
     {
         if( visited.has( typeId ))
         {
-            const label = unionExpectedLabel( type, checker );
-            throw new Error( `[Webergency] Recursive/cyclic type ${label} is not supported by ahead-of-time parser codegen; use assert/validate instead.` );
+            let def = recDefs.get( typeId );
+
+            if( !def )
+            {
+                const fnName = `__rec_parse_${typeId}_${hoisted.length}`;
+                def = { fnName, type, mode, from };
+                recDefs.set( typeId, def );
+            }
+
+            return `${def.fnName}( ${varName}, ${pathExpr || '""'}, ${rootExpr}, typeof transform !== 'undefined' ? transform : undefined )`;
         }
 
         visited.add( typeId );
@@ -408,15 +464,6 @@ function buildValidation(
         if( typeof type.isIntersection === 'function' && type.isIntersection())
         {
             const peeled = peelTaggedIntersection( type, checker, scope );
-            const merged = tryMergeObjectTypes(
-                type.types.filter( t =>
-                {
-                    const props = getTypeProps( t, checker );
-
-                    return !( props.length > 0 && props.every( p => isTagKey( p.getName())));
-                }),
-                checker
-            );
 
             if( peeled?.hasTags )
             {
@@ -430,7 +477,7 @@ function buildValidation(
                     if( inner )
                     {
                         return wrapConstraints(
-                            ( vn, pe ) => buildObjectValidation( inner.props, inner.indexType, checker, mode, from, vn, pe, rootExpr, scope, visited ),
+                            ( vn, pe ) => buildObjectValidation( inner.props, inner.indexType, checker, mode, from, vn, pe, rootExpr, scope, visited, hoisted, recDefs ),
                             constraints,
                             varName,
                             pathExpr,
@@ -441,24 +488,32 @@ function buildValidation(
                             scope,
                             'Object',
                             false,
-                            visited
+                            visited,
+                            hoisted,
+                            recDefs
                         );
                     }
                 }
             }
-            else if( merged )
+            else
             {
-                return buildObjectValidation( merged.props, merged.indexType, checker, mode, from, varName, pathExpr, rootExpr, scope, visited );
-            }
-            else if( peeled )
-            {
-                walkType = peeled.base;
-                constraints = peeled.constraints;
+                const merged = tryMergeObjectTypes( type.types, checker );
+
+                if( merged )
+                {
+                    return buildObjectValidation( merged.props, merged.indexType, checker, mode, from, varName, pathExpr, rootExpr, scope, visited, hoisted, recDefs );
+                }
+
+                if( peeled )
+                {
+                    walkType = peeled.base;
+                    constraints = peeled.constraints;
+                }
             }
         }
 
         return wrapConstraints(
-            ( vn, pe ) => buildValidationCore( walkType, checker, mode, from, vn, pe, rootExpr, scope, visited ),
+            ( vn, pe ) => buildValidationCore( walkType, checker, mode, from, vn, pe, rootExpr, scope, visited, hoisted, recDefs ),
             constraints,
             varName,
             pathExpr,
@@ -469,7 +524,9 @@ function buildValidation(
             scope,
             coercionKindOf( walkType, checker ),
             shouldApplyParseTransform( walkType, checker ),
-            visited
+            visited,
+            hoisted,
+            recDefs
         );
     }
     finally
@@ -487,7 +544,9 @@ function buildValidationCore(
     pathExpr : string,
     rootExpr : string,
     scope    : ICustomFunctionScope,
-    visited  : Set<number> = new Set()
+    visited  : Set<number> = new Set(),
+    hoisted  : string[] = [],
+    recDefs  : Map<number, RecParseDef> = new Map()
 ): string
 {
     const flags = typeof type.getFlags === 'function' ? type.getFlags() : ts.TypeFlags.Any;
@@ -548,6 +607,14 @@ function buildValidationCore(
         return `( function( v, path ){ if( v !== ${expected} ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( litCode )} ); } return v; })( ${varName}, ${p} )`;
     }
 
+    if( flags & ts.TypeFlags.BigIntLiteral )
+    {
+        const lit = bigIntLiteralText( type );
+        const litCode = `Literal<${lit}n>`;
+
+        return `( function( v, path ){ const b = __tcRuntime.coerceBigInt( v, path ); if( b !== ${lit}n ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( litCode )} ); } return b; })( ${varName}, ${p} )`;
+    }
+
     if( flags & ts.TypeFlags.String )
     {
         return `__tcRuntime.expectString( ${varName}, ${p} )`;
@@ -573,7 +640,7 @@ function buildValidationCore(
         return `__tcRuntime.expectBoolean( ${varName}, ${p} )`;
     }
 
-    if( flags & ts.TypeFlags.BigInt || flags & ts.TypeFlags.BigIntLiteral )
+    if( flags & ts.TypeFlags.BigInt )
     {
         return `__tcRuntime.coerceBigInt( ${varName}, ${p} )`;
     }
@@ -593,7 +660,8 @@ function buildValidationCore(
                 pathExpr,
                 rootExpr,
                 scope,
-                visited
+                visited,
+                hoisted
             );
         }
     }
@@ -612,29 +680,12 @@ function buildValidationCore(
 
     if( flags & ts.TypeFlags.TemplateLiteral )
     {
-        const templateType = type as ts.TemplateLiteralType;
-        let regexStr = '^';
-
-        for( let i = 0; i < templateType.texts.length; i++ )
-        {
-            regexStr += templateType.texts[i].replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
-
-            if( i < templateType.types.length )
-            {
-                const subType = templateType.types[i];
-                const subFlags = subType.getFlags();
-
-                if( subFlags & ts.TypeFlags.String ){ regexStr += '.*' }
-                else if( subFlags & ts.TypeFlags.Number ){ regexStr += '[0-9]+(\\.[0-9]+)?' }
-                else if( subFlags & ts.TypeFlags.BigInt ){ regexStr += '[0-9]+' }
-                else if( subFlags & ts.TypeFlags.Boolean ){ regexStr += '(true|false)' }
-                else { regexStr += '.*' }
-            }
-        }
-        regexStr += '$';
+        const regexStr = buildTemplateLiteralRegex( type as ts.TemplateLiteralType );
         const expected = checker.typeToString( type );
+        const reVar = `__re_${hoisted.length}`;
+        hoisted.push( `const ${reVar} = __tcRuntime.getCachedPattern( ${JSON.stringify( regexStr )} );` );
 
-        return `( function( v, path ){ if( typeof v !== "string" || !( new RegExp( ${JSON.stringify( regexStr )} ) ).test( v ) ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( expected )} ); } return v; })( ${varName}, ${p} )`;
+        return `( function( v, path ){ if( !${reVar} ){ throw new __tcRuntime.ParseError( path, "UnsafePattern" ); } if( typeof v !== "string" || !__tcRuntime.testRegex( ${reVar}, v ) ){ throw new __tcRuntime.ParseError( path, ${JSON.stringify( expected )} ); } return v; })( ${varName}, ${p} )`;
     }
 
     if( symbolName && BUFFER_LIKE.has( symbolName ))
@@ -646,7 +697,7 @@ function buildValidationCore(
     {
         const typeArgs = ( type as ts.TupleTypeReference ).typeArguments || [];
         const slots = typeArgs.map(( elem, i ) =>
-            buildValidation( elem, checker, mode, from, `arr[${i}]`, `p + "[${i}]"`, rootExpr, scope, visited )
+            buildValidation( elem, checker, mode, from, `arr[${i}]`, `p + "[${i}]"`, rootExpr, scope, visited, hoisted, recDefs )
         ).join( ', ' );
 
         return `( function( arr, p ){ if( !Array.isArray( arr ) || arr.length !== ${typeArgs.length} ){ throw new __tcRuntime.ParseError( p, "Tuple<${typeArgs.length}>" ); } return [${slots}]; })( ${varName}, ${p} )`;
@@ -655,7 +706,7 @@ function buildValidationCore(
     if( typeof checker.isArrayType === 'function' && checker.isArrayType( type ))
     {
         const elemType = ( checker as any ).getTypeArguments?.( type as ts.TypeReference )?.[0] || { getFlags : () => ts.TypeFlags.Any };
-        const elemCode = buildValidation( elemType, checker, mode, from, 'item', 'itemP', rootExpr, scope, visited );
+        const elemCode = buildValidation( elemType, checker, mode, from, 'item', 'itemP', rootExpr, scope, visited, hoisted, recDefs );
 
         if( wantsQueryCoercion( from ))
         {
@@ -663,6 +714,30 @@ function buildValidationCore(
         }
 
         return `( function( arr, p ){ __tcRuntime.expectArray( arr, p ); return arr.map( ( item, i ) => { const itemP = ( p ? p + "[" + i + "]" : "[" + i + "]" ); return ${elemCode}; } ); })( ${varName}, ${p} )`;
+    }
+
+    if( symbolName === 'Set' )
+    {
+        const elemType = ( checker as any ).getTypeArguments?.( type as ts.TypeReference )?.[0]
+            || ( type as ts.TypeReference ).typeArguments?.[0]
+            || ({ getFlags : () => ts.TypeFlags.Any } as any );
+        const elemCode = buildValidation( elemType, checker, mode, from, 'item', 'itemP', rootExpr, scope, visited, hoisted, recDefs );
+
+        return `__tcRuntime.parseSet( ${varName}, ${p}, ${JSON.stringify( from )}, ( item, itemP ) => ${elemCode} )`;
+    }
+
+    if( symbolName === 'Map' )
+    {
+        const typeArgs = ( checker as any ).getTypeArguments?.( type as ts.TypeReference )
+            || ( type as ts.TypeReference ).typeArguments
+            || [];
+        const keyType = typeArgs[0] || ({ getFlags : () => ts.TypeFlags.Any } as any );
+        const valueType = typeArgs[1] || ({ getFlags : () => ts.TypeFlags.Any } as any );
+        assertValidMapKeyType( keyType, checker );
+        const keyCode = buildValidation( keyType, checker, mode, 'string', 'k', 'keyP', rootExpr, scope, visited, hoisted, recDefs );
+        const valCode = buildValidation( valueType, checker, mode, from, 'val', 'valP', rootExpr, scope, visited, hoisted, recDefs );
+
+        return `__tcRuntime.parseMap( ${varName}, ${p}, ${JSON.stringify( from )}, ( k, keyP ) => ${keyCode}, ( val, valP ) => ${valCode} )`;
     }
 
     if( typeof type.isUnion === 'function' && type.isUnion())
@@ -680,15 +755,31 @@ function buildValidationCore(
 
         if( tagged )
         {
+            const hasBooleanTag = tagged.arms.some( a => typeof a.tag === 'boolean' );
+            const hasNumberTag = tagged.arms.some( a => typeof a.tag === 'number' );
+            let discExpr = `v && v[${JSON.stringify( tagged.key )}]`;
+
+            if( wantsQueryCoercion( from ))
+            {
+                if( hasBooleanTag )
+                {
+                    discExpr = `__tcRuntime.coerceBoolean( ${discExpr}, p )`;
+                }
+                else if( hasNumberTag )
+                {
+                    discExpr = `__tcRuntime.coerceNumber( ${discExpr}, p )`;
+                }
+            }
+
             const cases = tagged.arms.map( arm =>
-                `case ${JSON.stringify( arm.tag )}: return ${buildValidation( arm.type, checker, mode, from, 'v', 'p', rootExpr, scope, visited )};`
+                `case ${JSON.stringify( arm.tag )}: return ${buildValidation( arm.type, checker, mode, from, 'v', 'p', rootExpr, scope, visited, hoisted, recDefs )};`
             ).join( ' ' );
 
-            return `( function( v, p ){ switch( v && v[${JSON.stringify( tagged.key )}] ){ ${cases} default: throw new __tcRuntime.ParseError( p, ${JSON.stringify( label )} ); } })( ${varName}, ${p} )`;
+            return `( function( v, p ){ switch( ${discExpr} ){ ${cases} default: throw new __tcRuntime.ParseError( p, ${JSON.stringify( label )} ); } })( ${varName}, ${p} )`;
         }
 
         const armFns = arms.map( arm =>
-            `( v, p ) => ${buildValidation( arm, checker, mode, from, 'v', 'p', rootExpr, scope, visited )}`
+            `( v, p ) => ${buildValidation( arm, checker, mode, from, 'v', 'p', rootExpr, scope, visited, hoisted, recDefs )}`
         ).join( ', ' );
 
         return `__tcRuntime.parseUnion( ${varName}, ${p}, ${JSON.stringify( label )}, [ ${armFns} ] )`;
@@ -697,7 +788,7 @@ function buildValidationCore(
     const indexType = stringIndexType( type, checker );
     const props = mapStructuralProps( type, checker );
 
-    return buildObjectValidation( props, indexType, checker, mode, from, varName, pathExpr, rootExpr, scope, visited );
+    return buildObjectValidation( props, indexType, checker, mode, from, varName, pathExpr, rootExpr, scope, visited, hoisted, recDefs );
 }
 
 function buildObjectValidation(
@@ -710,7 +801,9 @@ function buildObjectValidation(
     pathExpr  : string,
     rootExpr  : string,
     scope     : ICustomFunctionScope,
-    visited?  : Set<number>
+    visited   : Set<number> = new Set(),
+    hoisted   : string[] = [],
+    recDefs   : Map<number, RecParseDef> = new Map()
 ): string
 {
     const propNames = props.map( p => p.name );
@@ -721,7 +814,7 @@ function buildObjectValidation(
     {
         const valAccess = safePropAccess( 'o', prop.name );
         const subPathExpr = joinPath( pathExpr, prop.name );
-        const subValCode = buildValidation( prop.type, checker, mode, from, valAccess, subPathExpr, rootExpr, scope, visited );
+        const subValCode = buildValidation( prop.type, checker, mode, from, valAccess, subPathExpr, rootExpr, scope, visited, hoisted, recDefs );
 
         if( prop.hasDefault )
         {
@@ -740,28 +833,28 @@ function buildObjectValidation(
     }
 
     let extraHandling = '';
-    let keysInit = '';
 
     if( indexType || mode === 'strict' || mode === 'relaxed' )
     {
-        keysInit = `const __keys = new Set( ${JSON.stringify( propNames )} ); `;
+        const keysVar = hoisted.length === 0 ? '__keys' : `__keys_${hoisted.length}`;
+        hoisted.push( `const ${keysVar} = new Set( ${JSON.stringify( propNames )} );` );
 
         if( indexType )
         {
-            const idxCode = buildValidation( indexType, checker, mode, from, 'o[k]', '( p ? p + "." + k : k )', rootExpr, scope, visited );
-            extraHandling = `for( const k in o ){ if( !__keys.has( k ) ){ res[k] = ${idxCode}; } }`;
+            const idxCode = buildValidation( indexType, checker, mode, from, 'o[k]', '( p ? p + "." + k : k )', rootExpr, scope, visited, hoisted, recDefs );
+            extraHandling = `for( const k of Object.keys( o ) ){ if( !${keysVar}.has( k ) ){ const __iv = ${idxCode}; if( k === "__proto__" || k === "constructor" || k === "prototype" ){ Object.defineProperty( res, k, { value: __iv, enumerable: true, configurable: true, writable: true } ); } else { res[k] = __iv; } } }`;
         }
         else if( mode === 'strict' )
         {
-            extraHandling = 'for( const k in o ){ if( !__keys.has( k ) ){ throw new __tcRuntime.ParseError( p, "PropertyNotAllowed<" + k + ">" ); } }';
+            extraHandling = `for( const k of Object.keys( o ) ){ if( !${keysVar}.has( k ) ){ throw new __tcRuntime.ParseError( p, "PropertyNotAllowed<" + k + ">" ); } }`;
         }
         else
         {
-            extraHandling = 'for( const k in o ){ if( !__keys.has( k ) ){ res[k] = o[k]; } }';
+            extraHandling = `for( const k of Object.keys( o ) ){ if( !${keysVar}.has( k ) ){ if( k === "__proto__" || k === "constructor" || k === "prototype" ){ Object.defineProperty( res, k, { value: o[k], enumerable: true, configurable: true, writable: true } ); } else { res[k] = o[k]; } } }`;
         }
     }
 
     const optCode = optionalAssignments.length > 0 ? optionalAssignments.join( ' ' ) + ' ' : '';
 
-    return `( function( o, p ){ o = __tcRuntime.expectObject( o, p ); ${keysInit}const res = { ${initialProps.join( ', ' )} }; ${optCode}${extraHandling} return res; })( ${varName}, ${pathExpr || '""'} )`;
+    return `( function( o, p ){ o = __tcRuntime.expectObject( o, p ); const res = { ${initialProps.join( ', ' )} }; ${optCode}${extraHandling} return res; })( ${varName}, ${pathExpr || '""'} )`;
 }

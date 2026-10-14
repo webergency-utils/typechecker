@@ -5,6 +5,7 @@ import {
     assert,
     assertGuard,
     jsonSchema,
+    standardSchema,
     validateSchema,
     isSchema,
     assertSchema,
@@ -20,6 +21,7 @@ describe( 'Runtime stubs without transformer', () =>
         expect(() => assert( 1 )).toThrow( /transformer was not applied/ );
         expect(() => assertGuard( 1 )).toThrow( /transformer was not applied/ );
         expect(() => jsonSchema()).toThrow( /transformer was not applied/ );
+        expect(() => standardSchema()).toThrow( /transformer was not applied/ );
     });
 
     it( 'runs schema helpers without the transformer', () =>

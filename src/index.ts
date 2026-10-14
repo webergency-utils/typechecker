@@ -13,7 +13,8 @@ import type {
     AssertGuardOptions,
     ValidationOptions,
     AssertOptions,
-    JsonSchema
+    JsonSchema,
+    StandardSchemaV1
 } from './runtime/validators.js';
 import type { JsonReviver, JsonReplacer, TransformFn } from './runtime/transform.js';
 
@@ -55,6 +56,12 @@ export function jsonSchema<T>(): JsonSchema
     throw new Error( TRANSFORMER_MISSING );
 }
 
+/** Standard Schema v1 (~standard) compliant schema wrapper for type `T`. */
+export function standardSchema<T>( _options?: ValidationMode | ValidationOptions ): StandardSchemaV1<unknown, ResolveDefaults<T>>
+{
+    throw new Error( TRANSFORMER_MISSING );
+}
+
 /** Schema type-predicate. Mutates in place; root-level coercion that replaces the value fails. */
 export function isSchema( schema: JsonSchema, input: unknown, options?: ValidationMode | GuardOptions ): boolean
 {
@@ -89,7 +96,9 @@ export {
     coerceJsonDate,
     groupErrorsByPath,
     toZodIssues,
-    ZodLikeError
+    ZodLikeError,
+    createStandardSchema,
+    toStandardSchemaIssues
 } from './runtime/validators.js';
 export type {
     IValidationError,
@@ -107,7 +116,8 @@ export type {
     JsonSchemaType,
     JsonSchemaTypescriptType,
     SchemaValidator,
-    SchemaAnnotationFrame
+    SchemaAnnotationFrame,
+    StandardSchemaV1
 } from './runtime/validators.js';
 export * from './runtime/tags.js';
 export * from './runtime/casing.js';

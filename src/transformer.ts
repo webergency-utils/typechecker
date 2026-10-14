@@ -27,12 +27,15 @@ export function buildSerializer(
 
     if( !map.has( resolvedHash ))
     {
-        const codeStr = generateSerializerCode( type, checker, { mode, format });
-        const ast = format === 'query'
-            ? templateToAst( `( function( input, options ){ const transform = options && options.transform; return ${codeStr}; })` )
-            : templateToAst(
-                `( function( input, options ){ const transform = options && options.transform; const replacer = options && options.replacer; const out = ${codeStr}; if( replacer ){ try { return JSON.stringify( JSON.parse( out ), replacer ); } catch( e ){ throw new __tcRuntime.SerializationError( "", e && e.message ? e.message : String( e ) ); } } return out; })`
-            );
+        const hoisted: string[] = [];
+        const codeStr = generateSerializerCode( type, checker, { mode, format, hoisted });
+        const innerFn = format === 'query'
+            ? `( function( input, options ){ const transform = options && options.transform; return ${codeStr}; })`
+            : `( function( input, options ){ const transform = options && options.transform; const replacer = options && options.replacer; const out = ${codeStr}; if( replacer ){ try { return JSON.stringify( JSON.parse( out ), replacer ); } catch( e ){ throw new __tcRuntime.SerializationError( "", e && e.message ? e.message : String( e ) ); } } return out; })`;
+        const wrapped = hoisted.length > 0
+            ? `( function(){ ${hoisted.join( ' ' )} return ${innerFn}; })()`
+            : innerFn;
+        const ast = templateToAst( wrapped );
         map.set( resolvedHash, ast );
     }
 
@@ -62,7 +65,7 @@ export function buildParser(
     return ts.factory.createIdentifier( `__parse_${resolvedHash}` );
 }
 
-const TYPE_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate', 'jsonSchema', 'serializer', 'stringify', 'parse'];
+const TYPE_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate', 'jsonSchema', 'serializer', 'stringify', 'parse', 'standardSchema'];
 const VALIDATION_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate'];
 
 function runtimeCall( runtimeNs: string, method: string, args: ts.Expression[]): ts.CallExpression
@@ -74,9 +77,17 @@ function runtimeCall( runtimeNs: string, method: string, args: ts.Expression[]):
     );
 }
 
-function argOrUndefined( args: ts.NodeArray<ts.Expression>, index: number ): ts.Expression
+function visitArgOrUndefined(
+    args    : ts.NodeArray<ts.Expression>,
+    index   : number,
+    visitor : ts.Visitor
+): ts.Expression
 {
-    return args[index] || ts.factory.createIdentifier( 'undefined' );
+    const arg = args[index];
+
+    if( !arg ){ return ts.factory.createIdentifier( 'undefined' ) }
+
+    return ts.visitNode( arg, visitor ) as ts.Expression;
 }
 
 function getPropName( prop: ts.ObjectLiteralElementLike ): string | undefined
@@ -350,12 +361,11 @@ export default function transformer( program: ts.Program )
 
                             if( fnName === 'serializer' || fnName === 'stringify' )
                             {
-                                const optsArg = fnName === 'serializer' ? node.arguments[0] : node.arguments[1];
+                                const optsIdx = fnName === 'serializer' ? 0 : 1;
+                                const optsArg = node.arguments[optsIdx];
                                 const options = parseSerializerOptions( optsArg, checker );
                                 const serRef = buildSerializer( type, checker, serializerCache, hash, options );
-                                const visitedOpts = optsArg
-                                    ? ts.visitNode( optsArg, visitor ) as ts.Expression
-                                    : ts.factory.createIdentifier( 'undefined' );
+                                const visitedOpts = visitArgOrUndefined( node.arguments, optsIdx, visitor );
 
                                 if( fnName === 'serializer' )
                                 {
@@ -372,31 +382,19 @@ export default function transformer( program: ts.Program )
                                     );
                                 }
 
-                                const inputArg = node.arguments[0];
+                                const inputVisitorResult = visitArgOrUndefined( node.arguments, 0, visitor );
 
-                                if( inputArg )
-                                {
-                                    const inputVisitorResult = ts.visitNode( inputArg, visitor ) as ts.Expression;
-
-                                    return ts.factory.createCallExpression( serRef, undefined, [inputVisitorResult, visitedOpts]);
-                                }
+                                return ts.factory.createCallExpression( serRef, undefined, [ inputVisitorResult, visitedOpts ]);
                             }
 
                             if( fnName === 'parse' )
                             {
                                 const options = parseParseOptions( node.arguments[1], checker );
                                 const parseRef = buildParser( type, checker, parserCache, hash, options, customFns );
-                                const inputArg = node.arguments[0];
-                                const visitedOpts = node.arguments[1]
-                                    ? ts.visitNode( node.arguments[1], visitor ) as ts.Expression
-                                    : ts.factory.createIdentifier( 'undefined' );
+                                const inputVisitorResult = visitArgOrUndefined( node.arguments, 0, visitor );
+                                const visitedOpts = visitArgOrUndefined( node.arguments, 1, visitor );
 
-                                if( inputArg )
-                                {
-                                    const inputVisitorResult = ts.visitNode( inputArg, visitor ) as ts.Expression;
-
-                                    return ts.factory.createCallExpression( parseRef, undefined, [inputVisitorResult, visitedOpts]);
-                                }
+                                return ts.factory.createCallExpression( parseRef, undefined, [ inputVisitorResult, visitedOpts ]);
                             }
 
                             if( fnName === 'jsonSchema' )
@@ -410,6 +408,19 @@ export default function transformer( program: ts.Program )
                                 return ts.factory.createIdentifier( `__schema_${hash}` );
                             }
 
+                            if( fnName === 'standardSchema' )
+                            {
+                                if( !validatorCache.has( hash ))
+                                {
+                                    buildValidator( type, checker, validatorCache, hash, customFns );
+                                }
+
+                                const validatorRef = ts.factory.createIdentifier( `__val_${hash}` );
+                                const optionsArg = visitArgOrUndefined( node.arguments, 0, visitor );
+
+                                return runtimeCall( emitNames.runtimeNs, 'createStandardSchema', [ validatorRef, optionsArg ]);
+                            }
+
                             if( VALIDATION_FUNCTIONS.includes( fnName ))
                             {
                                 if( !validatorCache.has( hash ))
@@ -417,11 +428,11 @@ export default function transformer( program: ts.Program )
                                     buildValidator( type, checker, validatorCache, hash, customFns );
                                 }
 
-                                const inputArg = argOrUndefined( node.arguments, 0 );
-                                const optionsArg = argOrUndefined( node.arguments, 1 );
+                                const inputArg = visitArgOrUndefined( node.arguments, 0, visitor );
+                                const optionsArg = visitArgOrUndefined( node.arguments, 1, visitor );
                                 const validatorRef = ts.factory.createIdentifier( `__val_${hash}` );
 
-                                return runtimeCall( emitNames.runtimeNs, fnName, [validatorRef, inputArg, optionsArg]);
+                                return runtimeCall( emitNames.runtimeNs, fnName, [ validatorRef, inputArg, optionsArg ]);
                             }
                         }
                     }

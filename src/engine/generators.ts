@@ -113,6 +113,10 @@ function constrainedCoercionKind( baseType: string ): string
 
     if( baseType === 'array' ){ return 'Array' }
 
+    if( baseType === 'set' ){ return 'Set' }
+
+    if( baseType === 'map' ){ return 'Map' }
+
     return baseType;
 }
 
@@ -197,7 +201,10 @@ export function createConstrainedPrimitiveCheck( baseType: string, constraints: 
 
     if( defaultConstraint ) 
     {
-        defaultInit = `if (v === undefined) v = ${JSON.stringify( defaultConstraint.value )};\n        `;
+        const defaultLiteral = typeof defaultConstraint.value === 'bigint'
+            ? `${defaultConstraint.value}n`
+            : JSON.stringify( defaultConstraint.value );
+        defaultInit = `if (v === undefined) v = ${defaultLiteral};\n        `;
     }
 
     let transformInit = '';
@@ -307,7 +314,12 @@ export function createLiteralCheck( value: string | number | boolean | ts.Pseudo
                 typeof value === 'string' ? ts.factory.createStringLiteral( value ) :
                     typeof value === 'number' ? ts.factory.createNumericLiteral( value.toString()) :
                         typeof value === 'boolean' ? ( value ? ts.factory.createTrue() : ts.factory.createFalse()) :
-                            ts.factory.createBigIntLiteral(( value as any ).base10Value + 'n' )
+                            ( value as ts.PseudoBigInt ).negative
+                                ? ts.factory.createPrefixUnaryExpression(
+                                    ts.SyntaxKind.MinusToken,
+                                    ts.factory.createBigIntLiteral(( value as ts.PseudoBigInt ).base10Value + 'n' )
+                                )
+                                : ts.factory.createBigIntLiteral(( value as ts.PseudoBigInt ).base10Value + 'n' )
             ]
         )
     );
@@ -331,14 +343,16 @@ export type NullableKind = 'optional' | 'nullable' | 'nullish';
 
 export function createTaggedUnionCheck(
     key: string,
-    byTag: [string | number, ts.Expression][],
+    byTag: [string | number | boolean, ts.Expression][],
     expected: string
 ): ts.Expression
 {
     const entries = byTag.map(([value, check]) => ts.factory.createArrayLiteralExpression([
-        typeof value === 'number'
-            ? ts.factory.createNumericLiteral( value.toString())
-            : ts.factory.createStringLiteral( value ),
+        typeof value === 'boolean'
+            ? ( value ? ts.factory.createTrue() : ts.factory.createFalse())
+            : typeof value === 'number'
+                ? ts.factory.createNumericLiteral( value.toString())
+                : ts.factory.createStringLiteral( value ),
         check
     ]));
 

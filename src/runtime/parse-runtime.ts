@@ -1,5 +1,6 @@
-import { validators } from './validators.js';
-import { getCachedPattern } from './regex.js';
+import { validators, isMultipleOfNumber, hasUniqueItems, isPlainObject } from './validators.js';
+import { getCachedPattern, testRegex } from './regex.js';
+import { resolvePath, hasPath } from './path.js';
 import type { CoercionKind } from './validators.js';
 import
 {
@@ -333,6 +334,99 @@ export function coerceArray<T>( val: any, path: string, mapper: ( item: any, ite
     return arr.map(( item, idx ) => mapper( item, `${path}[${idx}]` ));
 }
 
+export function parseSet<T>(
+    val    : any,
+    path   : string,
+    from   : 'json' | 'query' | 'string',
+    mapper : ( item: any, itemPath: string ) => T
+): Set<T>
+{
+    let items: any[];
+
+    if( val instanceof Set )
+    {
+        items = [ ...val ];
+    }
+    else if( Array.isArray( val ))
+    {
+        items = val;
+    }
+    else if( from === 'query' || from === 'string' )
+    {
+        if( val === undefined || val === null ){ return new Set<T>() }
+
+        if( typeof val === 'object' && Object.keys( val ).length === 0 ){ return new Set<T>() }
+
+        items = [ val ];
+    }
+    else
+    {
+        throw new ParseError( path, 'Type<Set>' );
+    }
+
+    const out = new Set<T>();
+
+    for( let i = 0; i < items.length; i++ )
+    {
+        out.add( mapper( items[i], `${path}[${i}]` ));
+    }
+
+    return out;
+}
+
+export function parseMap<K, V>(
+    val       : any,
+    path      : string,
+    from      : 'json' | 'query' | 'string',
+    keyMapper : ( k: any, keyPath: string ) => K,
+    valMapper : ( v: any, valPath: string ) => V
+): Map<K, V>
+{
+    const out = new Map<K, V>();
+
+    if( val instanceof Map )
+    {
+        for( const [ k, v ] of val.entries())
+        {
+            const mappedK = keyMapper( k, `${path}.key(${String( k )})` );
+            const mappedV = valMapper( v, `${path}[${String( k )}]` );
+            out.set( mappedK, mappedV );
+        }
+
+        return out;
+    }
+
+    if(( from === 'query' || from === 'string' ) && ( val === undefined || val === null ))
+    {
+        return out;
+    }
+
+    const allowSparseArray = ( from === 'query' || from === 'string' ) && Array.isArray( val );
+
+    if(
+        val === null ||
+        typeof val !== 'object' ||
+        ( Array.isArray( val ) && !allowSparseArray ) ||
+        val instanceof Set ||
+        val instanceof Date ||
+        val instanceof RegExp
+    )
+    {
+        throw new ParseError( path, 'Type<Map>' );
+    }
+
+    for( const k of Object.keys( val ))
+    {
+        if( val[k] === undefined ){ continue }
+
+        const mappedK = keyMapper( k, `${path}.key(${k})` );
+        const mappedV = valMapper( val[k], `${path}[${k}]` );
+        out.set( mappedK, mappedV );
+    }
+
+    return out;
+}
+
 export function coerceBuffer( val: any, path: string ): Buffer
 {
     if( typeof Buffer !== 'undefined' && Buffer.isBuffer( val )){ return val }
@@ -378,6 +472,7 @@ export type ParseConstraint =
         type     : string
         value?   : any
         message? : string
+        regex?   : RegExp | null
     };
 
 /**
@@ -387,7 +482,8 @@ export function applyParseConstraints(
     val         : any,
     path        : string,
     constraints : ParseConstraint[],
-    from?       : 'json' | 'query' | 'string'
+    from?       : 'json' | 'query' | 'string',
+    root?       : any
 ): any
 {
     let v = val;
@@ -447,35 +543,53 @@ export function applyParseConstraints(
         }
         else if( c.type === 'minimum' )
         {
-            if( typeof v === 'number' && v < c.value )
+            if(( typeof v === 'number' || typeof v === 'bigint' ) && v < c.value )
             {
                 throw new ParseError( path, msg || `Minimum<${c.value}>` );
             }
         }
         else if( c.type === 'maximum' )
         {
-            if( typeof v === 'number' && v > c.value )
+            if(( typeof v === 'number' || typeof v === 'bigint' ) && v > c.value )
             {
                 throw new ParseError( path, msg || `Maximum<${c.value}>` );
             }
         }
         else if( c.type === 'exclusiveMinimum' )
         {
-            if( typeof v === 'number' && v <= c.value )
+            if(( typeof v === 'number' || typeof v === 'bigint' ) && v <= c.value )
             {
                 throw new ParseError( path, msg || `ExclusiveMinimum<${c.value}>` );
             }
         }
         else if( c.type === 'exclusiveMaximum' )
         {
-            if( typeof v === 'number' && v >= c.value )
+            if(( typeof v === 'number' || typeof v === 'bigint' ) && v >= c.value )
             {
                 throw new ParseError( path, msg || `ExclusiveMaximum<${c.value}>` );
             }
         }
         else if( c.type === 'multipleOf' )
         {
-            if( typeof v === 'number' && c.value !== 0 && v % c.value !== 0 )
+            if( typeof v === 'bigint' || typeof c.value === 'bigint' )
+            {
+                try
+                {
+                    const divisor = BigInt( c.value );
+
+                    if( divisor === 0n || BigInt( v ) % divisor !== 0n )
+                    {
+                        throw new ParseError( path, msg || `MultipleOf<${c.value}>` );
+                    }
+                }
+                catch( e )
+                {
+                    if( e instanceof ParseError ){ throw e }
+
+                    throw new ParseError( path, msg || `MultipleOf<${c.value}>` );
+                }
+            }
+            else if( typeof v === 'number' && !isMultipleOfNumber( v, c.value ))
             {
                 throw new ParseError( path, msg || `MultipleOf<${c.value}>` );
             }
@@ -484,42 +598,48 @@ export function applyParseConstraints(
         {
             if( typeof v === 'string' )
             {
-                const regex = getCachedPattern( c.value );
+                const regex = c.regex !== undefined ? c.regex : getCachedPattern( c.value );
 
                 if( !regex ){ throw new ParseError( path, msg || 'UnsafePattern' ) }
 
-                if( !regex.test( v ))
+                if( !testRegex( regex, v ))
                 {
                     throw new ParseError( path, msg || `Pattern<'${c.value}'>` );
                 }
             }
         }
-        else if( c.type === 'minItems' )
+        else if( c.type === 'minItems' && ( Array.isArray( v ) || v instanceof Set ))
         {
-            if( Array.isArray( v ) && v.length < c.value )
+            const size = v instanceof Set ? v.size : v.length;
+
+            if( size < c.value )
             {
                 throw new ParseError( path, msg || `MinItems<${c.value}>` );
             }
         }
-        else if( c.type === 'maxItems' )
+        else if( c.type === 'maxItems' && ( Array.isArray( v ) || v instanceof Set ))
         {
-            if( Array.isArray( v ) && v.length > c.value )
+            const size = v instanceof Set ? v.size : v.length;
+
+            if( size > c.value )
             {
                 throw new ParseError( path, msg || `MaxItems<${c.value}>` );
             }
         }
-        else if( c.type === 'minProperties' )
+        else if( c.type === 'minProperties' && ( v instanceof Map || isPlainObject( v )))
         {
-            if( v !== null && typeof v === 'object' && !Array.isArray( v ) &&
-                Object.keys( v ).length < c.value )
+            const size = v instanceof Map ? v.size : Object.keys( v ).length;
+
+            if( size < c.value )
             {
                 throw new ParseError( path, msg || `MinProperties<${c.value}>` );
             }
         }
-        else if( c.type === 'maxProperties' )
+        else if( c.type === 'maxProperties' && ( v instanceof Map || isPlainObject( v )))
         {
-            if( v !== null && typeof v === 'object' && !Array.isArray( v ) &&
-                Object.keys( v ).length > c.value )
+            const size = v instanceof Map ? v.size : Object.keys( v ).length;
+
+            if( size > c.value )
             {
                 throw new ParseError( path, msg || `MaxProperties<${c.value}>` );
             }
@@ -532,7 +652,7 @@ export function applyParseConstraints(
                 errors  : [] as { path : string, value : any, error : string }[],
                 mode    : 'strict' as const,
                 from,
-                root    : v
+                root    : root !== undefined ? root : v
             };
             v = validators.format( v, path, ctx as any, c.value, msg );
 
@@ -544,10 +664,13 @@ export function applyParseConstraints(
         else if( c.type === 'requires' )
         {
             const keys = Array.isArray( c.value ) ? c.value : [c.value];
+            const rootTarget = root !== undefined ? root : v;
 
             for( const key of keys )
             {
-                if( v == null || v[key] === undefined )
+                const resolved = resolvePath( path, key );
+
+                if( !hasPath( rootTarget, resolved ))
                 {
                     throw new ParseError( path, msg || `Requires<${key}>` );
                 }
@@ -555,21 +678,9 @@ export function applyParseConstraints(
         }
         else if( c.type === 'uniqueItems' )
         {
-            if( Array.isArray( v ))
+            if( Array.isArray( v ) && !hasUniqueItems( v ))
             {
-                const seen = new Set<string>();
-
-                for( const item of v )
-                {
-                    const key = JSON.stringify( item );
-
-                    if( seen.has( key ))
-                    {
-                        throw new ParseError( path, msg || 'UniqueItems' );
-                    }
-
-                    seen.add( key );
-                }
+                throw new ParseError( path, msg || 'UniqueItems' );
             }
         }
     }
