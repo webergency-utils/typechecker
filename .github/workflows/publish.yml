@@ -10,6 +10,7 @@ jobs:
   publish:
     name: Publish to npm
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     # Must match Trusted Publisher "Environment name" on npmjs.com exactly (`npm`).
     # Leave blank on npmjs.com only if you remove this key.
     environment: npm
@@ -77,18 +78,34 @@ jobs:
           ATTEST_URL="https://registry.npmjs.org/-/npm/v1/attestations/$(node -p "encodeURIComponent(require('./package.json').name)")@${VER}"
 
           echo "Waiting for npm attestations at ${ATTEST_URL}..."
-          for i in $(seq 1 30); do
-            if curl -fsSL "${ATTEST_URL}" -o attestations.json; then
-              if jq -e '.attestations | length > 0' attestations.json >/dev/null; then
+          DELAY=10
+          FACTOR="1.2"
+          MAX_DELAY=60
+          TOTAL_WAIT=0
+          TIMEOUT=900
+          ATTEMPT=1
+          WAIT_TIME=30
+
+          while [ "${TOTAL_WAIT}" -le "${TIMEOUT}" ]; do
+            echo "Waiting ${WAIT_TIME}s (attempt ${ATTEMPT}, elapsed: ${TOTAL_WAIT}s / ${TIMEOUT}s)..."
+            sleep "${WAIT_TIME}"
+            TOTAL_WAIT=$((TOTAL_WAIT + WAIT_TIME))
+
+            if curl -fsSL "${ATTEST_URL}" -o attestations.json 2>/dev/null; then
+              if jq -e '.attestations | length > 0' attestations.json >/dev/null 2>&1; then
+                echo "npm attestations found after ${TOTAL_WAIT}s!"
                 break
               fi
             fi
             rm -f attestations.json
-            sleep 10
+
+            WAIT_TIME="${DELAY}"
+            DELAY="$(node -p "Math.min(Math.round(${DELAY} * ${FACTOR}), ${MAX_DELAY})")"
+            ATTEMPT=$((ATTEMPT + 1))
           done
 
           if [ ! -f attestations.json ]; then
-            echo "Timed out waiting for npm attestations"
+            echo "Timed out waiting for npm attestations (${TOTAL_WAIT}s elapsed)"
             exit 1
           fi
 
