@@ -224,7 +224,7 @@ function tryTaggedUnion(
 
     if( !tagged ){ return undefined }
 
-    const byTag: [string | number, ts.Expression][] = tagged.arms.map(( arm, i ) => [arm.tag, checks[i]]);
+    const byTag: [string | number | boolean, ts.Expression][] = tagged.arms.map(( arm, i ) => [arm.tag, checks[i]]);
 
     return createTaggedUnionCheck( tagged.key, byTag, expected );
 }

@@ -343,14 +343,16 @@ export type NullableKind = 'optional' | 'nullable' | 'nullish';
 
 export function createTaggedUnionCheck(
     key: string,
-    byTag: [string | number, ts.Expression][],
+    byTag: [string | number | boolean, ts.Expression][],
     expected: string
 ): ts.Expression
 {
     const entries = byTag.map(([value, check]) => ts.factory.createArrayLiteralExpression([
-        typeof value === 'number'
-            ? ts.factory.createNumericLiteral( value.toString())
-            : ts.factory.createStringLiteral( value ),
+        typeof value === 'boolean'
+            ? ( value ? ts.factory.createTrue() : ts.factory.createFalse())
+            : typeof value === 'number'
+                ? ts.factory.createNumericLiteral( value.toString())
+                : ts.factory.createStringLiteral( value ),
         check
     ]));
 

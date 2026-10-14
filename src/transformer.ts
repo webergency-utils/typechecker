@@ -65,7 +65,7 @@ export function buildParser(
     return ts.factory.createIdentifier( `__parse_${resolvedHash}` );
 }
 
-const TYPE_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate', 'jsonSchema', 'serializer', 'stringify', 'parse'];
+const TYPE_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate', 'jsonSchema', 'serializer', 'stringify', 'parse', 'standardSchema'];
 const VALIDATION_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate'];
 
 function runtimeCall( runtimeNs: string, method: string, args: ts.Expression[]): ts.CallExpression
@@ -406,6 +406,19 @@ export default function transformer( program: ts.Program )
                                 }
 
                                 return ts.factory.createIdentifier( `__schema_${hash}` );
+                            }
+
+                            if( fnName === 'standardSchema' )
+                            {
+                                if( !validatorCache.has( hash ))
+                                {
+                                    buildValidator( type, checker, validatorCache, hash, customFns );
+                                }
+
+                                const validatorRef = ts.factory.createIdentifier( `__val_${hash}` );
+                                const optionsArg = visitArgOrUndefined( node.arguments, 0, visitor );
+
+                                return runtimeCall( emitNames.runtimeNs, 'createStandardSchema', [ validatorRef, optionsArg ]);
                             }
 
                             if( VALIDATION_FUNCTIONS.includes( fnName ))

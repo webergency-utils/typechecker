@@ -31,6 +31,13 @@ export interface SerializerGeneratorOptions
     hoisted? : string[]
 }
 
+type RecSerDef =
+    {
+        fnName : string
+        type   : ts.Type
+        mode   : ValidationMode
+    };
+
 function bindTransformed(
     varName  : string,
     pathExpr : string,
@@ -135,13 +142,44 @@ export function generateSerializerCode(
 
     if( format === 'query' )
     {
-        const body = buildQuerySerializer( type, checker, mode, 'input', '""', new Set(), hoisted );
+        const recQDefs = new Map<number, RecSerDef>();
+        const body = buildQuerySerializer( type, checker, mode, 'input', '""', new Set(), hoisted, 0, recQDefs );
+        const generatedRecQFns = new Set<number>();
+
+        while( generatedRecQFns.size < recQDefs.size )
+        {
+            for( const [ id, def ] of recQDefs.entries())
+            {
+                if( generatedRecQFns.has( id )){ continue }
+
+                generatedRecQFns.add( id );
+                const recVisited = new Set<number>();
+                const recBody = buildQuerySerializer( def.type, checker, def.mode, 'v', 'p', recVisited, hoisted, 1, recQDefs );
+                hoisted.push( `function ${def.fnName}( v, p, transform, input ){ ${recBody} }` );
+            }
+        }
+
         const prefix = wrapLocal && hoisted.length > 0 ? `${hoisted.join( ' ' )} ` : '';
 
         return `( function(){ ${prefix}const params = []; ${body} return params.join( "&" ); })()`;
     }
 
-    const body = buildJsonSerializer( type, checker, mode, '""', 'input', new Set(), hoisted );
+    const recDefs = new Map<number, RecSerDef>();
+    const body = buildJsonSerializer( type, checker, mode, '""', 'input', new Set(), hoisted, 0, recDefs );
+    const generatedRecFns = new Set<number>();
+
+    while( generatedRecFns.size < recDefs.size )
+    {
+        for( const [ id, def ] of recDefs.entries())
+        {
+            if( generatedRecFns.has( id )){ continue }
+
+            generatedRecFns.add( id );
+            const recVisited = new Set<number>();
+            const recBody = buildJsonSerializer( def.type, checker, def.mode, 'p', 'v', recVisited, hoisted, 1, recDefs );
+            hoisted.push( `function ${def.fnName}( v, p, transform, input ){ return ${recBody}; }` );
+        }
+    }
 
     if( wrapLocal && hoisted.length > 0 )
     {
@@ -159,7 +197,8 @@ function buildJsonSerializer(
     varName  : string,
     visited  : Set<number> = new Set(),
     hoisted  : string[] = [],
-    depth    : number = 0
+    depth    : number = 0,
+    recDefs  : Map<number, RecSerDef> = new Map()
 ): string
 {
     const typeId = ( type as any ).id;
@@ -169,8 +208,16 @@ function buildJsonSerializer(
     {
         if( visited.has( typeId ))
         {
-            const label = unionExpectedLabel( type, checker );
-            throw new Error( `[Webergency] Recursive/cyclic type ${label} is not supported by ahead-of-time serializer codegen; use assert/validate instead.` );
+            let def = recDefs.get( typeId );
+
+            if( !def )
+            {
+                const fnName = `__rec_ser_${typeId}_${hoisted.length}`;
+                def = { fnName, type, mode };
+                recDefs.set( typeId, def );
+            }
+
+            return `${def.fnName}( ${varName}, ${pathExpr}, typeof transform !== 'undefined' ? transform : undefined, typeof input !== 'undefined' ? input : undefined )`;
         }
 
         visited.add( typeId );
@@ -197,7 +244,7 @@ function buildJsonSerializer(
 
                 if( merged )
                 {
-                    return buildObjectSerializer( merged.props, merged.indexType, checker, mode, pathExpr, varName, visited, tags, hoisted, depth );
+                    return buildObjectSerializer( merged.props, merged.indexType, checker, mode, pathExpr, varName, visited, tags, hoisted, depth, recDefs );
                 }
             }
         }
@@ -327,7 +374,7 @@ function buildJsonSerializer(
             {
                 const childPath = pathExpr === '""' ? `"[" + ${i} + "]"` : `(${pathExpr}) + "[" + ${i} + "]"`;
 
-                return `const ${slotVars[i]} = ${buildJsonSerializer( elem, checker, mode, childPath, `${varName}[${i}]`, visited, hoisted, depth + 1 )};`;
+                return `const ${slotVars[i]} = ${buildJsonSerializer( elem, checker, mode, childPath, `${varName}[${i}]`, visited, hoisted, depth + 1, recDefs )};`;
             }).join( ' ' );
             const joined = slotVars.join( ' + "," + ' );
 
@@ -341,7 +388,7 @@ function buildJsonSerializer(
             const itemVar = `item${sfx}`;
             const idxVar = `i${sfx}`;
             const elemPath = pathExpr === '""' ? `"[" + ${idxVar} + "]"` : `(${pathExpr}) + "[" + ${idxVar} + "]"`;
-            const elemSer = buildJsonSerializer( elemType, checker, mode, elemPath, itemVar, visited, hoisted, depth + 1 );
+            const elemSer = buildJsonSerializer( elemType, checker, mode, elemPath, itemVar, visited, hoisted, depth + 1, recDefs );
 
             return `__tcRuntime.serializeArray( ${varName}, ( ${itemVar}, ${idxVar} ) => ${elemSer}, ${pathLiteral} )`;
         }
@@ -355,7 +402,7 @@ function buildJsonSerializer(
             const itemVar = `item${sfx}`;
             const idxVar = `i${sfx}`;
             const elemPath = pathExpr === '""' ? `"[" + ${idxVar} + "]"` : `(${pathExpr}) + "[" + ${idxVar} + "]"`;
-            const elemSer = buildJsonSerializer( elemType, checker, mode, elemPath, itemVar, visited, hoisted, depth + 1 );
+            const elemSer = buildJsonSerializer( elemType, checker, mode, elemPath, itemVar, visited, hoisted, depth + 1, recDefs );
 
             return bindTransformed( varName, pathLiteral, 'Set', tags, v =>
                 `__tcRuntime.serializeSet( ${v}, ( ${itemVar}, ${idxVar} ) => ${elemSer}, ${pathLiteral} )`
@@ -374,8 +421,8 @@ function buildJsonSerializer(
             const vVar = `v${sfx}`;
             const keyPath = pathExpr === '""' ? `".key(" + String( ${kVar} ) + ")"` : `(${pathExpr}) + ".key(" + String( ${kVar} ) + ")"`;
             const valPath = pathExpr === '""' ? `"[" + String( ${kVar} ) + "]"` : `(${pathExpr}) + "[" + String( ${kVar} ) + "]"`;
-            const keySer = buildJsonSerializer( keyType, checker, mode, keyPath, kVar, visited, hoisted, depth + 1 );
-            const valSer = buildJsonSerializer( valueType, checker, mode, valPath, vVar, visited, hoisted, depth + 1 );
+            const keySer = buildJsonSerializer( keyType, checker, mode, keyPath, kVar, visited, hoisted, depth + 1, recDefs );
+            const valSer = buildJsonSerializer( valueType, checker, mode, valPath, vVar, visited, hoisted, depth + 1, recDefs );
 
             return bindTransformed( varName, pathLiteral, 'Map', tags, mv =>
                 `__tcRuntime.serializeMap( ${mv}, ( ${kVar}, ${vVar} ) => [ ${keySer}, ${valSer} ], ${pathLiteral} )`
@@ -390,7 +437,7 @@ function buildJsonSerializer(
             if( tagged )
             {
                 const cases = tagged.arms.map( arm =>
-                    `case ${JSON.stringify( arm.tag )}: return ${buildJsonSerializer( arm.type, checker, mode, pathExpr, varName, visited, hoisted, depth + 1 )};`
+                    `case ${JSON.stringify( arm.tag )}: return ${buildJsonSerializer( arm.type, checker, mode, pathExpr, varName, visited, hoisted, depth + 1, recDefs )};`
                 ).join( ' ' );
 
                 return `( function( val ){ switch( val && val[${JSON.stringify( tagged.key )}] ){ ${cases} default: throw new __tcRuntime.SerializationError( ${pathLiteral}, ${JSON.stringify( label )} ); } })( ${varName} )`;
@@ -399,7 +446,7 @@ function buildJsonSerializer(
             const sortedTypes = [ ...type.types ].sort(( a, b ) => getObjectSpecificity( b, checker ) - getObjectSpecificity( a, checker ));
             const valVar = `val${sfx}`;
             const armFns = sortedTypes.map( arm =>
-                `( ${valVar} ) => ${buildJsonSerializer( arm, checker, mode, pathExpr, valVar, visited, hoisted, depth + 1 )}`
+                `( ${valVar} ) => ${buildJsonSerializer( arm, checker, mode, pathExpr, valVar, visited, hoisted, depth + 1, recDefs )}`
             ).join( ', ' );
 
             return `__tcRuntime.serializeUnion( ${varName}, ${pathLiteral}, ${JSON.stringify( label )}, [ ${armFns} ] )`;
@@ -408,7 +455,7 @@ function buildJsonSerializer(
         const indexType = stringIndexType( type, checker );
         const props = mapStructuralProps( type, checker );
 
-        return buildObjectSerializer( props, indexType, checker, mode, pathExpr, varName, visited, tags, hoisted, depth );
+        return buildObjectSerializer( props, indexType, checker, mode, pathExpr, varName, visited, tags, hoisted, depth, recDefs );
     }
     finally
     {
@@ -426,7 +473,8 @@ function buildObjectSerializer(
     visited   : Set<number> = new Set(),
     tags      : string[] = [],
     hoisted   : string[] = [],
-    depth     : number = 0
+    depth     : number = 0,
+    recDefs   : Map<number, RecSerDef> = new Map()
 ): string
 {
     const pathLiteral = pathExpr;
@@ -449,7 +497,7 @@ function buildObjectSerializer(
         const childPath = pathExpr === '""'
             ? JSON.stringify( prop.name )
             : `(${pathExpr}) + "." + ${JSON.stringify( prop.name )}`;
-        const propSer = buildJsonSerializer( prop.type, checker, mode, childPath, valAccess, visited, hoisted, depth + 1 );
+        const propSer = buildJsonSerializer( prop.type, checker, mode, childPath, valAccess, visited, hoisted, depth + 1, recDefs );
 
         if( prop.isOptional )
         {
@@ -464,7 +512,7 @@ function buildObjectSerializer(
     if( indexType )
     {
         const idxPath = pathExpr === '""' ? 'k' : `(${pathExpr}) + "[" + k + "]"`;
-        const idxSer = buildJsonSerializer( indexType, checker, mode, idxPath, 'obj[k]', visited, hoisted, depth + 1 );
+        const idxSer = buildJsonSerializer( indexType, checker, mode, idxPath, 'obj[k]', visited, hoisted, depth + 1, recDefs );
         statements.push( `for( const k in obj ){ if( !${keysVar}.has( k ) && obj[k] !== undefined ){ parts.push( JSON.stringify( k ) + ":" + ${idxSer} ); } }` );
     }
     else if( mode === 'strict' )
@@ -495,7 +543,8 @@ function buildQuerySerializer(
     prefixExpr  : string,
     visited     : Set<number> = new Set(),
     hoisted     : string[] = [],
-    depth       : number = 0
+    depth       : number = 0,
+    recDefs     : Map<number, RecSerDef> = new Map()
 ): string
 {
     const typeId = ( type as any ).id;
@@ -505,8 +554,16 @@ function buildQuerySerializer(
     {
         if( visited.has( typeId ))
         {
-            const label = unionExpectedLabel( type, checker );
-            throw new Error( `[Webergency] Recursive/cyclic type ${label} is not supported by ahead-of-time serializer codegen; use assert/validate instead.` );
+            let def = recDefs.get( typeId );
+
+            if( !def )
+            {
+                const fnName = `__rec_qser_${typeId}_${hoisted.length}`;
+                def = { fnName, type, mode };
+                recDefs.set( typeId, def );
+            }
+
+            return `${def.fnName}( ${varName}, ${prefixExpr}, typeof transform !== 'undefined' ? transform : undefined, typeof input !== 'undefined' ? input : undefined );`;
         }
 
         visited.add( typeId );
@@ -532,7 +589,7 @@ function buildQuerySerializer(
 
                 if( merged )
                 {
-                    return buildQueryObject( merged.props, merged.indexType, checker, mode, varName, prefixExpr, visited, tags, hoisted, depth );
+                    return buildQueryObject( merged.props, merged.indexType, checker, mode, varName, prefixExpr, visited, tags, hoisted, depth, recDefs );
                 }
             }
         }
@@ -643,7 +700,7 @@ function buildQuerySerializer(
         {
             const typeArgs = ( type as ts.TupleTypeReference ).typeArguments || [];
             const parts = typeArgs.map(( elem, i ) =>
-                buildQuerySerializer( elem, checker, mode, `${varName}[${i}]`, `(${prefixExpr}) + "[${i}]"`, visited, hoisted, depth + 1 )
+                buildQuerySerializer( elem, checker, mode, `${varName}[${i}]`, `(${prefixExpr}) + "[${i}]"`, visited, hoisted, depth + 1, recDefs )
             );
 
             return `if( !Array.isArray( ${varName} ) || ${varName}.length !== ${typeArgs.length} ){ throw new __tcRuntime.SerializationError( ${prefixExpr}, "Tuple<${typeArgs.length}>" ); } ${parts.join( ' ' )}`;
@@ -654,7 +711,7 @@ function buildQuerySerializer(
             const typeArgs = typeof checker.getTypeArguments === 'function' ? checker.getTypeArguments( type as ts.TypeReference ) : [];
             const elemType = typeArgs[0] || ({ getFlags : () => ts.TypeFlags.Any } as any );
             const itemVar = `item${sfx}`;
-            const elemCode = buildQuerySerializer( elemType, checker, mode, itemVar, `(${prefixExpr}) + "[]"`, visited, hoisted, depth + 1 );
+            const elemCode = buildQuerySerializer( elemType, checker, mode, itemVar, `(${prefixExpr}) + "[]"`, visited, hoisted, depth + 1, recDefs );
 
             return `if( !Array.isArray( ${varName} ) ){ throw new __tcRuntime.SerializationError( ${prefixExpr}, "Type<Array>" ); } for( const ${itemVar} of ${varName} ){ ${elemCode} }`;
         }
@@ -666,7 +723,7 @@ function buildQuerySerializer(
                 : ( type as ts.TypeReference ).typeArguments || [];
             const elemType = typeArgs[0] || ({ getFlags : () => ts.TypeFlags.Any } as any );
             const itemVar = `item${sfx}`;
-            const elemCode = buildQuerySerializer( elemType, checker, mode, itemVar, `(${prefixExpr}) + "[]"`, visited, hoisted, depth + 1 );
+            const elemCode = buildQuerySerializer( elemType, checker, mode, itemVar, `(${prefixExpr}) + "[]"`, visited, hoisted, depth + 1, recDefs );
 
             return bindTransformedStmt( varName, prefixExpr, 'Set', tags, v =>
                 `if( !( ${v} instanceof Set ) ){ throw new __tcRuntime.SerializationError( ${prefixExpr}, "Type<Set>" ); } for( const ${itemVar} of ${v} ){ ${elemCode} }`
@@ -687,8 +744,8 @@ function buildQuerySerializer(
             const kStrVar = `__kStr${sfx}`;
             const entryPrefixVar = `__entryPrefix${sfx}`;
             const keyPath = prefixExpr === '""' ? `".key(" + String( ${mkVar} ) + ")"` : `(${prefixExpr}) + ".key(" + String( ${mkVar} ) + ")"`;
-            const keySer = buildJsonSerializer( keyType, checker, mode, keyPath, mkVar, visited, hoisted, depth + 1 );
-            const valCode = buildQuerySerializer( valueType, checker, mode, mvVar, entryPrefixVar, visited, hoisted, depth + 1 );
+            const keySer = buildJsonSerializer( keyType, checker, mode, keyPath, mkVar, visited, hoisted, depth + 1, recDefs );
+            const valCode = buildQuerySerializer( valueType, checker, mode, mvVar, entryPrefixVar, visited, hoisted, depth + 1, recDefs );
 
             return bindTransformedStmt( varName, prefixExpr, 'Map', tags, v =>
                 `if( !( ${v} instanceof Map ) ){ throw new __tcRuntime.SerializationError( ${prefixExpr}, "Type<Map>" ); } for( const [ ${mkVar}, ${mvVar} ] of ${v}.entries() ){ const ${kRawVar} = ${keySer}; const ${kStrVar} = ${kRawVar}.charAt( 0 ) === '"' ? JSON.parse( ${kRawVar} ) : ${kRawVar}; const ${entryPrefixVar} = (${prefixExpr}) === "" ? ${kStrVar} : (${prefixExpr}) + "[" + ${kStrVar} + "]"; ${valCode} }`
@@ -703,7 +760,7 @@ function buildQuerySerializer(
             if( tagged )
             {
                 const cases = tagged.arms.map( arm =>
-                    `case ${JSON.stringify( arm.tag )}: { ${buildQuerySerializer( arm.type, checker, mode, varName, prefixExpr, visited, hoisted, depth + 1 )} break; }`
+                    `case ${JSON.stringify( arm.tag )}: { ${buildQuerySerializer( arm.type, checker, mode, varName, prefixExpr, visited, hoisted, depth + 1, recDefs )} break; }`
                 ).join( ' ' );
 
                 return `switch( ${varName} && ${varName}[${JSON.stringify( tagged.key )}] ){ ${cases} default: throw new __tcRuntime.SerializationError( ${prefixExpr}, ${JSON.stringify( label )} ); }`;
@@ -713,14 +770,14 @@ function buildQuerySerializer(
 
             // Query arms mutate params; snapshot params.length before each arm and restore on failure.
             return `{ let _ok${sfx} = false; ${sortedTypes.map(( arm, i ) =>
-                `if( !_ok${sfx} ){ const _snap${sfx}_${i} = params.length; try { ${buildQuerySerializer( arm, checker, mode, varName, prefixExpr, visited, hoisted, depth + 1 )} _ok${sfx} = true; } catch( _qe${sfx}_${i} ) { params.length = _snap${sfx}_${i}; } }`
+                `if( !_ok${sfx} ){ const _snap${sfx}_${i} = params.length; try { ${buildQuerySerializer( arm, checker, mode, varName, prefixExpr, visited, hoisted, depth + 1, recDefs )} _ok${sfx} = true; } catch( _qe${sfx}_${i} ) { params.length = _snap${sfx}_${i}; } }`
             ).join( ' ' )} if( !_ok${sfx} ){ throw new __tcRuntime.SerializationError( ${prefixExpr}, ${JSON.stringify( label )} ); } }`;
         }
 
         const indexType = stringIndexType( type, checker );
         const props = mapStructuralProps( type, checker );
 
-        return buildQueryObject( props, indexType, checker, mode, varName, prefixExpr, visited, tags, hoisted, depth );
+        return buildQueryObject( props, indexType, checker, mode, varName, prefixExpr, visited, tags, hoisted, depth, recDefs );
     }
     finally
     {
@@ -738,7 +795,8 @@ function buildQueryObject(
     visited    : Set<number> = new Set(),
     tags       : string[] = [],
     hoisted    : string[] = [],
-    depth      : number = 0
+    depth      : number = 0,
+    recDefs    : Map<number, RecSerDef> = new Map()
 ): string
 {
     const objVar = tags.length > 0 ? '__qobj' : varName;
@@ -758,7 +816,7 @@ function buildQueryObject(
     {
         const access = safePropAccess( objVar, prop.name );
         const childPrefix = `(${prefixExpr}) === "" ? ${JSON.stringify( prop.name )} : (${prefixExpr}) + ${JSON.stringify( '[' + prop.name + ']' )}`;
-        const body = buildQuerySerializer( prop.type, checker, mode, access, childPrefix, visited, hoisted, depth + 1 );
+        const body = buildQuerySerializer( prop.type, checker, mode, access, childPrefix, visited, hoisted, depth + 1, recDefs );
 
         if( prop.isOptional )
         {
@@ -772,7 +830,7 @@ function buildQueryObject(
 
     if( indexType )
     {
-        const idxBody = buildQuerySerializer( indexType, checker, mode, `${objVar}[k]`, `(${prefixExpr}) === "" ? k : (${prefixExpr}) + "[" + k + "]"`, visited, hoisted, depth + 1 );
+        const idxBody = buildQuerySerializer( indexType, checker, mode, `${objVar}[k]`, `(${prefixExpr}) === "" ? k : (${prefixExpr}) + "[" + k + "]"`, visited, hoisted, depth + 1, recDefs );
         statements.push( `for( const k in ${objVar} ){ if( !${keysVar}.has( k ) && ${objVar}[k] !== undefined ){ ${idxBody} } }` );
     }
     else if( mode === 'strict' )

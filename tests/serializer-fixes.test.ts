@@ -184,16 +184,33 @@ describe( 'Serializer Fixes & Regressions', () =>
         expect( paths ).toContain( 'items[2]' );
     });
 
-    it( 'throws a compile-time error when passing a recursive type to serializer or stringify', () =>
+    it( 'serializes a recursive type correctly', async() =>
     {
-        expect(() => compileAndTransform( `
+        const mod = await emitAndImport<{
+            ser : ( input: any ) => string
+        }>( `
             import { serializer } from '../src/index.js';
             interface TreeNode {
                 value: number;
                 children?: TreeNode[];
             }
             export const ser = serializer<TreeNode>();
-        `, 'temp_ser_recursive_error' )).toThrow( /Recursive\/cyclic type .* is not supported by ahead-of-time serializer codegen/ );
+        `, 'temp_ser_recursive_success' );
+
+        const out = mod.ser({
+            value    : 1,
+            children : [
+                { value : 2 },
+                { value : 3, children : [{ value : 4 }] }
+            ]
+        });
+        expect( JSON.parse( out )).toEqual({
+            value    : 1,
+            children : [
+                { value : 2 },
+                { value : 3, children : [{ value : 4 }] }
+            ]
+        });
     });
 
     it( 'evaluates more specific object shapes before empty {} in strip mode union serialization', async() =>

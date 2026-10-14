@@ -104,16 +104,29 @@ describe( 'Parse Fixes & Regressions', () =>
         expect( params.get( 'limit' )).toBe( '5' );
     });
 
-    it( 'throws a compile-time error when passing a recursive type to parse', () =>
+    it( 'parses a recursive linked list type correctly', async() =>
     {
-        expect(() => compileAndTransform( `
+        const mod = await emitAndImport<{
+            parseList : ( json: string ) => any
+        }>( `
             import { parse } from '../src/index.js';
             interface LinkedListNode {
                 val: number;
                 next?: LinkedListNode;
             }
-            export const run = ( json: string ) => parse<LinkedListNode>( json );
-        `, 'temp_parse_recursive_error' )).toThrow( /Recursive\/cyclic type .* is not supported by ahead-of-time parser codegen/ );
+            export const parseList = ( json: string ) => parse<LinkedListNode>( json );
+        `, 'temp_parse_recursive_success' );
+
+        const list = mod.parseList( '{"val": 1, "next": {"val": 2, "next": {"val": 3}}}' );
+        expect( list ).toEqual({
+            val  : 1,
+            next : {
+                val  : 2,
+                next : {
+                    val : 3
+                }
+            }
+        });
     });
 
     it( 'enforces BigIntLiteral equality including negative literals and unions in JSON and query modes', async() =>

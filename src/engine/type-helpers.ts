@@ -29,7 +29,7 @@ export const VERBATIM_CUSTOM_SCOPE: ICustomFunctionScope =
 export type TaggedUnionInfo =
     {
         key  : string
-        arms : { tag : string | number, type : ts.Type }[]
+        arms : { tag : string | number | boolean, type : ts.Type }[]
     };
 
 export type MergedPropInfo =
@@ -264,11 +264,18 @@ export function isDiscriminableObject( type: ts.Type, checker: ts.TypeChecker ):
     return name !== 'Date' && name !== 'Set' && name !== 'Map' && name !== 'RegExp';
 }
 
-export function singleLiteralValue( type: ts.Type ): string | number | undefined
+export function singleLiteralValue( type: ts.Type ): string | number | boolean | undefined
 {
     if( typeof type.isStringLiteral === 'function' && type.isStringLiteral()){ return type.value }
 
     if( typeof type.isNumberLiteral === 'function' && type.isNumberLiteral()){ return type.value }
+
+    const flags = typeof type.getFlags === 'function' ? type.getFlags() : 0;
+
+    if(( flags & ts.TypeFlags.BooleanLiteral ) || ( type as any ).intrinsicName === 'true' || ( type as any ).intrinsicName === 'false' )
+    {
+        return ( type as any ).intrinsicName === 'true';
+    }
 
     return undefined;
 }
@@ -277,13 +284,13 @@ export function tryTaggedUnionTypes( members: readonly ts.Type[], checker: ts.Ty
 {
     if( members.length < 2 ){ return undefined }
 
-    const literalsByMember: Map<string, string | number>[] = [];
+    const literalsByMember: Map<string, string | number | boolean>[] = [];
 
     for( const member of members )
     {
         if( !isDiscriminableObject( member, checker )){ return undefined }
 
-        const literals = new Map<string, string | number>();
+        const literals = new Map<string, string | number | boolean>();
 
         for( const prop of getTypeProps( member, checker ))
         {
@@ -303,8 +310,8 @@ export function tryTaggedUnionTypes( members: readonly ts.Type[], checker: ts.Ty
 
     for( const key of literalsByMember[0].keys())
     {
-        const arms: { tag : string | number, type : ts.Type }[] = [];
-        const seen = new Set<string | number>();
+        const arms: { tag : string | number | boolean, type : ts.Type }[] = [];
+        const seen = new Set<string | number | boolean>();
 
         for( let i = 0; i < literalsByMember.length; i++ )
         {
@@ -401,8 +408,10 @@ export function tryMergeObjectTypes( types: readonly ts.Type[], checker: ts.Type
     return { props : [ ...propMap.values() ], indexType };
 }
 
-export function stripUndefinedFromType( type: ts.Type ): ts.Type
+export function stripUndefinedFromType( type: ts.Type | undefined ): ts.Type
 {
+    if( !type ){ return { getFlags : () => ts.TypeFlags.Any } as any }
+
     if( typeof type.isUnion !== 'function' || !type.isUnion()){ return type }
 
     const nonUndefined = type.types.filter( t => !( t.getFlags() & ts.TypeFlags.Undefined ));
@@ -467,17 +476,21 @@ export function collectConstraintsFromProps(
         if( pName.endsWith( '_message' ) && pName !== '__message' ){ continue }
 
         const declaration = prop.valueDeclaration || prop.declarations?.[0];
-        const pType = declaration ? checker.getTypeOfSymbolAtLocation( prop, declaration ) : ( prop as any ).type;
+        const pType = ( checker as any ).getTypeOfSymbol
+            ? ( checker as any ).getTypeOfSymbol( prop )
+            : ( declaration ? checker.getTypeOfSymbolAtLocation( prop, declaration ) : ( prop as any ).type );
         const actualType = stripUndefinedFromType( pType );
         const val = getTagPropertyValue( pType );
 
-        const msgProp = props.find( p => p.getName() === `${pName}_message` );
+        const msgProp = props.find(( p ) => p.getName() === `${pName}_message` );
         let constraintMsg: string | undefined;
 
         if( msgProp )
         {
             const msgDecl = msgProp.valueDeclaration || msgProp.declarations?.[0];
-            const msgType = msgDecl ? checker.getTypeOfSymbolAtLocation( msgProp, msgDecl ) : undefined;
+            const msgType = ( checker as any ).getTypeOfSymbol
+                ? ( checker as any ).getTypeOfSymbol( msgProp )
+                : ( msgDecl ? checker.getTypeOfSymbolAtLocation( msgProp, msgDecl ) : undefined );
             constraintMsg = msgType ? getStringLiteralValue( msgType ) : undefined;
         }
 
