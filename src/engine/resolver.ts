@@ -1,5 +1,5 @@
 import ts from 'typescript';
-import type { JsonSchema } from '../runtime/validators.js';
+import type { JsonSchema, UnionResolution } from '../runtime/validators.js';
 import {
     createPrimitiveCheck,
     createLiteralCheck,
@@ -47,6 +47,14 @@ import {
     VERBATIM_CUSTOM_SCOPE,
     type ParsedConstraint
 } from './type-helpers.js';
+import
+{
+    hasCompetingObjectArms,
+    isFallbackUnionArm,
+    sortUnionArmsBySpecificity,
+    tryExclusiveKeyUnion
+}
+    from './specificity.js';
 import { createHash } from 'crypto';
 
 /** Map peeled tag constraints onto JSON Schema / x-extension fields. */
@@ -103,10 +111,11 @@ function applyConstraintsToJsonSchema(
 }
 
 function attachNestedConstraintChecks(
-    constraints   : ParsedConstraint[],
-    checker       : ts.TypeChecker,
-    validatorsMap : Map<string, ts.Expression>,
-    scope         : ICustomFunctionScope
+    constraints     : ParsedConstraint[],
+    checker         : ts.TypeChecker,
+    validatorsMap   : Map<string, ts.Expression>,
+    scope           : ICustomFunctionScope,
+    unionResolution : UnionResolution = 'specificity'
 ): ParsedConstraint[]
 {
     return constraints.map( c =>
@@ -115,7 +124,7 @@ function attachNestedConstraintChecks(
         {
             return {
                 ...c,
-                nestedCheck : buildValidatorScoped( c.nestedType, checker, validatorsMap, scope )
+                nestedCheck : buildValidatorScoped( c.nestedType, checker, validatorsMap, scope, undefined, unionResolution )
             };
         }
 
@@ -124,18 +133,19 @@ function attachNestedConstraintChecks(
 }
 
 function buildEnumValidator(
-    type: ts.Type,
-    checker: ts.TypeChecker,
-    validatorsMap: Map<string, ts.Expression>,
-    scope: ICustomFunctionScope
+    type            : ts.Type,
+    checker         : ts.TypeChecker,
+    validatorsMap   : Map<string, ts.Expression>,
+    scope           : ICustomFunctionScope,
+    unionResolution : UnionResolution = 'specificity'
 ): ts.Expression
 {
     const members = enumMemberTypes( type, checker );
-    const checks = members.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ));
+    const checks = members.map( t => buildValidatorScoped( t, checker, validatorsMap, scope, undefined, unionResolution ));
 
     if( checks.length === 0 && type.isUnion())
     {
-        const unionChecks = ( type as ts.UnionType ).types.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ));
+        const unionChecks = ( type as ts.UnionType ).types.map( t => buildValidatorScoped( t, checker, validatorsMap, scope, undefined, unionResolution ));
 
         return createUnionCheck( unionChecks, `Type<${minifyTypeString( checker.typeToString( type ))}>` );
     }
@@ -151,11 +161,12 @@ function buildEnumValidator(
 }
 
 function tryMergeObjectIntersection(
-    types: readonly ts.Type[],
-    checker: ts.TypeChecker,
-    validatorsMap: Map<string, ts.Expression>,
-    expected: string,
-    scope: ICustomFunctionScope
+    types           : readonly ts.Type[],
+    checker         : ts.TypeChecker,
+    validatorsMap   : Map<string, ts.Expression>,
+    expected        : string,
+    scope           : ICustomFunctionScope,
+    unionResolution : UnionResolution = 'specificity'
 ): ts.Expression | undefined
 {
     const merged = tryMergeObjectTypes( types, checker );
@@ -165,11 +176,11 @@ function tryMergeObjectIntersection(
     const props = merged.props.map( prop => ({
         name       : prop.name,
         isOptional : prop.isOptional,
-        validator  : buildValidatorScoped( prop.type, checker, validatorsMap, scope ),
+        validator  : buildValidatorScoped( prop.type, checker, validatorsMap, scope, undefined, unionResolution ),
         hasDefault : prop.hasDefault
     }));
     const indexValidator = merged.indexType
-        ? buildValidatorScoped( merged.indexType, checker, validatorsMap, scope )
+        ? buildValidatorScoped( merged.indexType, checker, validatorsMap, scope, undefined, unionResolution )
         : undefined;
 
     return createObjectCheck( props, expected, indexValidator );
@@ -183,10 +194,11 @@ function tryMergeObjectIntersection(
  * generic union.
  */
 function tryNullableUnion(
-    members: readonly ts.Type[],
-    checker: ts.TypeChecker,
-    validatorsMap: Map<string, ts.Expression>,
-    scope: ICustomFunctionScope
+    members         : readonly ts.Type[],
+    checker         : ts.TypeChecker,
+    validatorsMap   : Map<string, ts.Expression>,
+    scope           : ICustomFunctionScope,
+    unionResolution : UnionResolution = 'specificity'
 ): ts.Expression | undefined
 {
     let hasUndefined = false;
@@ -206,27 +218,7 @@ function tryNullableUnion(
 
     const kind: NullableKind = hasUndefined && hasNull ? 'nullish' : ( hasUndefined ? 'optional' : 'nullable' );
 
-    return createNullableCheck( kind, buildValidatorScoped( rest[0], checker, validatorsMap, scope ));
-}
-
-/**
- * When every arm is an object and some shared property holds a distinct literal in each, that property
- * selects the arm in one lookup instead of the arms being tried in sequence.
- */
-function tryTaggedUnion(
-    members: readonly ts.Type[],
-    checks: readonly ts.Expression[],
-    checker: ts.TypeChecker,
-    expected: string
-): ts.Expression | undefined
-{
-    const tagged = tryTaggedUnionTypes( members, checker );
-
-    if( !tagged ){ return undefined }
-
-    const byTag: [string | number | boolean, ts.Expression][] = tagged.arms.map(( arm, i ) => [arm.tag, checks[i]]);
-
-    return createTaggedUnionCheck( tagged.key, byTag, expected );
+    return createNullableCheck( kind, buildValidatorScoped( rest[0], checker, validatorsMap, scope, undefined, unionResolution ));
 }
 
 /** Classify a peeled base for constrained-primitive emit. */
@@ -272,25 +264,30 @@ function constrainedBaseKind( type: ts.Type, checker: ts.TypeChecker ): { baseNa
 }
 
 export function buildValidator(
-    type: ts.Type,
-    checker: ts.TypeChecker,
-    validatorsMap: Map<string, ts.Expression>,
-    hash?: string,
-    scope: ICustomFunctionScope = VERBATIM_CUSTOM_SCOPE
+    type            : ts.Type,
+    checker         : ts.TypeChecker,
+    validatorsMap   : Map<string, ts.Expression>,
+    hash?           : string,
+    scope           : ICustomFunctionScope = VERBATIM_CUSTOM_SCOPE,
+    unionResolution : UnionResolution = 'specificity'
 ): ts.Expression
 {
-    return buildValidatorScoped( type, checker, validatorsMap, scope, hash );
+    return buildValidatorScoped( type, checker, validatorsMap, scope, hash, unionResolution );
 }
 
 function buildValidatorScoped(
-    type: ts.Type,
-    checker: ts.TypeChecker,
-    validatorsMap: Map<string, ts.Expression>,
-    scope: ICustomFunctionScope,
-    hash?: string
+    type            : ts.Type,
+    checker         : ts.TypeChecker,
+    validatorsMap   : Map<string, ts.Expression>,
+    scope           : ICustomFunctionScope,
+    hash?           : string,
+    unionResolution : UnionResolution = 'specificity'
 ): ts.Expression 
 {
-    const resolvedHash = hash ?? generateHash( type, checker );
+    const baseHash = hash ?? generateHash( type, checker );
+    const resolvedHash = unionResolution === 'declaration-order' && !baseHash.endsWith( '_decl' )
+        ? `${baseHash}_decl`
+        : baseHash;
 
     if( validatorsMap.has( resolvedHash )) 
     {
@@ -320,18 +317,39 @@ function buildValidatorScoped(
 
         if( members.length === 1 )
         {
-            result = buildValidatorScoped( members[0], checker, validatorsMap, scope );
+            result = buildValidatorScoped( members[0], checker, validatorsMap, scope, undefined, unionResolution );
         }
         else
         {
-            const nullable = tryNullableUnion( members, checker, validatorsMap, scope );
+            const nullable = tryNullableUnion( members, checker, validatorsMap, scope, unionResolution );
 
             if( nullable ){ result = nullable }
             else
             {
-                const checks = members.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ));
+                const taggedInfo = tryTaggedUnionTypes( members, checker );
 
-                result = tryTaggedUnion( members, checks, checker, expected ) || createUnionCheck( checks, expected );
+                if( taggedInfo )
+                {
+                    const checks = members.map( t => buildValidatorScoped( t, checker, validatorsMap, scope, undefined, unionResolution ));
+                    result = createTaggedUnionCheck(
+                        taggedInfo.key,
+                        taggedInfo.arms.map(( arm, i ) => [arm.tag, checks[i]]),
+                        expected
+                    );
+                }
+                else
+                {
+                    const sortedMembers = unionResolution === 'declaration-order'
+                        ? members.slice()
+                        : sortUnionArmsBySpecificity( members, checker );
+                    const checks = sortedMembers.map( t => buildValidatorScoped( t, checker, validatorsMap, scope, undefined, unionResolution ));
+                    const fallbackFlags = unionResolution !== 'declaration-order' && hasCompetingObjectArms( sortedMembers, checker )
+                        ? sortedMembers.map( arm => isFallbackUnionArm( arm, checker ))
+                        : undefined;
+                    const exclusiveKeys = tryExclusiveKeyUnion( sortedMembers, checker );
+
+                    result = createUnionCheck( checks, expected, fallbackFlags, exclusiveKeys );
+                }
             }
         }
     }
@@ -347,7 +365,8 @@ function buildValidatorScoped(
                 peeled.constraints,
                 checker,
                 validatorsMap,
-                scope
+                scope,
+                unionResolution
             );
             const walkBase = peeled.base;
             let kind = constrainedBaseKind( walkBase, checker );
@@ -366,12 +385,12 @@ function buildValidatorScoped(
             {
                 if(( kind.baseName === 'array' || kind.baseName === 'set' || kind.baseName === 'map' ) && kind.baseType )
                 {
-                    const baseValidator = buildValidatorScoped( kind.baseType, checker, validatorsMap, scope );
+                    const baseValidator = buildValidatorScoped( kind.baseType, checker, validatorsMap, scope, undefined, unionResolution );
                     result = createConstrainedPrimitiveCheck( kind.baseName, constraints, baseValidator );
                 }
                 else if( kind.baseType && ( kind.baseType.getFlags() & ts.TypeFlags.TemplateLiteral ))
                 {
-                    const baseValidator = buildValidatorScoped( kind.baseType, checker, validatorsMap, scope );
+                    const baseValidator = buildValidatorScoped( kind.baseType, checker, validatorsMap, scope, undefined, unionResolution );
                     result = createConstrainedPrimitiveCheck( kind.baseName, constraints, baseValidator );
                 }
                 else
@@ -386,7 +405,7 @@ function buildValidatorScoped(
 
                 if( nonConstraintTypes.length === 1 )
                 {
-                    baseValidator = buildValidatorScoped( nonConstraintTypes[0], checker, validatorsMap, scope );
+                    baseValidator = buildValidatorScoped( nonConstraintTypes[0], checker, validatorsMap, scope, undefined, unionResolution );
                 }
                 else if( nonConstraintTypes.length > 1 )
                 {
@@ -395,10 +414,11 @@ function buildValidatorScoped(
                         checker,
                         validatorsMap,
                         expected,
-                        scope
+                        scope,
+                        unionResolution
                     );
                     baseValidator = merged || createIntersectionCheck(
-                        nonConstraintTypes.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ))
+                        nonConstraintTypes.map( t => buildValidatorScoped( t, checker, validatorsMap, scope, undefined, unionResolution ))
                     );
                 }
 
@@ -408,9 +428,9 @@ function buildValidatorScoped(
                 }
                 else
                 {
-                    const merged = tryMergeObjectIntersection( types, checker, validatorsMap, expected, scope );
+                    const merged = tryMergeObjectIntersection( types, checker, validatorsMap, expected, scope, unionResolution );
                     result = merged || createIntersectionCheck(
-                        types.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ))
+                        types.map( t => buildValidatorScoped( t, checker, validatorsMap, scope, undefined, unionResolution ))
                     );
                 }
             }
@@ -418,11 +438,11 @@ function buildValidatorScoped(
         else if( peeled )
         {
             // Brand-only (or other tagless) peels — walk the effective base, not the full intersection.
-            result = buildValidatorScoped( peeled.base, checker, validatorsMap, scope );
+            result = buildValidatorScoped( peeled.base, checker, validatorsMap, scope, undefined, unionResolution );
         }
         else
         {
-            const merged = tryMergeObjectIntersection( types, checker, validatorsMap, expected, scope );
+            const merged = tryMergeObjectIntersection( types, checker, validatorsMap, expected, scope, unionResolution );
 
             if( merged )
             {
@@ -430,7 +450,7 @@ function buildValidatorScoped(
             }
             else
             {
-                const checks = types.map( t => buildValidatorScoped( t, checker, validatorsMap, scope ));
+                const checks = types.map( t => buildValidatorScoped( t, checker, validatorsMap, scope, undefined, unionResolution ));
                 result = createIntersectionCheck( checks );
             }
         }
@@ -446,15 +466,15 @@ function buildValidatorScoped(
     else if( type.getSymbol()?.name === 'Set' ) 
     {
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
-        result = createSetCheck( buildValidatorScoped( elementType, checker, validatorsMap, scope ));
+        result = createSetCheck( buildValidatorScoped( elementType, checker, validatorsMap, scope, undefined, unionResolution ));
     }
     else if( type.getSymbol()?.name === 'Map' ) 
     {
         const keyType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
         const valueType = ( type as ts.TypeReference ).typeArguments?.[1] || checker.getAnyType();
         result = createMapCheck(
-            buildValidatorScoped( keyType, checker, validatorsMap, scope ),
-            buildValidatorScoped( valueType, checker, validatorsMap, scope )
+            buildValidatorScoped( keyType, checker, validatorsMap, scope, undefined, unionResolution ),
+            buildValidatorScoped( valueType, checker, validatorsMap, scope, undefined, unionResolution )
         );
     }
     else if( type.getSymbol()?.name === 'Promise' ) 
@@ -521,12 +541,12 @@ function buildValidatorScoped(
     else if( checker.isTupleType( type )) 
     {
         const typeArgs = ( type as ts.TupleTypeReference ).typeArguments || [];
-        result = createTupleCheck( typeArgs.map( t => buildValidatorScoped( t, checker, validatorsMap, scope )));
+        result = createTupleCheck( typeArgs.map( t => buildValidatorScoped( t, checker, validatorsMap, scope, undefined, unionResolution )));
     }
     else if( checker.isArrayType( type )) 
     {
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
-        result = createArrayCheck( buildValidatorScoped( elementType, checker, validatorsMap, scope ));
+        result = createArrayCheck( buildValidatorScoped( elementType, checker, validatorsMap, scope, undefined, unionResolution ));
     }
     else if( type.getCallSignatures().length > 0 && type.getConstructSignatures().length === 0 ) 
     {
@@ -534,7 +554,7 @@ function buildValidatorScoped(
     }
     else if( isNativeEnumType( type )) 
     {
-        result = buildEnumValidator( type, checker, validatorsMap, scope );
+        result = buildEnumValidator( type, checker, validatorsMap, scope, unionResolution );
     }
     else
     {
@@ -568,20 +588,24 @@ function buildValidatorScoped(
                 return {
                     name       : prop.getName(),
                     isOptional : ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0,
-                    validator  : buildValidatorScoped( propType, checker, validatorsMap, scope ),
+                    validator  : buildValidatorScoped( propType, checker, validatorsMap, scope, undefined, unionResolution ),
                     hasDefault : typeHasDefaultTag( propType, checker )
                 };
             });
 
             if( stringIndexInfo && props.length === 0 )
             {
-                result = createRecordCheck( buildValidatorScoped( stringIndexInfo.type, checker, validatorsMap, scope ));
+                result = createRecordCheck( buildValidatorScoped( stringIndexInfo.type, checker, validatorsMap, scope, undefined, unionResolution ));
+            }
+            else if( flags & ts.TypeFlags.NonPrimitive )
+            {
+                result = wrapOptionTransform( createRecordCheck( createPrimitiveCheck( 'any' )), 'Object' );
             }
             else if( flags & ts.TypeFlags.Object || type.isClassOrInterface() || type.isTypeParameter() || stringIndexInfo )
             {
                 const typeName = checker.typeToString( type );
                 const indexValidator = stringIndexInfo
-                    ? buildValidatorScoped( stringIndexInfo.type, checker, validatorsMap, scope )
+                    ? buildValidatorScoped( stringIndexInfo.type, checker, validatorsMap, scope, undefined, unionResolution )
                     : undefined;
                 result = createObjectCheck( props, typeName, indexValidator );
             }
@@ -670,6 +694,8 @@ function signatureOf( type: ts.Type, checker: ts.TypeChecker, visited: Set<numbe
     if( flags & ts.TypeFlags.Unknown ) { return 'unknown' }
 
     if( flags & ts.TypeFlags.Any ) { return 'any' }
+
+    if( flags & ts.TypeFlags.NonPrimitive ) { return 'object' }
 
     if( flags & ts.TypeFlags.ESSymbol || flags & ts.TypeFlags.UniqueESSymbol || ( type as any ).intrinsicName === 'symbol' ) { return 'symbol' }
 
@@ -1292,6 +1318,11 @@ function buildJsonSchemaInternal(
             minItems : elementTypes.length,
             maxItems : elementTypes.length
         };
+    }
+
+    if( flags & ts.TypeFlags.NonPrimitive )
+    {
+        return { type : 'object' };
     }
 
     // Object types

@@ -17,6 +17,9 @@ import { applyNodeTransform, type TransformFn } from './transform.js';
 /** Controls unknown object keys only — not coercion. Use `from` for conversion. */
 export type ValidationMode = 'strict' | 'relaxed' | 'strip';
 
+/** Strategy for resolving untagged unions (default `'specificity'`). */
+export type UnionResolution = 'specificity' | 'declaration-order';
+
 export interface IValidationError {
     path    : string
     value   : any
@@ -47,22 +50,26 @@ export type FromCoercionContext = PathContext & { kind : CoercionKind };
 type FromOption = 'json' | 'query' | 'string' | (( val: any, ctx: FromCoercionContext ) => any );
 
 export interface ValidationContext {
-    success         : boolean
-    errors          : IValidationError[]
-    mode            : ValidationMode
-    from?           : FromOption
-    mutate?         : boolean
-    root?           : any
+    success          : boolean
+    errors           : IValidationError[]
+    mode             : ValidationMode
+    from?            : FromOption
+    mutate?          : boolean
+    root?            : any
     /**
      * Draft 2019-09 / 2020-12 annotation frame for the current instance location.
      * In-place applicators (`allOf`, `anyOf`, `oneOf`, `if`, `$ref`) merge into the
      * parent frame; nested property/item applications push a fresh frame.
      */
-    annotations?    : SchemaAnnotationFrame
+    annotations?     : SchemaAnnotationFrame
     /** Dynamic scope bindings for `$dynamicAnchor` / `$dynamicRef` (and 2019-09 recursive). */
-    dynamicAnchors? : Map<string, JsonSchema | boolean>[]
+    dynamicAnchors?  : Map<string, JsonSchema | boolean>[]
     /** Opt-in typed walk for `assert` / `validate`. Never set by `is` / `assertGuard`. */
-    transform?      : TransformFn | TransformFn[]
+    transform?       : TransformFn | TransformFn[]
+    /** Active strip-mode union probe counters for best-fit arm selection. */
+    unionProbe?      : { stripped : number, matched : number }
+    /** Union resolution strategy (`'specificity'` | `'declaration-order'`). */
+    unionResolution? : UnionResolution
 }
 
 /** Evaluated properties / items collected for `unevaluatedProperties` / `unevaluatedItems`. */
@@ -84,8 +91,9 @@ export interface GuardOptions {
      *
      * Coercion / revival is controlled only by `from`, never by `mode`.
      */
-    mode? : ValidationMode
-    from? : FromOption
+    mode?            : ValidationMode
+    from?            : FromOption
+    unionResolution? : UnionResolution
 }
 
 /** Options for `assertGuard` / `assertGuardSchema`. */
@@ -1241,6 +1249,8 @@ export function hasUniqueItems( v: any[]): boolean
     return true;
 }
 
+const probeSource = new WeakMap<object, Record<string, any>>();
+
 export const validators = {
     coerceQueryNumber,
     coerceQueryBoolean,
@@ -1614,7 +1624,14 @@ export const validators = {
 
         if( !isPlainObject( v )) { return v }
 
-        if( ctx.mode === 'strip' ) { return {} }
+        if( ctx.mode === 'strip' )
+        {
+            const shell = {};
+
+            if( ctx.unionProbe ){ probeSource.set( shell, v ) }
+
+            return shell;
+        }
 
         // A closed shape writes back every key it keeps, so copying the input first is wasted work.
         // Only `relaxed` needs the copy, being the one mode where an unknown key is kept as-is.
@@ -1625,11 +1642,27 @@ export const validators = {
 
     stripExtras : ( data: any, ctx: ValidationContext, allowedKeys?: string[] | Set<string> ) => 
     {
-        if( !shouldMutate( ctx ) || ctx.mode !== 'strip' || !allowedKeys || !data || typeof data !== 'object' ) { return data }
+        if( ctx.mode !== 'strip' || !ctx.success || !allowedKeys || !data || typeof data !== 'object' ) { return data }
 
-        for( const k of Object.keys( data )) 
+        const mutate = shouldMutate( ctx );
+        const probe = ctx.unionProbe;
+
+        if( !mutate && !probe ) { return data }
+
+        const src = ( probe && probeSource.get( data )) || data;
+
+        for( const k of Object.keys( src )) 
         {
-            if( !keySetHas( allowedKeys, k )) { delete data[k] }
+            if( keySetHas( allowedKeys, k ))
+            {
+                if( probe && src[k] !== undefined ){ probe.matched++ }
+            }
+            else
+            {
+                if( probe && src[k] !== undefined ){ probe.stripped++ }
+
+                if( mutate ){ delete data[k] }
+            }
         }
 
         return data;
@@ -1639,12 +1672,19 @@ export const validators = {
     {
         if( !isPlainObject( v )){ return }
 
+        const probe = ctx.mode === 'strip' ? ctx.unionProbe : undefined;
+        let matched = 0;
+
         for( const key of Object.keys( v )) 
         {
+            if( probe && v[key] !== undefined ){ matched++ }
+
             if( keySetHas( knownKeys, key )){ continue }
 
             setOwnProperty( data, key, childValidator( v[key], childPath( path, key ), ctx ));
         }
+
+        if( probe && ctx.success ){ probe.matched += matched }
     },
 
     object : ( v: any, path: string, ctx: ValidationContext, allowedKeys?: string[] | Set<string>, expected: string = 'Type<Object>' ) => 
@@ -2021,18 +2061,28 @@ export const validators = {
         return validators.union( v, path, ctx, [ ...byTag.values() ], expected );
     },
 
-    union : ( v: any, path: string, ctx: ValidationContext, checks: Function[], expected: string = 'Type<Union>' ) => 
+    union : (
+        v             : any,
+        path          : string,
+        ctx           : ValidationContext,
+        checks        : Function[],
+        expected      : string = 'Type<Union>',
+        probeBestFit  : boolean = false,
+        fallbackFlags?: boolean[],
+        exclusiveKeys?: string[]
+    ) => 
     {
         const unionErrors: IValidationError[] = [];
         // Speculative arms always use a side tree so a failed arm cannot poison the next.
         const subCtx: ValidationContext =
         {
-            success : true,
-            errors  : [],
-            mode    : ctx.mode,
-            from    : undefined,
-            mutate  : false,
-            root    : ctx.root
+            success         : true,
+            errors          : [],
+            mode            : ctx.mode,
+            from            : undefined,
+            mutate          : false,
+            root            : ctx.root,
+            unionResolution : ctx.unionResolution
         };
 
         const accept = ( val: any ) =>
@@ -2042,34 +2092,193 @@ export const validators = {
             return val;
         };
 
-        // Pass 1: No conversion
-        for( const check of checks )
+        if( exclusiveKeys && isPlainObject( v ))
         {
-            subCtx.success = true;
-            subCtx.errors.length = 0;
-            subCtx.from = undefined;
-            const val = check( v, path, subCtx );
+            let matchedIdx = -1;
 
-            if( subCtx.success ){ return accept( val ) }
-
-            unionErrors.push( ...subCtx.errors );
-        }
-
-        // Pass 2: With conversion (only when caller opted in)
-        if( ctx.from )
-        {
-            unionErrors.length = 0;
-
-            for( const check of checks )
+            for( let i = 0; i < exclusiveKeys.length; i++ )
             {
+                if( v[exclusiveKeys[i]] !== undefined )
+                {
+                    if( matchedIdx !== -1 )
+                    {
+                        matchedIdx = -1;
+                        break;
+                    }
+
+                    matchedIdx = i;
+                }
+            }
+
+            if( matchedIdx >= 0 )
+            {
+                const armProbe = ctx.mode === 'strip' && ctx.unionProbe ? { stripped : 0, matched : 0 } : undefined;
                 subCtx.success = true;
                 subCtx.errors.length = 0;
-                subCtx.from = ctx.from;
-                const val = check( v, path, subCtx );
+                subCtx.from = undefined;
+                subCtx.unionProbe = armProbe;
+                const val = checks[matchedIdx]( v, path, subCtx );
 
-                if( subCtx.success ){ return accept( val ) }
+                if( subCtx.success )
+                {
+                    if( armProbe && ctx.unionProbe )
+                    {
+                        ctx.unionProbe.stripped += armProbe.stripped;
+                        ctx.unionProbe.matched += armProbe.matched;
+                    }
 
-                unionErrors.push( ...subCtx.errors );
+                    return accept( val );
+                }
+            }
+        }
+
+        if( ctx.mode === 'strip' && probeBestFit && ctx.unionResolution !== 'declaration-order' )
+        {
+            let bestVal: any;
+            let hasBest = false;
+            let bestStripped = Infinity;
+            let bestMatched = -1;
+            let fallbackVal: any;
+            let hasFallback = false;
+
+            const runPass = ( fromOpt: FromOption | undefined ): { shortCircuit : boolean, value? : any } =>
+            {
+                for( let i = 0; i < checks.length; i++ )
+                {
+                    const isFallback = Boolean( fallbackFlags && fallbackFlags[i]);
+
+                    if( isFallback && ( hasBest || hasFallback )){ continue }
+
+                    const probe = { stripped : 0, matched : 0 };
+                    subCtx.success = true;
+                    subCtx.errors.length = 0;
+                    subCtx.from = fromOpt;
+                    subCtx.unionProbe = probe;
+                    const val = checks[i]( v, path, subCtx );
+
+                    if( !subCtx.success )
+                    {
+                        unionErrors.push( ...subCtx.errors );
+                        continue;
+                    }
+
+                    if( isFallback )
+                    {
+                        fallbackVal = val;
+                        hasFallback = true;
+                        continue;
+                    }
+
+                    if( probe.stripped === 0 )
+                    {
+                        if( ctx.unionProbe )
+                        {
+                            ctx.unionProbe.matched += probe.matched;
+                        }
+
+                        return { shortCircuit : true, value : accept( val ) };
+                    }
+
+                    if(
+                        !hasBest ||
+                        probe.stripped < bestStripped ||
+                        ( probe.stripped === bestStripped && probe.matched > bestMatched )
+                    )
+                    {
+                        bestVal = val;
+                        hasBest = true;
+                        bestStripped = probe.stripped;
+                        bestMatched = probe.matched;
+                    }
+                }
+
+                return { shortCircuit : false };
+            };
+
+            const pass1 = runPass( undefined );
+
+            if( pass1.shortCircuit ){ return pass1.value }
+
+            if( ctx.from )
+            {
+                unionErrors.length = 0;
+                const pass2 = runPass( ctx.from );
+
+                if( pass2.shortCircuit ){ return pass2.value }
+            }
+
+            if( hasBest )
+            {
+                if( ctx.unionProbe )
+                {
+                    ctx.unionProbe.stripped += bestStripped;
+                    ctx.unionProbe.matched += bestMatched;
+                }
+
+                return accept( bestVal );
+            }
+
+            if( hasFallback )
+            {
+                return accept( fallbackVal );
+            }
+        }
+        else
+        {
+            let fallbackVal: any;
+            let hasFallback = false;
+
+            const runOrderedPass = ( fromOpt: FromOption | undefined ): { matched : boolean, value? : any } =>
+            {
+                for( let i = 0; i < checks.length; i++ )
+                {
+                    const isFallback = Boolean( fallbackFlags && fallbackFlags[i]);
+
+                    if( isFallback && hasFallback ){ continue }
+
+                    const armProbe = ctx.mode === 'strip' && ctx.unionProbe ? { stripped : 0, matched : 0 } : undefined;
+                    subCtx.success = true;
+                    subCtx.errors.length = 0;
+                    subCtx.from = fromOpt;
+                    subCtx.unionProbe = armProbe;
+                    const val = checks[i]( v, path, subCtx );
+
+                    if( subCtx.success )
+                    {
+                        if( isFallback && !fromOpt && ctx.from )
+                        {
+                            fallbackVal = val;
+                            hasFallback = true;
+                            continue;
+                        }
+
+                        if( armProbe && ctx.unionProbe )
+                        {
+                            ctx.unionProbe.stripped += armProbe.stripped;
+                            ctx.unionProbe.matched += armProbe.matched;
+                        }
+
+                        return { matched : true, value : accept( val ) };
+                    }
+
+                    unionErrors.push( ...subCtx.errors );
+                }
+
+                return { matched : false };
+            };
+
+            const pass1 = runOrderedPass( undefined );
+
+            if( pass1.matched ){ return pass1.value }
+
+            if( ctx.from )
+            {
+                unionErrors.length = 0;
+                const pass2 = runOrderedPass( ctx.from );
+
+                if( pass2.matched ){ return pass2.value }
+
+                if( hasFallback ){ return accept( fallbackVal ) }
             }
         }
 
@@ -2222,11 +2431,17 @@ export const validators = {
         }
         const mutate = shouldMutate( ctx );
         const data = mutate ? v : {};
+        const probe = ctx.mode === 'strip' ? ctx.unionProbe : undefined;
+        let matched = 0;
 
         for( const key of Object.keys( v )) 
         {
+            if( probe && v[key] !== undefined ){ matched++ }
+
             setOwnProperty( data, key, childValidator( v[key], childPath( path, key ), ctx ));
         }
+
+        if( probe && ctx.success ){ probe.matched += matched }
 
         return data;
     },
@@ -2411,7 +2626,8 @@ export function is( validator: Function, value: any, options?: ValidationMode | 
     const opt = options;
     const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
     const from = typeof opt === 'object' ? opt?.from : undefined;
-    const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate : true, root : value };
+    const unionResolution = typeof opt === 'object' ? opt?.unionResolution : undefined;
+    const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate : true, root : value, unionResolution };
     const res = validator( value, '', ctx );
 
     if( !ctx.success ){ return false }
@@ -2429,7 +2645,8 @@ export function assert( validator: Function, value: any, options?: ValidationMod
     const from = typeof opt === 'object' ? opt?.from : undefined;
     const mutate = typeof opt === 'object' ? opt?.mutate === true : false;
     const transform = typeof opt === 'object' ? opt?.transform : undefined;
-    const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate, root : value, transform };
+    const unionResolution = typeof opt === 'object' ? opt?.unionResolution : undefined;
+    const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate, root : value, transform, unionResolution };
     const res = validator( value, '', ctx );
 
     if( !ctx.success )
@@ -2456,7 +2673,8 @@ export function assertGuard( validator: Function, value: any, options?: Validati
     const opt = options;
     const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
     const from = typeof opt === 'object' ? opt?.from : undefined;
-    const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate : true, root : value };
+    const unionResolution = typeof opt === 'object' ? opt?.unionResolution : undefined;
+    const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate : true, root : value, unionResolution };
     const res = validator( value, '', ctx );
 
     if( ctx.success && ( res === value || commitContainer( value, res ))){ return }
@@ -2489,7 +2707,8 @@ export function validate( validator: Function, value: any, options?: ValidationM
     const from = typeof opt === 'object' ? opt?.from : undefined;
     const mutate = typeof opt === 'object' ? opt?.mutate === true : false;
     const transform = typeof opt === 'object' ? opt?.transform : undefined;
-    const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate, root : value, transform };
+    const unionResolution = typeof opt === 'object' ? opt?.unionResolution : undefined;
+    const ctx: ValidationContext = { success : true, errors : [], mode, from, mutate, root : value, transform, unionResolution };
     const res = validator( value, '', ctx );
 
     if( !ctx.success ){ return { success : false, errors : ctx.errors } }

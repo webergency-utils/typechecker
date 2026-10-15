@@ -763,6 +763,59 @@ describe( 'Serializer Fixes & Regressions', () =>
 
         expect( mod.serCustomBrand( 'hello' )).toBe( '"hello"' );
     });
+
+    it( 'preserves all properties for non-primitive object keyword type (object and object | string | null) in strip, strict, and relaxed modes', async() =>
+    {
+        const mod = await emitAndImport<{
+            serObjStrip   : ( v: object ) => string
+            serObjStrict  : ( v: object ) => string
+            serUnionStrip : ( v: object | string | null ) => string
+            serObjQuery   : ( v: object ) => string
+            parseObjStrip : ( s: string ) => object
+            parseUnion    : ( s: string ) => object | string | null
+            isObj         : ( v: unknown ) => v is object
+            assertObj     : ( v: unknown ) => object
+            schemaObj     : () => any
+        }>( `
+            import { stringify, parse, is, assert, jsonSchema } from '../src/index.js';
+            export const serObjStrip = ( v: object ) => stringify<object>( v );
+            export const serObjStrict = ( v: object ) => stringify<object>( v, 'strict' );
+            export const serUnionStrip = ( v: object | string | null ) => stringify<object | string | null>( v );
+            export const serObjQuery = ( v: object ) => stringify<object>( v, { format: 'query' } );
+            export const parseObjStrip = ( s: string ) => parse<object>( s );
+            export const parseUnion = ( s: string ) => parse<object | string | null>( s );
+            export const isObj = ( v: unknown ): v is object => is<object>( v );
+            export const assertObj = ( v: unknown ) => assert<object>( v, 'strip' );
+            export const schemaObj = () => jsonSchema<object>();
+        `, 'temp_ser_non_primitive_object' );
+
+        const payload = { id : 'job-1', amount : 250, nested : { status : 'pending' } };
+        expect( JSON.parse( mod.serObjStrip( payload ))).toEqual( payload );
+        expect( JSON.parse( mod.serObjStrict( payload ))).toEqual( payload );
+        expect( JSON.parse( mod.serUnionStrip( payload ))).toEqual( payload );
+        expect( mod.serUnionStrip( '' )).toBe( '""' );
+        expect( mod.serUnionStrip( 'hello' )).toBe( '"hello"' );
+        expect( mod.serUnionStrip( null )).toBe( 'null' );
+        expect(() => mod.serObjStrip( 'not-an-object' as any )).toThrow( /Type<Object>/ );
+        expect(() => mod.serObjStrip( null as any )).toThrow( /Type<Object>/ );
+        expect(() => mod.serObjStrip([ 1, 2 ] as any )).toThrow( /Type<Object>/ );
+
+        expect( mod.serObjQuery({ a : 1, b : 'two' })).toBe( 'a=1&b=two' );
+        expect(() => mod.serObjQuery( 'bad' as any )).toThrow( /Type<Object>/ );
+
+        expect( mod.parseObjStrip( JSON.stringify( payload ))).toEqual( payload );
+        expect( mod.parseUnion( JSON.stringify( payload ))).toEqual( payload );
+        expect( mod.parseUnion( '""' )).toBe( '' );
+        expect( mod.parseUnion( 'null' )).toBeNull();
+        expect(() => mod.parseObjStrip( '"not-an-object"' )).toThrow( /Type<Object>/ );
+
+        expect( mod.isObj( payload )).toBe( true );
+        expect( mod.isObj( 'str' )).toBe( false );
+        expect( mod.isObj( null )).toBe( false );
+        expect( mod.isObj([ 1, 2 ])).toBe( false );
+        expect( mod.assertObj( payload )).toEqual( payload );
+        expect( mod.schemaObj()).toEqual({ type : 'object' });
+    });
 });
 
 

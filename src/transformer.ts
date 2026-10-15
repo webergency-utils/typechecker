@@ -7,7 +7,7 @@ import { installStaticConstraintDiagnostics } from './engine/staticAsserts.js';
 import { generateSerializerCode, SerializerGeneratorOptions, SerializeFormat } from './engine/serializer-generator.js';
 import { generateParseCode, ParseGeneratorOptions, ParseSource } from './engine/parse-generator.js';
 import { templateToAst } from './engine/generators.js';
-import { ValidationMode } from './runtime/validators.js';
+import { ValidationMode, UnionResolution } from './runtime/validators.js';
 import { VERBATIM_CUSTOM_SCOPE } from './engine/type-helpers.js';
 
 export function buildSerializer(
@@ -23,12 +23,14 @@ export function buildSerializer(
         : options;
     const mode = opts.mode || 'strip';
     const format = opts.format || opts.to || 'json';
-    const resolvedHash = `${hash ?? generateHash( type, checker )}_${mode}_${format}`;
+    const unionResolution: UnionResolution = opts.unionResolution || 'specificity';
+    const resSuffix = unionResolution === 'declaration-order' ? '_decl' : '';
+    const resolvedHash = `${hash ?? generateHash( type, checker )}_${mode}_${format}${resSuffix}`;
 
     if( !map.has( resolvedHash ))
     {
         const hoisted: string[] = [];
-        const codeStr = generateSerializerCode( type, checker, { mode, format, hoisted });
+        const codeStr = generateSerializerCode( type, checker, { mode, format, unionResolution, hoisted });
         const innerFn = format === 'query'
             ? `( function( input, options ){ const transform = options && options.transform; return ${codeStr}; })`
             : `( function( input, options ){ const transform = options && options.transform; const replacer = options && options.replacer; const out = ${codeStr}; if( replacer ){ try { return JSON.stringify( JSON.parse( out ), replacer ); } catch( e ){ throw new __tcRuntime.SerializationError( "", e && e.message ? e.message : String( e ) ); } } return out; })`;
@@ -53,11 +55,13 @@ export function buildParser(
 {
     const mode = options.mode || 'strip';
     const from = options.from || 'json';
-    const resolvedHash = `${hash ?? generateHash( type, checker )}_${mode}_${from}`;
+    const unionResolution: UnionResolution = options.unionResolution || 'specificity';
+    const resSuffix = unionResolution === 'declaration-order' ? '_decl' : '';
+    const resolvedHash = `${hash ?? generateHash( type, checker )}_${mode}_${from}${resSuffix}`;
 
     if( !map.has( resolvedHash ))
     {
-        const codeStr = generateParseCode( type, checker, { mode, from }, scope );
+        const codeStr = generateParseCode( type, checker, { mode, from, unionResolution }, scope );
         const ast = templateToAst( codeStr );
         map.set( resolvedHash, ast );
     }
@@ -166,6 +170,25 @@ function extractStringValue(
     return undefined;
 }
 
+function parseUnionResolution(
+    optsArg : ts.Expression | undefined,
+    checker : ts.TypeChecker
+): UnionResolution
+{
+    if( optsArg && ts.isObjectLiteralExpression( optsArg ))
+    {
+        const resProp = optsArg.properties.find( p => getPropName( p ) === 'unionResolution' );
+        const extracted = extractStringValue( resProp, checker );
+
+        if( extracted === 'declaration-order' || extracted === 'specificity' )
+        {
+            return extracted;
+        }
+    }
+
+    return 'specificity';
+}
+
 function parseSerializerOptions(
     optsArg : ts.Expression | undefined,
     checker : ts.TypeChecker
@@ -173,6 +196,7 @@ function parseSerializerOptions(
 {
     let mode: ValidationMode = 'strip';
     let format: SerializeFormat = 'json';
+    const unionResolution = parseUnionResolution( optsArg, checker );
 
     if( optsArg && ts.isStringLiteral( optsArg ))
     {
@@ -211,7 +235,7 @@ function parseSerializerOptions(
         }
     }
 
-    return { mode, format };
+    return { mode, format, unionResolution };
 }
 
 function parseParseOptions(
@@ -221,6 +245,7 @@ function parseParseOptions(
 {
     let mode: ValidationMode = 'strip';
     let from: ParseSource = 'json';
+    const unionResolution = parseUnionResolution( optsArg, checker );
 
     if( optsArg && ts.isStringLiteral( optsArg ))
     {
@@ -254,7 +279,7 @@ function parseParseOptions(
         }
     }
 
-    return { mode, from };
+    return { mode, from, unionResolution };
 }
 
 export default function transformer( program: ts.Program )
@@ -410,12 +435,15 @@ export default function transformer( program: ts.Program )
 
                             if( fnName === 'standardSchema' )
                             {
-                                if( !validatorCache.has( hash ))
+                                const unionResolution = parseUnionResolution( node.arguments[0], checker );
+                                const valKey = unionResolution === 'declaration-order' ? `${hash}_decl` : hash;
+
+                                if( !validatorCache.has( valKey ))
                                 {
-                                    buildValidator( type, checker, validatorCache, hash, customFns );
+                                    buildValidator( type, checker, validatorCache, hash, customFns, unionResolution );
                                 }
 
-                                const validatorRef = ts.factory.createIdentifier( `__val_${hash}` );
+                                const validatorRef = ts.factory.createIdentifier( `__val_${valKey}` );
                                 const optionsArg = visitArgOrUndefined( node.arguments, 0, visitor );
 
                                 return runtimeCall( emitNames.runtimeNs, 'createStandardSchema', [ validatorRef, optionsArg ]);
@@ -423,14 +451,17 @@ export default function transformer( program: ts.Program )
 
                             if( VALIDATION_FUNCTIONS.includes( fnName ))
                             {
-                                if( !validatorCache.has( hash ))
+                                const unionResolution = parseUnionResolution( node.arguments[1], checker );
+                                const valKey = unionResolution === 'declaration-order' ? `${hash}_decl` : hash;
+
+                                if( !validatorCache.has( valKey ))
                                 {
-                                    buildValidator( type, checker, validatorCache, hash, customFns );
+                                    buildValidator( type, checker, validatorCache, hash, customFns, unionResolution );
                                 }
 
                                 const inputArg = visitArgOrUndefined( node.arguments, 0, visitor );
                                 const optionsArg = visitArgOrUndefined( node.arguments, 1, visitor );
-                                const validatorRef = ts.factory.createIdentifier( `__val_${hash}` );
+                                const validatorRef = ts.factory.createIdentifier( `__val_${valKey}` );
 
                                 return runtimeCall( emitNames.runtimeNs, fnName, [ validatorRef, inputArg, optionsArg ]);
                             }

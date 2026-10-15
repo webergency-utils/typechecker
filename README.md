@@ -399,7 +399,9 @@ Controls **unknown object keys only**. It does **not** coerce or revive values â
 | :--- | :--- |
 | `'strict'` (default) | Reject properties not declared on the type/schema. |
 | `'relaxed'` | Allow unknown properties and keep them on the result. No type conversion. |
-| `'strip'` | Drop unknown properties from the result (in place when mutating). |
+| `'strip'` | Drop unknown properties from the result (in place when mutating). For non-discriminated object unions, short-circuits on the first lossless arm (0 stripped keys) or picks the valid arm that strips the fewest keys (widest matched shape on tie). |
+
+> **Union specificity**: Non-discriminated unions are ordered from most specific to least specific at compile time (e.g. `{ foo: string; bar: number }` before `{ foo: string }`, and structured shapes before `object` / `any` / `unknown` fallbacks). In `'strip'` mode (`validate`, `assert`, `parse`, `serializer`, `stringify`), competing object arms also track stripped/matched keys so an arm that preserves more known properties wins over a narrower partial match.
 
 ```typescript
 // OK: extra keys kept; age stays a string unless you also set from

@@ -31,6 +31,7 @@ export default defineConfig({
         'src/engine/serializer-generator.ts',
         'src/engine/parse-generator.ts',
         'src/engine/type-helpers.ts',
+        'src/engine/specificity.ts',
         'src/engine/generators.ts',
         'src/engine/hoister.ts',
         'src/engine/staticAsserts.ts',

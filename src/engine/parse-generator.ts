@@ -1,5 +1,5 @@
 import ts from 'typescript';
-import { ValidationMode, type CoercionKind } from '../runtime/validators.js';
+import { ValidationMode, type CoercionKind, type UnionResolution } from '../runtime/validators.js';
 import { type ICustomFunctionScope } from './customFns.js';
 import
 {
@@ -11,7 +11,6 @@ import
     enumMemberTypes,
     isNativeEnumType,
     mapStructuralProps,
-    minifyTypeString,
     ParsedConstraint,
     peelTaggedIntersection,
     safePropAccess,
@@ -24,21 +23,31 @@ import
     VERBATIM_CUSTOM_SCOPE
 }
     from './type-helpers.js';
+import
+{
+    hasCompetingObjectArms,
+    isFallbackUnionArm,
+    sortUnionArmsBySpecificity,
+    tryExclusiveKeyUnion
+}
+    from './specificity.js';
 
 export type ParseSource = 'json' | 'query' | 'string';
 
 export interface ParseGeneratorOptions
 {
-    mode? : ValidationMode
-    from? : ParseSource
+    mode?            : ValidationMode
+    from?            : ParseSource
+    unionResolution? : UnionResolution
 }
 
 type RecParseDef =
     {
-        fnName : string
-        type   : ts.Type
-        mode   : ValidationMode
-        from   : ParseSource
+        fnName          : string
+        type            : ts.Type
+        mode            : ValidationMode
+        from            : ParseSource
+        unionResolution : UnionResolution
     };
 
 /** Query-style coercions shared by `from: 'query'` and `from: 'string'`. */
@@ -229,6 +238,7 @@ export function generateParseCode(
 {
     const mode = options.mode || 'strip';
     const from = options.from || 'json';
+    const unionResolution = options.unionResolution || 'specificity';
     const hoisted: string[] = [];
     const recDefs = new Map<number, RecParseDef>();
     const wrapOuter = ( fnExpr: string ): string =>
@@ -243,7 +253,7 @@ export function generateParseCode(
 
                 generatedRecFns.add( id );
                 const recVisited = new Set<number>();
-                const recBody = buildValidation( def.type, checker, def.mode, def.from, 'raw', 'p', 'root', scope, recVisited, hoisted, recDefs );
+                const recBody = buildValidation( def.type, checker, def.mode, def.from, 'raw', 'p', 'root', scope, recVisited, hoisted, recDefs, def.unionResolution );
                 hoisted.push( `function ${def.fnName}( raw, p, root, transform ){ return ${recBody}; }` );
             }
         }
@@ -256,7 +266,7 @@ export function generateParseCode(
     if( from === 'string' )
     {
         assertStringSourceCompatible( type, checker, scope );
-        const body = buildValidation( type, checker, mode, 'string', 'input', 'path', 'input', scope, new Set(), hoisted, recDefs );
+        const body = buildValidation( type, checker, mode, 'string', 'input', 'path', 'input', scope, new Set(), hoisted, recDefs, unionResolution );
 
         // Already-decoded scalar wire value — never parseQueryString / JSON.parse. Ignore reviver.
         return wrapOuter( `( function( raw, options ){ const path = ""; const transform = options && options.transform; const input = __tcRuntime.expectString( raw, path ); return ${body}; })` );
@@ -264,13 +274,13 @@ export function generateParseCode(
 
     if( from === 'query' )
     {
-        const body = buildValidation( type, checker, mode, 'query', 'rawQuery', 'path', 'rawQuery', scope, new Set(), hoisted, recDefs );
+        const body = buildValidation( type, checker, mode, 'query', 'rawQuery', 'path', 'rawQuery', scope, new Set(), hoisted, recDefs, unionResolution );
 
         // Query text only — never starts with `?` (`url.search.slice(1)` / form body). Flag-keys stay flag-keys.
         return wrapOuter( `( function( input, options ){ const path = ""; const reviver = options && options.reviver; const transform = options && options.transform; const text = __tcRuntime.expectString( input, path ); let rawQuery = __tcRuntime.parseQueryString( text ); if( reviver ){ rawQuery = __tcRuntime.reviveTree( rawQuery, reviver ); } return ${body}; })` );
     }
 
-    const body = buildValidation( type, checker, mode, 'json', 'obj', 'path', 'obj', scope, new Set(), hoisted, recDefs );
+    const body = buildValidation( type, checker, mode, 'json', 'obj', 'path', 'obj', scope, new Set(), hoisted, recDefs, unionResolution );
 
     // JSON text only — always JSON.parse. Unquoted scalars belong on from:'string'.
     return wrapOuter( `( function( input, options ){ const path = ""; const reviver = options && options.reviver; const transform = options && options.transform; const text = __tcRuntime.expectString( input, path ); let obj; try { obj = JSON.parse( text ); } catch( e ){ throw new __tcRuntime.ParseError( path, "Invalid JSON: " + e.message ); } if( reviver ){ obj = __tcRuntime.reviveTree( obj, reviver ); } return ${body}; })` );
@@ -312,20 +322,21 @@ function serializeConstraints( list: ParsedConstraint[], hoisted: string[]): str
 }
 
 function wrapConstraints(
-    innerFactory : ( varName: string, pathExpr: string ) => string,
-    constraints  : ParsedConstraint[],
-    varName      : string,
-    pathExpr     : string,
-    from         : ParseSource,
-    rootExpr     : string,
-    checker      : ts.TypeChecker,
-    mode         : ValidationMode,
-    scope        : ICustomFunctionScope,
-    kind         : CoercionKind,
-    applyOption  : boolean,
-    visited      : Set<number>,
-    hoisted      : string[],
-    recDefs      : Map<number, RecParseDef> = new Map()
+    innerFactory    : ( varName: string, pathExpr: string ) => string,
+    constraints     : ParsedConstraint[],
+    varName         : string,
+    pathExpr        : string,
+    from            : ParseSource,
+    rootExpr        : string,
+    checker         : ts.TypeChecker,
+    mode            : ValidationMode,
+    scope           : ICustomFunctionScope,
+    kind            : CoercionKind,
+    applyOption     : boolean,
+    visited         : Set<number>,
+    hoisted         : string[],
+    recDefs         : Map<number, RecParseDef> = new Map(),
+    unionResolution : UnionResolution = 'specificity'
 ): string
 {
     const tags = constraintTagNames( constraints );
@@ -387,7 +398,7 @@ function wrapConstraints(
     if( containsC?.nestedType )
     {
         const itemBody = buildValidation(
-            containsC.nestedType, checker, mode, from, 'item', 'itemP', rootExpr, scope, visited, hoisted, recDefs
+            containsC.nestedType, checker, mode, from, 'item', 'itemP', rootExpr, scope, visited, hoisted, recDefs, unionResolution
         );
         const minStr = minContains !== undefined ? String( minContains ) : '1';
         const maxStr = maxContains !== undefined ? String( maxContains ) : 'undefined';
@@ -399,7 +410,7 @@ function wrapConstraints(
     if( propertyNamesC?.nestedType )
     {
         const keyBody = buildValidation(
-            propertyNamesC.nestedType, checker, mode, from, 'key', 'keyP', rootExpr, scope, visited, hoisted, recDefs
+            propertyNamesC.nestedType, checker, mode, from, 'key', 'keyP', rootExpr, scope, visited, hoisted, recDefs, unionResolution
         );
         const msgArg = propertyNamesC.message !== undefined
             ? `, ${JSON.stringify( propertyNamesC.message )}`
@@ -422,17 +433,18 @@ function wrapConstraints(
 }
 
 function buildValidation(
-    type     : ts.Type,
-    checker  : ts.TypeChecker,
-    mode     : ValidationMode,
-    from     : ParseSource,
-    varName  : string,
-    pathExpr : string,
-    rootExpr : string,
-    scope    : ICustomFunctionScope,
-    visited  : Set<number> = new Set(),
-    hoisted  : string[] = [],
-    recDefs  : Map<number, RecParseDef> = new Map()
+    type            : ts.Type,
+    checker         : ts.TypeChecker,
+    mode            : ValidationMode,
+    from            : ParseSource,
+    varName         : string,
+    pathExpr        : string,
+    rootExpr        : string,
+    scope           : ICustomFunctionScope,
+    visited         : Set<number> = new Set(),
+    hoisted         : string[] = [],
+    recDefs         : Map<number, RecParseDef> = new Map(),
+    unionResolution : UnionResolution = 'specificity'
 ): string
 {
     const typeId = ( type as any ).id;
@@ -446,7 +458,7 @@ function buildValidation(
             if( !def )
             {
                 const fnName = `__rec_parse_${typeId}_${hoisted.length}`;
-                def = { fnName, type, mode, from };
+                def = { fnName, type, mode, from, unionResolution };
                 recDefs.set( typeId, def );
             }
 
@@ -477,7 +489,7 @@ function buildValidation(
                     if( inner )
                     {
                         return wrapConstraints(
-                            ( vn, pe ) => buildObjectValidation( inner.props, inner.indexType, checker, mode, from, vn, pe, rootExpr, scope, visited, hoisted, recDefs ),
+                            ( vn, pe ) => buildObjectValidation( inner.props, inner.indexType, checker, mode, from, vn, pe, rootExpr, scope, visited, hoisted, recDefs, unionResolution ),
                             constraints,
                             varName,
                             pathExpr,
@@ -490,7 +502,8 @@ function buildValidation(
                             false,
                             visited,
                             hoisted,
-                            recDefs
+                            recDefs,
+                            unionResolution
                         );
                     }
                 }
@@ -501,7 +514,7 @@ function buildValidation(
 
                 if( merged )
                 {
-                    return buildObjectValidation( merged.props, merged.indexType, checker, mode, from, varName, pathExpr, rootExpr, scope, visited, hoisted, recDefs );
+                    return buildObjectValidation( merged.props, merged.indexType, checker, mode, from, varName, pathExpr, rootExpr, scope, visited, hoisted, recDefs, unionResolution );
                 }
 
                 if( peeled )
@@ -513,7 +526,7 @@ function buildValidation(
         }
 
         return wrapConstraints(
-            ( vn, pe ) => buildValidationCore( walkType, checker, mode, from, vn, pe, rootExpr, scope, visited, hoisted, recDefs ),
+            ( vn, pe ) => buildValidationCore( walkType, checker, mode, from, vn, pe, rootExpr, scope, visited, hoisted, recDefs, unionResolution ),
             constraints,
             varName,
             pathExpr,
@@ -526,7 +539,8 @@ function buildValidation(
             shouldApplyParseTransform( walkType, checker ),
             visited,
             hoisted,
-            recDefs
+            recDefs,
+            unionResolution
         );
     }
     finally
@@ -536,17 +550,18 @@ function buildValidation(
 }
 
 function buildValidationCore(
-    type     : ts.Type,
-    checker  : ts.TypeChecker,
-    mode     : ValidationMode,
-    from     : ParseSource,
-    varName  : string,
-    pathExpr : string,
-    rootExpr : string,
-    scope    : ICustomFunctionScope,
-    visited  : Set<number> = new Set(),
-    hoisted  : string[] = [],
-    recDefs  : Map<number, RecParseDef> = new Map()
+    type            : ts.Type,
+    checker         : ts.TypeChecker,
+    mode            : ValidationMode,
+    from            : ParseSource,
+    varName         : string,
+    pathExpr        : string,
+    rootExpr        : string,
+    scope           : ICustomFunctionScope,
+    visited         : Set<number> = new Set(),
+    hoisted         : string[] = [],
+    recDefs         : Map<number, RecParseDef> = new Map(),
+    unionResolution : UnionResolution = 'specificity'
 ): string
 {
     const flags = typeof type.getFlags === 'function' ? type.getFlags() : ts.TypeFlags.Any;
@@ -556,6 +571,11 @@ function buildValidationCore(
     if( flags & ts.TypeFlags.Any || flags & ts.TypeFlags.Unknown )
     {
         return varName;
+    }
+
+    if( flags & ts.TypeFlags.NonPrimitive )
+    {
+        return `__tcRuntime.expectObject( ${varName}, ${p} )`;
     }
 
     if( flags & ts.TypeFlags.Undefined )
@@ -661,7 +681,9 @@ function buildValidationCore(
                 rootExpr,
                 scope,
                 visited,
-                hoisted
+                hoisted,
+                recDefs,
+                unionResolution
             );
         }
     }
@@ -697,7 +719,7 @@ function buildValidationCore(
     {
         const typeArgs = ( type as ts.TupleTypeReference ).typeArguments || [];
         const slots = typeArgs.map(( elem, i ) =>
-            buildValidation( elem, checker, mode, from, `arr[${i}]`, `p + "[${i}]"`, rootExpr, scope, visited, hoisted, recDefs )
+            buildValidation( elem, checker, mode, from, `arr[${i}]`, `p + "[${i}]"`, rootExpr, scope, visited, hoisted, recDefs, unionResolution )
         ).join( ', ' );
 
         return `( function( arr, p ){ if( !Array.isArray( arr ) || arr.length !== ${typeArgs.length} ){ throw new __tcRuntime.ParseError( p, "Tuple<${typeArgs.length}>" ); } return [${slots}]; })( ${varName}, ${p} )`;
@@ -706,7 +728,7 @@ function buildValidationCore(
     if( typeof checker.isArrayType === 'function' && checker.isArrayType( type ))
     {
         const elemType = ( checker as any ).getTypeArguments?.( type as ts.TypeReference )?.[0] || { getFlags : () => ts.TypeFlags.Any };
-        const elemCode = buildValidation( elemType, checker, mode, from, 'item', 'itemP', rootExpr, scope, visited, hoisted, recDefs );
+        const elemCode = buildValidation( elemType, checker, mode, from, 'item', 'itemP', rootExpr, scope, visited, hoisted, recDefs, unionResolution );
 
         if( wantsQueryCoercion( from ))
         {
@@ -721,7 +743,7 @@ function buildValidationCore(
         const elemType = ( checker as any ).getTypeArguments?.( type as ts.TypeReference )?.[0]
             || ( type as ts.TypeReference ).typeArguments?.[0]
             || ({ getFlags : () => ts.TypeFlags.Any } as any );
-        const elemCode = buildValidation( elemType, checker, mode, from, 'item', 'itemP', rootExpr, scope, visited, hoisted, recDefs );
+        const elemCode = buildValidation( elemType, checker, mode, from, 'item', 'itemP', rootExpr, scope, visited, hoisted, recDefs, unionResolution );
 
         return `__tcRuntime.parseSet( ${varName}, ${p}, ${JSON.stringify( from )}, ( item, itemP ) => ${elemCode} )`;
     }
@@ -734,8 +756,8 @@ function buildValidationCore(
         const keyType = typeArgs[0] || ({ getFlags : () => ts.TypeFlags.Any } as any );
         const valueType = typeArgs[1] || ({ getFlags : () => ts.TypeFlags.Any } as any );
         assertValidMapKeyType( keyType, checker );
-        const keyCode = buildValidation( keyType, checker, mode, 'string', 'k', 'keyP', rootExpr, scope, visited, hoisted, recDefs );
-        const valCode = buildValidation( valueType, checker, mode, from, 'val', 'valP', rootExpr, scope, visited, hoisted, recDefs );
+        const keyCode = buildValidation( keyType, checker, mode, 'string', 'k', 'keyP', rootExpr, scope, visited, hoisted, recDefs, unionResolution );
+        const valCode = buildValidation( valueType, checker, mode, from, 'val', 'valP', rootExpr, scope, visited, hoisted, recDefs, unionResolution );
 
         return `__tcRuntime.parseMap( ${varName}, ${p}, ${JSON.stringify( from )}, ( k, keyP ) => ${keyCode}, ( val, valP ) => ${valCode} )`;
     }
@@ -772,15 +794,37 @@ function buildValidationCore(
             }
 
             const cases = tagged.arms.map( arm =>
-                `case ${JSON.stringify( arm.tag )}: return ${buildValidation( arm.type, checker, mode, from, 'v', 'p', rootExpr, scope, visited, hoisted, recDefs )};`
+                `case ${JSON.stringify( arm.tag )}: return ${buildValidation( arm.type, checker, mode, from, 'v', 'p', rootExpr, scope, visited, hoisted, recDefs, unionResolution )};`
             ).join( ' ' );
 
             return `( function( v, p ){ switch( ${discExpr} ){ ${cases} default: throw new __tcRuntime.ParseError( p, ${JSON.stringify( label )} ); } })( ${varName}, ${p} )`;
         }
 
-        const armFns = arms.map( arm =>
-            `( v, p ) => ${buildValidation( arm, checker, mode, from, 'v', 'p', rootExpr, scope, visited, hoisted, recDefs )}`
+        const sortedArms = unionResolution === 'declaration-order'
+            ? arms.slice()
+            : sortUnionArmsBySpecificity( arms, checker );
+        const armFns = sortedArms.map( arm =>
+            `( v, p ) => ${buildValidation( arm, checker, mode, from, 'v', 'p', rootExpr, scope, visited, hoisted, recDefs, unionResolution )}`
         ).join( ', ' );
+        const probeBestFit = mode === 'strip' && unionResolution !== 'declaration-order' && hasCompetingObjectArms( sortedArms, checker );
+        const exclusiveKeys = tryExclusiveKeyUnion( sortedArms, checker );
+
+        if( probeBestFit )
+        {
+            const fallbackFlags = sortedArms.map( arm => isFallbackUnionArm( arm, checker ));
+            const hasFallbacks = fallbackFlags.some( Boolean );
+            const flagsArg = hasFallbacks
+                ? `, ${JSON.stringify( fallbackFlags )}`
+                : ( exclusiveKeys ? ', undefined' : '' );
+            const keysArg = exclusiveKeys ? `, ${JSON.stringify( exclusiveKeys )}` : '';
+
+            return `__tcRuntime.parseUnion( ${varName}, ${p}, ${JSON.stringify( label )}, [ ${armFns} ], true${flagsArg}${keysArg} )`;
+        }
+
+        if( exclusiveKeys )
+        {
+            return `__tcRuntime.parseUnion( ${varName}, ${p}, ${JSON.stringify( label )}, [ ${armFns} ], false, undefined, ${JSON.stringify( exclusiveKeys )} )`;
+        }
 
         return `__tcRuntime.parseUnion( ${varName}, ${p}, ${JSON.stringify( label )}, [ ${armFns} ] )`;
     }
@@ -788,22 +832,23 @@ function buildValidationCore(
     const indexType = stringIndexType( type, checker );
     const props = mapStructuralProps( type, checker );
 
-    return buildObjectValidation( props, indexType, checker, mode, from, varName, pathExpr, rootExpr, scope, visited, hoisted, recDefs );
+    return buildObjectValidation( props, indexType, checker, mode, from, varName, pathExpr, rootExpr, scope, visited, hoisted, recDefs, unionResolution );
 }
 
 function buildObjectValidation(
-    props     : { name : string, type : ts.Type, isOptional : boolean, hasDefault : boolean }[],
-    indexType : ts.Type | undefined,
-    checker   : ts.TypeChecker,
-    mode      : ValidationMode,
-    from      : ParseSource,
-    varName   : string,
-    pathExpr  : string,
-    rootExpr  : string,
-    scope     : ICustomFunctionScope,
-    visited   : Set<number> = new Set(),
-    hoisted   : string[] = [],
-    recDefs   : Map<number, RecParseDef> = new Map()
+    props           : { name : string, type : ts.Type, isOptional : boolean, hasDefault : boolean }[],
+    indexType       : ts.Type | undefined,
+    checker         : ts.TypeChecker,
+    mode            : ValidationMode,
+    from            : ParseSource,
+    varName         : string,
+    pathExpr        : string,
+    rootExpr        : string,
+    scope           : ICustomFunctionScope,
+    visited         : Set<number> = new Set(),
+    hoisted         : string[] = [],
+    recDefs         : Map<number, RecParseDef> = new Map(),
+    unionResolution : UnionResolution = 'specificity'
 ): string
 {
     const propNames = props.map( p => p.name );
@@ -814,7 +859,7 @@ function buildObjectValidation(
     {
         const valAccess = safePropAccess( 'o', prop.name );
         const subPathExpr = joinPath( pathExpr, prop.name );
-        const subValCode = buildValidation( prop.type, checker, mode, from, valAccess, subPathExpr, rootExpr, scope, visited, hoisted, recDefs );
+        const subValCode = buildValidation( prop.type, checker, mode, from, valAccess, subPathExpr, rootExpr, scope, visited, hoisted, recDefs, unionResolution );
 
         if( prop.hasDefault )
         {
@@ -834,24 +879,40 @@ function buildObjectValidation(
 
     let extraHandling = '';
 
-    if( indexType || mode === 'strict' || mode === 'relaxed' )
+    if( indexType || mode === 'strict' || mode === 'relaxed' || ( mode === 'strip' && props.length > 0 ))
     {
         const keysVar = hoisted.length === 0 ? '__keys' : `__keys_${hoisted.length}`;
         hoisted.push( `const ${keysVar} = new Set( ${JSON.stringify( propNames )} );` );
 
         if( indexType )
         {
-            const idxCode = buildValidation( indexType, checker, mode, from, 'o[k]', '( p ? p + "." + k : k )', rootExpr, scope, visited, hoisted, recDefs );
-            extraHandling = `for( const k of Object.keys( o ) ){ if( !${keysVar}.has( k ) ){ const __iv = ${idxCode}; if( k === "__proto__" || k === "constructor" || k === "prototype" ){ Object.defineProperty( res, k, { value: __iv, enumerable: true, configurable: true, writable: true } ); } else { res[k] = __iv; } } }`;
+            const idxCode = buildValidation( indexType, checker, mode, from, 'o[k]', '( p ? p + "." + k : k )', rootExpr, scope, visited, hoisted, recDefs, unionResolution );
+
+            if( mode === 'strip' )
+            {
+                extraHandling = `let __mt = 0; for( const k of Object.keys( o ) ){ if( o[k] !== undefined ){ __mt++; } if( !${keysVar}.has( k ) ){ const __iv = ${idxCode}; if( k === "__proto__" || k === "constructor" || k === "prototype" ){ Object.defineProperty( res, k, { value: __iv, enumerable: true, configurable: true, writable: true } ); } else { res[k] = __iv; } } } if( __tcRuntime.hasParseUnionProbe() ){ __tcRuntime.recordParseObjectStats( 0, __mt ); }`;
+            }
+            else
+            {
+                extraHandling = `for( const k of Object.keys( o ) ){ if( !${keysVar}.has( k ) ){ const __iv = ${idxCode}; if( k === "__proto__" || k === "constructor" || k === "prototype" ){ Object.defineProperty( res, k, { value: __iv, enumerable: true, configurable: true, writable: true } ); } else { res[k] = __iv; } } }`;
+            }
         }
         else if( mode === 'strict' )
         {
             extraHandling = `for( const k of Object.keys( o ) ){ if( !${keysVar}.has( k ) ){ throw new __tcRuntime.ParseError( p, "PropertyNotAllowed<" + k + ">" ); } }`;
         }
-        else
+        else if( mode === 'relaxed' )
         {
             extraHandling = `for( const k of Object.keys( o ) ){ if( !${keysVar}.has( k ) ){ if( k === "__proto__" || k === "constructor" || k === "prototype" ){ Object.defineProperty( res, k, { value: o[k], enumerable: true, configurable: true, writable: true } ); } else { res[k] = o[k]; } } }`;
         }
+        else if( mode === 'strip' )
+        {
+            extraHandling = `if( __tcRuntime.hasParseUnionProbe() ){ let __st = 0; let __mt = 0; for( const k of Object.keys( o ) ){ if( o[k] !== undefined ){ if( ${keysVar}.has( k ) ){ __mt++; } else { __st++; } } } __tcRuntime.recordParseObjectStats( __st, __mt ); }`;
+        }
+    }
+    else if( mode === 'strip' )
+    {
+        extraHandling = 'if( __tcRuntime.hasParseUnionProbe() ){ let __st = 0; for( const k of Object.keys( o ) ){ if( o[k] !== undefined ){ __st++; } } __tcRuntime.recordParseObjectStats( __st, 0 ); }';
     }
 
     const optCode = optionalAssignments.length > 0 ? optionalAssignments.join( ' ' ) + ' ' : '';

@@ -378,9 +378,37 @@ export function createNullableCheck( kind: NullableKind, inner: ts.Expression ):
     return injectNodes( templateToAst( tpl ), { '__INNER__' : inner });
 }
 
-export function createUnionCheck( checks: ts.Expression[], expected: string = 'Type<Union>' ): ts.Expression 
+export function createUnionCheck(
+    checks        : ts.Expression[],
+    expected      : string = 'Type<Union>',
+    fallbackFlags?: boolean[],
+    exclusiveKeys?: string[]
+): ts.Expression 
 {
-    const tpl = '((checks) => (v, path, ctx) => validators.union(v, path, ctx, checks, __EXPECTED__))(__CHECKS__)';
+    const hasFallbacks = Boolean( fallbackFlags?.some( Boolean ));
+    let tpl: string;
+
+    if( exclusiveKeys )
+    {
+        if( fallbackFlags )
+        {
+            tpl = hasFallbacks
+                ? `((checks, flags, keys) => (v, path, ctx) => validators.union(v, path, ctx, checks, __EXPECTED__, true, flags, keys))(__CHECKS__, ${JSON.stringify( fallbackFlags )}, ${JSON.stringify( exclusiveKeys )})`
+                : `((checks, keys) => (v, path, ctx) => validators.union(v, path, ctx, checks, __EXPECTED__, true, undefined, keys))(__CHECKS__, ${JSON.stringify( exclusiveKeys )})`;
+        }
+        else
+        {
+            tpl = `((checks, keys) => (v, path, ctx) => validators.union(v, path, ctx, checks, __EXPECTED__, false, undefined, keys))(__CHECKS__, ${JSON.stringify( exclusiveKeys )})`;
+        }
+    }
+    else
+    {
+        tpl = fallbackFlags
+            ? ( hasFallbacks
+                ? `((checks, flags) => (v, path, ctx) => validators.union(v, path, ctx, checks, __EXPECTED__, true, flags))(__CHECKS__, ${JSON.stringify( fallbackFlags )})`
+                : '((checks) => (v, path, ctx) => validators.union(v, path, ctx, checks, __EXPECTED__, true))(__CHECKS__)' )
+            : '((checks) => (v, path, ctx) => validators.union(v, path, ctx, checks, __EXPECTED__))(__CHECKS__)';
+    }
 
     return injectNodes( templateToAst( tpl ), {
         '__CHECKS__'   : ts.factory.createArrayLiteralExpression( checks ),

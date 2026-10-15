@@ -9,6 +9,7 @@ import {
 import type {
     IValidationError,
     ValidationMode,
+    UnionResolution,
     GuardOptions,
     AssertGuardOptions,
     ValidationOptions,
@@ -103,6 +104,7 @@ export {
 export type {
     IValidationError,
     ValidationMode,
+    UnionResolution,
     GuardOptions,
     AssertGuardOptions,
     ValidationOptions,
@@ -132,19 +134,21 @@ export type ParseSource = 'json' | 'query' | 'string';
 
 export interface SerializerOptions
 {
-    mode?      : SerializationMode
-    format?    : SerializeFormat
-    to?        : SerializeFormat
-    replacer?  : JsonReplacer
-    transform? : TransformFn | TransformFn[]
+    mode?            : SerializationMode
+    format?          : SerializeFormat
+    to?              : SerializeFormat
+    unionResolution? : UnionResolution
+    replacer?        : JsonReplacer
+    transform?       : TransformFn | TransformFn[]
 }
 
 export interface ParseOptions
 {
-    mode?      : ValidationMode
-    from?      : ParseSource
-    reviver?   : JsonReviver
-    transform? : TransformFn | TransformFn[]
+    mode?            : ValidationMode
+    from?            : ParseSource
+    unionResolution? : UnionResolution
+    reviver?         : JsonReviver
+    transform?       : TransformFn | TransformFn[]
 }
 
 /** AOT Macro: Compiles a fast serializer function for type `T`. */

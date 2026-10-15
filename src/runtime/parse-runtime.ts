@@ -56,7 +56,7 @@ export function expectBoolean( v: any, path: string ): boolean
 
 export function expectObject( v: any, path: string ): object
 {
-    if( typeof v !== 'object' || v === null || Array.isArray( v ))
+    if( !isPlainObject( v ))
     {
         throw new ParseError( path, 'Type<Object>' );
     }
@@ -71,23 +71,183 @@ export function expectArray( v: any, path: string ): any[]
     return v;
 }
 
+export interface ParseProbeFrame
+{
+    stripped : number
+    matched  : number
+}
+
+export interface ParseProbeContext
+{
+    readonly stack : ParseProbeFrame[]
+}
+
+let parseProbeStack: ParseProbeFrame[] = [];
+
+export function createParseProbeContext(): ParseProbeContext
+{
+    return { stack : [] };
+}
+
+export function runWithParseProbeContext<T>( ctx: ParseProbeContext, fn: () => T ): T
+{
+    const prev = parseProbeStack;
+    parseProbeStack = ctx.stack;
+
+    try
+    {
+        return fn();
+    }
+    finally
+    {
+        parseProbeStack = prev;
+    }
+}
+
+export function hasParseUnionProbe( ctx?: ParseProbeContext ): boolean
+{
+    const stack = ctx ? ctx.stack : parseProbeStack;
+
+    return stack.length > 0;
+}
+
+export function recordParseObjectStats( stripped: number, matched: number, ctx?: ParseProbeContext ): void
+{
+    const stack = ctx ? ctx.stack : parseProbeStack;
+    const top = stack[stack.length - 1];
+
+    if( top )
+    {
+        top.stripped += stripped;
+        top.matched += matched;
+    }
+}
+
+function findExclusiveKeyArm( v: any, exclusiveKeys: string[] | undefined ): number
+{
+    if( !exclusiveKeys || !isPlainObject( v )){ return -1 }
+
+    let matchedIdx = -1;
+
+    for( let i = 0; i < exclusiveKeys.length; i++ )
+    {
+        if( v[exclusiveKeys[i]] !== undefined )
+        {
+            if( matchedIdx !== -1 ){ return -1 }
+
+            matchedIdx = i;
+        }
+    }
+
+    return matchedIdx;
+}
+
 export function parseUnion(
-    v        : any,
-    path     : string,
-    expected : string,
-    arms     : Array<( v: any, p: string ) => any>
+    v             : any,
+    path          : string,
+    expected      : string,
+    arms          : Array<( v: any, p: string ) => any>,
+    probeBestFit  : boolean = false,
+    fallbackFlags?: boolean[],
+    exclusiveKeys?: string[]
 ): any
 {
     let last: ParseError | undefined;
+    const matchedIdx = findExclusiveKeyArm( v, exclusiveKeys );
 
-    for( const arm of arms )
+    if( matchedIdx >= 0 )
     {
+        arms = [ arms[matchedIdx] ];
+        probeBestFit = false;
+    }
+
+    if( !probeBestFit )
+    {
+        const top = parseProbeStack.length > 0 ? parseProbeStack[parseProbeStack.length - 1] : undefined;
+
+        for( const arm of arms )
+        {
+            const savedStripped = top ? top.stripped : 0;
+            const savedMatched = top ? top.matched : 0;
+
+            try
+            {
+                return arm( v, path );
+            }
+            catch( e )
+            {
+                if( top )
+                {
+                    top.stripped = savedStripped;
+                    top.matched = savedMatched;
+                }
+
+                if( e instanceof ParseError )
+                {
+                    last = e;
+                    continue;
+                }
+
+                throw e;
+            }
+        }
+
+        if( last && parseErrorCode( last ) === expected ){ throw last }
+
+        throw new ParseError( path, expected );
+    }
+
+    let bestResult: any;
+    let hasBest = false;
+    let bestStripped = Infinity;
+    let bestMatched = -1;
+    let fallbackResult: any;
+    let hasFallback = false;
+
+    for( let i = 0; i < arms.length; i++ )
+    {
+        const isFallback = Boolean( fallbackFlags && fallbackFlags[i]);
+
+        if( isFallback && ( hasBest || hasFallback )){ continue }
+
+        const frame: ParseProbeFrame = { stripped : 0, matched : 0 };
+        parseProbeStack.push( frame );
+
         try
         {
-            return arm( v, path );
+            const res = arms[i]( v, path );
+            parseProbeStack.pop();
+
+            if( isFallback )
+            {
+                fallbackResult = res;
+                hasFallback = true;
+                continue;
+            }
+
+            if( frame.stripped === 0 )
+            {
+                recordParseObjectStats( 0, frame.matched );
+
+                return res;
+            }
+
+            if(
+                !hasBest ||
+                frame.stripped < bestStripped ||
+                ( frame.stripped === bestStripped && frame.matched > bestMatched )
+            )
+            {
+                bestResult = res;
+                hasBest = true;
+                bestStripped = frame.stripped;
+                bestMatched = frame.matched;
+            }
         }
         catch( e )
         {
+            parseProbeStack.pop();
+
             if( e instanceof ParseError )
             {
                 last = e;
@@ -96,6 +256,18 @@ export function parseUnion(
 
             throw e;
         }
+    }
+
+    if( hasBest )
+    {
+        recordParseObjectStats( bestStripped, bestMatched );
+
+        return bestResult;
+    }
+
+    if( hasFallback )
+    {
+        return fallbackResult;
     }
 
     if( last && parseErrorCode( last ) === expected ){ throw last }
