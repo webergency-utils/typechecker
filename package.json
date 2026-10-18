@@ -124,7 +124,7 @@
     "coverage": "npm run build && vitest run --coverage",
     "clean": "rm -rf ./dist ./dist-fuzz",
     "reset": "npm run clean && rm -rf node_modules package-lock.json && npm i",
-    "build": "npm run reset && tsup",
+    "build": "npm run clean && tsup",
     "build:fuzz": "esbuild fuzz/runtime.ts --bundle --platform=node --format=cjs --outfile=dist-fuzz/runtime.cjs",
     "commit": "node -e \"const version = require('./package.json').version.trim(); require('child_process').execSync('git add . && git commit -m \\\"Version ' + version + '\\\"');\"",
     "version": "npm run build && npm publish --access public && npm run commit && git push"
