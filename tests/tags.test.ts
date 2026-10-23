@@ -36,7 +36,7 @@ describe( 'ResolveDefaults', () =>
             c  : number
             d  : { e : number }
         }>();
-        expectTypeOf<Resolved>().not.toMatchTypeOf<{ a? : string }>();
+        expectTypeOf<{ a? : string }>().not.toMatchTypeOf<Pick<Resolved, 'a'>>();
     });
 
     test( 'keeps optional properties without Default optional', () =>
@@ -65,7 +65,7 @@ describe( 'ResolveDefaults', () =>
         type Resolved = ResolveDefaults<Schema>;
 
         expectTypeOf<Resolved>().toMatchTypeOf<{ retries : number }>();
-        expectTypeOf<Resolved>().not.toMatchTypeOf<{ retries? : number }>();
+        expectTypeOf<{ retries? : number }>().not.toMatchTypeOf<Resolved>();
     });
 
     test( 'resolves Defaults through arrays of objects', () =>
@@ -113,7 +113,7 @@ describe( 'ResolveDefaults', () =>
             markAsRead     : boolean
             pageSize?      : number
         }>();
-        expectTypeOf<PollerConfig>().not.toMatchTypeOf<{ pollIntervalMs? : number }>();
+        expectTypeOf<{ pollIntervalMs? : number }>().not.toMatchTypeOf<Pick<PollerConfig, 'pollIntervalMs'>>();
         expectTypeOf<PollerConfig>().not.toMatchTypeOf<{ MARK_AS_READ? : boolean }>();
     });
 
@@ -178,6 +178,21 @@ describe( 'ResolveDefaults', () =>
         expectTypeOf<ResolveDefaults<string>>().toEqualTypeOf<string>();
         expectTypeOf<ResolveDefaults<number | undefined>>().toEqualTypeOf<number | undefined>();
         expectTypeOf<ResolveDefaults<null>>().toEqualTypeOf<null>();
+    });
+
+    test( 'preserves tuple types and readonly arrays instead of widening to array unions', () =>
+    {
+        type Pair = [ string, { count? : number & tag.Default<1> } ];
+        type ReadonlyPair = readonly [ number, string ];
+        type ReadonlyArr = readonly { flag? : boolean & tag.Default<true> }[];
+
+        type ResolvedPair = ResolveDefaults<Pair>;
+        type ResolvedReadonlyPair = ResolveDefaults<ReadonlyPair>;
+        type ResolvedReadonlyArr = ResolveDefaults<ReadonlyArr>;
+
+        expectTypeOf<ResolvedPair>().toEqualTypeOf<[ string, { count : number & tag.Default<1> } ]>();
+        expectTypeOf<ResolvedReadonlyPair>().toEqualTypeOf<readonly [ number, string ]>();
+        expectTypeOf<ResolvedReadonlyArr>().toEqualTypeOf<readonly { flag : boolean & tag.Default<true> }[]>();
     });
 });
 

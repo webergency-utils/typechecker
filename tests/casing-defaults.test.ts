@@ -56,7 +56,7 @@ describe( 'Casing + Defaults + original optionality', () =>
                 debugLabel?    : string
             }>();
             expectTypeOf<Resolved>().not.toMatchTypeOf<{ debugLabel : string }>();
-            expectTypeOf<Resolved>().not.toMatchTypeOf<{ pollIntervalMs? : number }>();
+            expectTypeOf<{ pollIntervalMs? : number }>().not.toMatchTypeOf<Pick<Resolved, 'pollIntervalMs'>>();
         });
 
         it( 'required Defaults on the original stay required after casing + ResolveDefaults', () =>
@@ -69,7 +69,7 @@ describe( 'Casing + Defaults + original optionality', () =>
                 maxRetries       : number
                 baseRetryDelayMs : number
             }>();
-            expectTypeOf<Resolved>().not.toMatchTypeOf<{ maxRetries? : number }>();
+            expectTypeOf<{ maxRetries? : number }>().not.toMatchTypeOf<Pick<Resolved, 'maxRetries'>>();
         });
 
         it( 'ResolveDefaults before casing still yields camelCase required Defaults', () =>

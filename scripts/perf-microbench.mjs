@@ -1,4 +1,7 @@
 import { validators, getOrCompileSchema, is, validate } from '../dist/runtime/validators.js';
+import { parseUnion, expectNumber, expectObject, ParseError } from '../dist/runtime/parse-runtime.js';
+import { serializeUnion, checkPlainObject, SerializationError } from '../dist/runtime/serializer-runtime.js';
+import { convertPropertyCasing } from '../dist/runtime/casing.js';
 
 function objectSize( value )
 {
@@ -44,7 +47,7 @@ function formatSize( size )
 function bench( label, iterations, fn, sample )
 {
     // Warmup
-    for( let i = 0; i < Math.min( 50, iterations ); i++ ){ fn() }
+    for( let i = 0; i < Math.min( 500, iterations ); i++ ){ fn() }
 
     const start = performance.now();
 
@@ -251,3 +254,162 @@ bench( 'discriminated union via taggedUnion() [8 arms]', 20000, () =>
     const ctx = { success : true, errors : [], mode : 'strict' };
     validators.taggedUnion( taggedValue, 'v', ctx, 'kind', taggedMap, 'Type<Tagged>' );
 }, taggedValue );
+
+// Eight exclusive-key object arms (`{ arm0: number } | ... | { arm7: number }`), matching arm7.
+const exclusiveKeys = Array.from({ length : 8 }, ( _, i ) => `arm${i}` );
+const exclusiveValArms = exclusiveKeys.map( key =>
+{
+    const keys = [key];
+
+    return ( v, path, ctx ) =>
+    {
+        const obj = validators.object( v, path, ctx, keys );
+
+        if( obj === false ){ return v }
+
+        const data = validators.objectShell( obj, ctx, true );
+        validators.props( obj, data, path, ctx, [
+            [key, false, validators.number]
+        ]);
+
+        return data;
+    };
+});
+const exclusiveParseArms = exclusiveKeys.map( key => ( v, p ) =>
+{
+    expectObject( v, p );
+
+    if( !( key in v )){ throw new ParseError( p, `Required<${key}>` ) }
+
+    return { [key] : expectNumber( v[key], p ) };
+});
+const exclusiveSerArms = exclusiveKeys.map( key => val =>
+{
+    checkPlainObject( val, '' );
+
+    if( typeof val[key] !== 'number' ){ throw new SerializationError( key, 'Type<number>' ) }
+
+    return `{"${key}":${val[key]}}`;
+});
+const exclusiveValue = { arm7 : 42 };
+
+bench( 'exclusive-key union validate [8 arms, no hint]', 20000, () =>
+{
+    const ctx = { success : true, errors : [], mode : 'strip' };
+    validators.union( exclusiveValue, 'v', ctx, exclusiveValArms, 'Type<Excl>', true );
+}, exclusiveValue );
+
+bench( 'exclusive-key union validate [8 arms, exclusiveKeys]', 20000, () =>
+{
+    const ctx = { success : true, errors : [], mode : 'strip' };
+    validators.union( exclusiveValue, 'v', ctx, exclusiveValArms, 'Type<Excl>', true, undefined, exclusiveKeys );
+}, exclusiveValue );
+
+bench( 'exclusive-key parseUnion [8 arms, no hint]', 20000, () =>
+{
+    parseUnion( exclusiveValue, '', 'Type<Excl>', exclusiveParseArms, true );
+}, exclusiveValue );
+
+bench( 'exclusive-key parseUnion [8 arms, exclusiveKeys]', 20000, () =>
+{
+    parseUnion( exclusiveValue, '', 'Type<Excl>', exclusiveParseArms, true, undefined, exclusiveKeys );
+}, exclusiveValue );
+
+bench( 'exclusive-key serializeUnion [8 arms, no hint]', 20000, () =>
+{
+    serializeUnion( exclusiveValue, '', 'Type<Excl>', exclusiveSerArms, true );
+}, exclusiveValue );
+
+bench( 'exclusive-key serializeUnion [8 arms, exclusiveKeys]', 20000, () =>
+{
+    serializeUnion( exclusiveValue, '', 'Type<Excl>', exclusiveSerArms, true, undefined, exclusiveKeys );
+}, exclusiveValue );
+
+// Nullable union in parse / serializer: `number | null | undefined`
+const parseNullableViaUnion = v => parseUnion( v, '', 'Type<number | null | undefined>', [
+    x => expectNumber( x, '' ),
+    x =>
+    {
+        if( x !== null ){ throw new ParseError( '', 'Type<null>' ) }
+
+        return null;
+    },
+    x =>
+    {
+        if( x !== undefined ){ throw new ParseError( '', 'Type<undefined>' ) }
+
+        return undefined;
+    }
+]);
+const parseNullableInline = v => ( v === undefined || v === null ? v : expectNumber( v, '' ));
+
+bench( 'parse nullable union via parseUnion()', 100000, () =>
+{
+    parseNullableViaUnion( null );
+}, null );
+
+bench( 'parse nullable union via inline fast-path', 100000, () =>
+{
+    parseNullableInline( null );
+}, null );
+
+const serNullableViaUnion = v => serializeUnion( v, '', 'Type<number | null>', [
+    x =>
+    {
+        if( typeof x !== 'number' ){ throw new SerializationError( '', 'Type<number>' ) }
+
+        return String( x );
+    },
+    x =>
+    {
+        if( x !== null ){ throw new SerializationError( '', 'Type<null>' ) }
+
+        return 'null';
+    }
+]);
+const serNullableInline = v => ( v === null ? 'null' : String( v ));
+
+bench( 'serialize nullable union via serializeUnion()', 100000, () =>
+{
+    serNullableViaUnion( null );
+}, null );
+
+bench( 'serialize nullable union via inline fast-path', 100000, () =>
+{
+    serNullableInline( null );
+}, null );
+
+// Casing conversion (`convertPropertyCasing`)
+const snakePayload = {
+    user_id                : 123,
+    created_at             : '2026-10-23',
+    billing_address_line_1 : '123 Main St',
+    is_email_verified      : true
+};
+
+bench( 'convertPropertyCasing object [snake -> camel]', 20000, () =>
+{
+    convertPropertyCasing( snakePayload, 'camelCase' );
+}, snakePayload );
+
+// Recursive $dynamicRef schema validation (15-node tree)
+const dynamicTreeSchema = getOrCompileSchema({
+    $id                  : 'https://example.com/tree',
+    $dynamicAnchor       : 'node',
+    type                 : 'object',
+    properties           : {
+        value    : { type : 'number' },
+        children : { type : 'array', items : { $dynamicRef : '#node' } }
+    },
+    required             : ['value', 'children'],
+    additionalProperties : false
+});
+const treeSample = {
+    value    : 1,
+    children : Array.from({ length : 14 }, ( _, i ) => ({ value : i, children : [] }))
+};
+
+bench( '$dynamicRef recursive tree is() [15 nodes]', 5000, () =>
+{
+    is( dynamicTreeSchema, treeSample );
+}, treeSample );

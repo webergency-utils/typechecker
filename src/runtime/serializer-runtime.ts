@@ -4,7 +4,7 @@ import
     type TransformFn
 }
     from './transform.js';
-import { isPlainObject, type CoercionKind } from './validators.js';
+import { isPlainObject, findExclusiveKeyArm, type CoercionKind } from './validators.js';
 
 export class SerializationError extends Error
 {
@@ -12,6 +12,43 @@ export class SerializationError extends Error
     {
         super( path ? `Serialization error at "${path}": ${message}` : message );
         this.name = 'SerializationError';
+    }
+}
+
+export interface SafeSerializeSuccess
+{
+    success : true
+    data    : string
+    error?  : undefined
+}
+
+export interface SafeSerializeFailure
+{
+    success : false
+    data?   : undefined
+    error   : SerializationError
+}
+
+export type SafeSerializeResult = SafeSerializeSuccess | SafeSerializeFailure;
+
+export function safeSerialize(
+    serializerFn : ( input: any, options?: any ) => string,
+    input        : unknown,
+    options?     : any
+): SafeSerializeResult
+{
+    try
+    {
+        return { success : true, data : serializerFn( input, options ) };
+    }
+    catch( e )
+    {
+        if( e instanceof SerializationError )
+        {
+            return { success : false, error : e };
+        }
+
+        throw e;
     }
 }
 
@@ -58,6 +95,8 @@ function leafQueryValue( expr: any ): string
 
     if( expr instanceof Date ){ return expr.toISOString() }
 
+    if( expr instanceof URL ){ return expr.href }
+
     if( typeof expr === 'bigint' ){ return String( expr ) }
 
     return String( expr );
@@ -71,7 +110,7 @@ export function appendQueryAny( params: string[], val: any, prefix: string ): vo
 {
     if( val === undefined ){ return }
 
-    if( val === null || typeof val !== 'object' )
+    if( val === null || typeof val !== 'object' || val instanceof Date || val instanceof URL )
     {
         params.push( encodeURIComponent( prefix ) + '=' + encodeURIComponent( leafQueryValue( val )));
 
@@ -125,13 +164,85 @@ export function serializeDate( val: Date | string | number, path = '' ): string
     throw new SerializationError( path, 'Type<Date>' );
 }
 
-export function serializeBuffer( val: Uint8Array | ArrayBuffer, path = '' ): string
+export function serializeUrl( val: URL | string, path = '' ): string
 {
-    if( val instanceof Uint8Array || ( typeof Buffer !== 'undefined' && Buffer.isBuffer( val )) || val instanceof ArrayBuffer )
+    if( val instanceof URL )
     {
-        const buf = val instanceof Uint8Array ? val : new Uint8Array( val );
+        return JSON.stringify( val.href );
+    }
 
-        return `"${Buffer.from( buf ).toString( 'base64' )}"`;
+    if( typeof val === 'string' && val.trim() !== '' )
+    {
+        try
+        {
+            return JSON.stringify( new URL( val ).href );
+        }
+        catch
+        { /* fall through */ }
+    }
+
+    throw new SerializationError( path, 'Type<URL>' );
+}
+
+export function serializeQueryUrl( val: URL | string, path = '' ): string
+{
+    if( val instanceof URL )
+    {
+        return encodeURIComponent( val.href );
+    }
+
+    if( typeof val === 'string' && val.trim() !== '' )
+    {
+        try
+        {
+            return encodeURIComponent( new URL( val ).href );
+        }
+        catch
+        { /* fall through */ }
+    }
+
+    throw new SerializationError( path, 'Type<URL>' );
+}
+
+export function serializeRegExp( val: RegExp, path = '' ): string
+{
+    if( !( val instanceof RegExp ))
+    {
+        throw new SerializationError( path, 'Type<RegExp>' );
+    }
+
+    return JSON.stringify( val.source );
+}
+
+export function serializeBuffer( val: Uint8Array | ArrayBuffer | ArrayBufferView | SharedArrayBuffer, path = '' ): string
+{
+    let bytes: Uint8Array | undefined;
+
+    if( val instanceof Uint8Array || ( typeof Buffer !== 'undefined' && Buffer.isBuffer( val )))
+    {
+        bytes = val;
+    }
+    else if( ArrayBuffer.isView( val ))
+    {
+        bytes = new Uint8Array( val.buffer, val.byteOffset, val.byteLength );
+    }
+    else if( val instanceof ArrayBuffer || ( typeof SharedArrayBuffer !== 'undefined' && val instanceof SharedArrayBuffer ))
+    {
+        bytes = new Uint8Array( val );
+    }
+
+    if( bytes )
+    {
+        if( typeof Buffer !== 'undefined' )
+        {
+            return `"${Buffer.from( bytes.buffer, bytes.byteOffset, bytes.byteLength ).toString( 'base64' )}"`;
+        }
+
+        let bin = '';
+
+        for( let i = 0; i < bytes.length; i++ ){ bin += String.fromCharCode( bytes[i]) }
+
+        return `"${btoa( bin )}"`;
     }
 
     throw new SerializationError( path, 'Type<Buffer>' );
@@ -242,25 +353,6 @@ export function recordSerializerObjectStats( stripped: number, matched: number, 
         top.stripped += stripped;
         top.matched += matched;
     }
-}
-
-function findExclusiveKeyArm( val: any, exclusiveKeys: string[] | undefined ): number
-{
-    if( !exclusiveKeys || !isPlainObject( val )){ return -1 }
-
-    let matchedIdx = -1;
-
-    for( let i = 0; i < exclusiveKeys.length; i++ )
-    {
-        if( val[exclusiveKeys[i]] !== undefined )
-        {
-            if( matchedIdx !== -1 ){ return -1 }
-
-            matchedIdx = i;
-        }
-    }
-
-    return matchedIdx;
 }
 
 export function serializeUnion(
@@ -540,9 +632,14 @@ export function applySerializeTransform(
     root      : any
 ): any
 {
+    if( transform == null || value === undefined || value === null ){ return value }
+
     try
     {
-        return applyNodeTransform( value, path, transform, kind, tags, root );
+        return runWithSerializerProbeContext(
+            createSerializerProbeContext(),
+            () => applyNodeTransform( value, path, transform, kind, tags, root )
+        );
     }
     catch( e )
     {

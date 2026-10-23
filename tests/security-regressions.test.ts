@@ -316,4 +316,76 @@ describe( 'Security and correctness regressions', () =>
         expect( ctx.success ).toBe( false );
         expect( ctx.errors[0].error ).toBe( 'Requires<toString>' );
     });
+
+    it( 'prevents sparse-array OOM DoS in parseQueryString on huge bracket indices', async() =>
+    {
+        const { parseQueryString } = await import( '../src/runtime/parse-runtime.js' );
+
+        const parsed = parseQueryString( 'items[999999999]=x&nested[0][999999999]=y' );
+
+        expect( Array.isArray( parsed.items )).toBe( false );
+        expect( parsed.items['999999999']).toBe( 'x' );
+        expect( Array.isArray( parsed.nested )).toBe( true );
+        expect( Array.isArray( parsed.nested[0])).toBe( false );
+        expect( parsed.nested[0]['999999999']).toBe( 'y' );
+    });
+
+    it( 'validates frozen objects, arrays, tuples, Sets, and Maps with mutate:true without throwing TypeError', async() =>
+    {
+        const { is, assertGuard } = await import( '../src/runtime/validators.js' );
+
+        const checkObj = ( v: any, path: string, ctx: ValidationContext ) =>
+        {
+            const obj = validators.object( v, path, ctx );
+
+            if( !obj ){ return v }
+
+            const data = validators.objectShell( obj, ctx );
+            validators.props( obj, data, path, ctx, [
+                [ 'name', false, validators.string ],
+                [ 'tags', false, ( x: any, p: string, c: ValidationContext ) => validators.array( x, p, c, validators.string ) ],
+                [ 'pair', false, ( x: any, p: string, c: ValidationContext ) => validators.tuple( x, p, c, [ validators.string, validators.number ]) ]
+            ]);
+
+            return data;
+        };
+
+        const frozen = Object.freeze({
+            name : 'Alice',
+            tags : Object.freeze([ 'a', 'b' ]),
+            pair : Object.freeze([ 'k', 1 ])
+        });
+
+        expect( is( checkObj, frozen )).toBe( true );
+        expect(() => assertGuard( checkObj, frozen )).not.toThrow();
+
+        const s = new Set([ 'a', 'b' ]);
+        const m = new Map([[ 'k', 1 ]]);
+        expect( is(( v: any, p: string, c: ValidationContext ) => validators.set( v, p, c, validators.string ), s )).toBe( true );
+        expect( is(( v: any, p: string, c: ValidationContext ) => validators.map( v, p, c, validators.string, validators.number ), m )).toBe( true );
+    });
+
+    it( 'rejects async Custom validators returning a Promise instead of treating Promise as truthy', () =>
+    {
+        const ctx = context( 'bad' );
+        const asyncCheck = async() => false;
+
+        validators.custom( 'bad', 'field', ctx, asyncCheck );
+
+        expect( ctx.success ).toBe( false );
+        expect( ctx.errors[0].error ).toBe( 'AsyncCustomNotSupported<asyncCheck>' );
+    });
+
+    it( 'rejects unsafe float integers in BigInt coercion and accepts disjoint literal alternations in safeRegExp', async() =>
+    {
+        const { coerceBigInt } = await import( '../src/runtime/parse-runtime.js' );
+        const ctx = { ...context(), from : 'query' as const };
+
+        validators.bigint( 1e25, 'big', ctx );
+        expect( ctx.success ).toBe( false );
+        expect(() => coerceBigInt( 1e25, 'big' )).toThrow( /Type<bigint>/ );
+
+        expect(() => validators.safeRegExp( '^(?:foo|bar)+$' )).not.toThrow();
+        expect(() => validators.safeRegExp( '^(?:foo|far)+$' )).toThrow( /Unsafe regular expression/ );
+    });
 });

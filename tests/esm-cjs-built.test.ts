@@ -23,10 +23,18 @@ describe( 'Built ESM and CJS Dual Artifact Testing', () =>
             'dist/transformer.cjs',
             'dist/transformer.d.ts',
             'dist/transformer.d.cts',
+            'dist/unplugin.js',
+            'dist/unplugin.cjs',
+            'dist/unplugin.d.ts',
+            'dist/unplugin.d.cts',
             'dist/runtime/index.js',
             'dist/runtime/index.cjs',
             'dist/runtime/validators.js',
             'dist/runtime/validators.cjs',
+            'dist/runtime/schema-compiler.js',
+            'dist/runtime/schema-compiler.cjs',
+            'dist/runtime/schema-compiler.d.ts',
+            'dist/runtime/schema-compiler.d.cts',
             'dist/runtime/parse-runtime.js',
             'dist/runtime/parse-runtime.cjs',
             'dist/runtime/serializer-runtime.js',
@@ -143,5 +151,98 @@ describe( 'Built ESM and CJS Dual Artifact Testing', () =>
 
         expect( esmAst ).toContain( '__val_' );
         expect( cjsAst ).toContain( '__val_' );
+    });
+
+    it( 'should preserve singleton class and validator identity across all ESM and CJS entrypoints', async () =>
+    {
+        // Arrange & Act (ESM)
+        const indexEsm = await import( path.resolve( './dist/index.js' ));
+        const runtimeEsm = await import( path.resolve( './dist/runtime/index.js' ));
+        const parseEsm = await import( path.resolve( './dist/runtime/parse-runtime.js' ));
+        const serEsm = await import( path.resolve( './dist/runtime/serializer-runtime.js' ));
+        const valEsm = await import( path.resolve( './dist/runtime/validators.js' ));
+        const scEsm = await import( path.resolve( './dist/runtime/schema-compiler.js' ));
+        const unpluginEsm = await import( path.resolve( './dist/unplugin.js' ));
+        const pluginEsm = await import( path.resolve( './dist/plugin.js' ));
+
+        // Assert (ESM)
+        expect( indexEsm.ParseError ).toBe( runtimeEsm.ParseError );
+        expect( runtimeEsm.ParseError ).toBe( parseEsm.ParseError );
+        expect( indexEsm.SerializationError ).toBe( runtimeEsm.SerializationError );
+        expect( runtimeEsm.SerializationError ).toBe( serEsm.SerializationError );
+        expect( indexEsm.ZodLikeError ).toBe( runtimeEsm.ZodLikeError );
+        expect( runtimeEsm.ZodLikeError ).toBe( valEsm.ZodLikeError );
+        expect( indexEsm.validators ).toBe( runtimeEsm.validators );
+        expect( runtimeEsm.validators ).toBe( valEsm.validators );
+        expect( indexEsm.compileSchema ).toBe( scEsm.compileSchema );
+        expect( valEsm.compileSchema ).toBe( scEsm.compileSchema );
+        expect( typeof unpluginEsm.typecheckerVite ).toBe( 'function' );
+        expect( typeof pluginEsm.default ).toBe( 'function' );
+
+        // Arrange & Act (CJS)
+        const indexCjs = require( path.resolve( './dist/index.cjs' ));
+        const runtimeCjs = require( path.resolve( './dist/runtime/index.cjs' ));
+        const parseCjs = require( path.resolve( './dist/runtime/parse-runtime.cjs' ));
+        const serCjs = require( path.resolve( './dist/runtime/serializer-runtime.cjs' ));
+        const valCjs = require( path.resolve( './dist/runtime/validators.cjs' ));
+        const scCjs = require( path.resolve( './dist/runtime/schema-compiler.cjs' ));
+        const unpluginCjs = require( path.resolve( './dist/unplugin.cjs' ));
+
+        // Assert (CJS)
+        expect( indexCjs.ParseError ).toBe( runtimeCjs.ParseError );
+        expect( runtimeCjs.ParseError ).toBe( parseCjs.ParseError );
+        expect( indexCjs.SerializationError ).toBe( runtimeCjs.SerializationError );
+        expect( runtimeCjs.SerializationError ).toBe( serCjs.SerializationError );
+        expect( indexCjs.ZodLikeError ).toBe( runtimeCjs.ZodLikeError );
+        expect( runtimeCjs.ZodLikeError ).toBe( valCjs.ZodLikeError );
+        expect( indexCjs.validators ).toBe( runtimeCjs.validators );
+        expect( runtimeCjs.validators ).toBe( valCjs.validators );
+        expect( indexCjs.compileSchema ).toBe( scCjs.compileSchema );
+        expect( valCjs.compileSchema ).toBe( scCjs.compileSchema );
+        expect( typeof unpluginCjs.typecheckerVite ).toBe( 'function' );
+    });
+
+    it( 'should satisfy instanceof ParseError and SerializationError when caught from AOT macros', async () =>
+    {
+        // Arrange
+        const code = `
+            import { parse, stringify, ParseError, SerializationError } from '../src/index.js';
+
+            export interface Item { id: number; }
+
+            export function isParseErrorInstance( raw: string ): boolean {
+                try {
+                    parse<Item>( raw );
+                    return false;
+                } catch ( e ) {
+                    return e instanceof ParseError;
+                }
+            }
+
+            export function isSerializationErrorInstance( val: unknown ): boolean {
+                try {
+                    stringify<Item>( val as Item );
+                    return false;
+                } catch ( e ) {
+                    return e instanceof SerializationError;
+                }
+            }
+        `;
+
+        // Act
+        const esmMod = await emitAndImport<{
+            isParseErrorInstance         : ( raw: string ) => boolean
+            isSerializationErrorInstance : ( val: unknown ) => boolean
+        }>( code, 'instanceof_esm' );
+        const cjsMod = emitAndRequire<{
+            isParseErrorInstance         : ( raw: string ) => boolean
+            isSerializationErrorInstance : ( val: unknown ) => boolean
+        }>( code, 'instanceof_cjs' );
+
+        // Assert
+        expect( esmMod.isParseErrorInstance( '{"id":"bad"}' )).toBe( true );
+        expect( esmMod.isSerializationErrorInstance({ id : 'bad' })).toBe( true );
+        expect( cjsMod.isParseErrorInstance( '{"id":"bad"}' )).toBe( true );
+        expect( cjsMod.isSerializationErrorInstance({ id : 'bad' })).toBe( true );
     });
 });

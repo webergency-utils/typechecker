@@ -228,5 +228,30 @@ describe( 'Static Diagnostics Idempotency', () =>
         expect( String( diags[0].messageText )).toContain( 'Value 5 does not satisfy Minimum<10>' );
         expect( String( diags[1].messageText )).toContain( 'Value 1.5 does not satisfy MultipleOf<2>' );
     });
+
+    it( 'reports static constraint diagnostics on optional properties, optional arrays, and optional nested objects', () =>
+    {
+        const { diags } = diagnosticsFor( `
+            import { assert, constraint } from './src/index.js';
+            interface Profile {
+                age?: number & constraint.Minimum<18>;
+                tags?: string[] & constraint.MinItems<2>;
+                nested?: {
+                    code?: string & constraint.MinLength<4>;
+                };
+            }
+            assert<Profile>({
+                age: 12,
+                tags: ['only-one'],
+                nested: { code: 'ab' }
+            });
+        ` );
+
+        const msgs = diags.map( d => String( d.messageText ));
+        expect( msgs ).toContain( 'Value 12 does not satisfy Minimum<18>' );
+        expect( msgs ).toContain( 'Array length 1 does not satisfy MinItems<2>' );
+        expect( msgs ).toContain( 'Value length 2 does not satisfy MinLength<4>' );
+        expect( diags ).toHaveLength( 3 );
+    });
 });
 

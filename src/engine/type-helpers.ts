@@ -4,8 +4,9 @@ import { resolveFunctionIdentity, type ICustomFunctionScope } from './customFns.
 export { isTagKey };
 
 export const BUFFER_LIKE: ReadonlySet<string> = new Set([
-    'Buffer', 'Uint8Array', 'Uint16Array', 'Uint32Array', 'Int8Array', 'Int16Array', 'Int32Array',
-    'Float32Array', 'Float64Array', 'ArrayBuffer', 'SharedArrayBuffer', 'DataView'
+    'Buffer', 'Uint8Array', 'Uint8ClampedArray', 'Uint16Array', 'Uint32Array',
+    'Int8Array', 'Int16Array', 'Int32Array', 'Float32Array', 'Float64Array',
+    'BigInt64Array', 'BigUint64Array', 'ArrayBuffer', 'SharedArrayBuffer', 'DataView'
 ]);
 
 export type ParsedConstraint =
@@ -41,10 +42,18 @@ export type MergedPropInfo =
         hasDefault : boolean
     };
 
+export interface TemplateIndexInfo
+{
+    pattern   : string
+    keyType   : ts.Type
+    valueType : ts.Type
+}
+
 export type MergedObjectInfo =
     {
-        props      : MergedPropInfo[]
-        indexType? : ts.Type
+        props              : MergedPropInfo[]
+        indexType?         : ts.Type
+        patternIndexInfos? : TemplateIndexInfo[]
     };
 
 export type PeelResult =
@@ -261,7 +270,7 @@ export function isDiscriminableObject( type: ts.Type, checker: ts.TypeChecker ):
 
     const name = typeSymbolName( type );
 
-    return name !== 'Date' && name !== 'Set' && name !== 'Map' && name !== 'RegExp';
+    return name !== 'Date' && name !== 'URL' && name !== 'Set' && name !== 'ReadonlySet' && name !== 'Map' && name !== 'ReadonlyMap' && name !== 'RegExp';
 }
 
 export function singleLiteralValue( type: ts.Type ): string | number | boolean | undefined
@@ -336,6 +345,32 @@ export function stringIndexType( type: ts.Type, checker: ts.TypeChecker ): ts.Ty
     return checker.getIndexInfoOfType( type, ts.IndexKind.String )?.type;
 }
 
+export function getTemplateIndexInfos( type: ts.Type, checker: ts.TypeChecker ): TemplateIndexInfo[]
+{
+    if( typeof ( checker as any ).getIndexInfosOfType !== 'function' ){ return [] }
+
+    const infos: ts.IndexInfo[] = ( checker as any ).getIndexInfosOfType( type ) || [];
+    const result: TemplateIndexInfo[] = [];
+
+    for( const info of infos )
+    {
+        if( !info.keyType ){ continue }
+
+        const keyFlags = typeof info.keyType.getFlags === 'function' ? info.keyType.getFlags() : info.keyType.flags;
+
+        if( keyFlags & ts.TypeFlags.TemplateLiteral )
+        {
+            result.push({
+                pattern   : buildTemplateLiteralRegex( info.keyType as ts.TemplateLiteralType ),
+                keyType   : info.keyType,
+                valueType : info.type
+            });
+        }
+    }
+
+    return result;
+}
+
 function isMergeableObjectType( t: ts.Type, checker: ts.TypeChecker ): boolean
 {
     if( isConstraintOnlyType( t, checker ) || isBrandOnlyType( t, checker )){ return false }
@@ -356,7 +391,7 @@ function isMergeableObjectType( t: ts.Type, checker: ts.TypeChecker ): boolean
 
     const symName = typeSymbolName( t );
 
-    if( symName === 'Date' || symName === 'Set' || symName === 'Map' || symName === 'RegExp' || symName === 'Promise' || ( symName !== undefined && BUFFER_LIKE.has( symName )))
+    if( symName === 'Date' || symName === 'URL' || symName === 'Set' || symName === 'ReadonlySet' || symName === 'Map' || symName === 'ReadonlyMap' || symName === 'RegExp' || symName === 'Promise' || ( symName !== undefined && BUFFER_LIKE.has( symName )))
     {
         return false;
     }
@@ -380,12 +415,18 @@ export function tryMergeObjectTypes( types: readonly ts.Type[], checker: ts.Type
 
     const propMap = new Map<string, MergedPropInfo>();
     let indexType: ts.Type | undefined;
+    const patternMap = new Map<string, TemplateIndexInfo>();
 
     for( const t of objectTypes )
     {
         const idx = stringIndexType( t, checker );
 
         if( idx ){ indexType = idx }
+
+        for( const pInfo of getTemplateIndexInfos( t, checker ))
+        {
+            patternMap.set( pInfo.pattern, pInfo );
+        }
 
         for( const prop of getTypeProps( t, checker ))
         {
@@ -405,7 +446,9 @@ export function tryMergeObjectTypes( types: readonly ts.Type[], checker: ts.Type
         }
     }
 
-    return { props : [ ...propMap.values() ], indexType };
+    const patternIndexInfos = patternMap.size > 0 ? [ ...patternMap.values() ] : undefined;
+
+    return { props : [ ...propMap.values() ], indexType, patternIndexInfos };
 }
 
 export function stripUndefinedFromType( type: ts.Type | undefined ): ts.Type
@@ -419,6 +462,51 @@ export function stripUndefinedFromType( type: ts.Type | undefined ): ts.Type
     if( nonUndefined.length === 1 ){ return nonUndefined[0] }
 
     return type;
+}
+
+const strippedUnionCache = new WeakMap<object, ts.Type>();
+
+export function stripUndefinedFromUnion( type: ts.Type ): ts.Type
+{
+    if( typeof type.isUnion !== 'function' || !type.isUnion()){ return type }
+
+    const cached = strippedUnionCache.get( type as object );
+
+    if( cached ){ return cached }
+
+    const nonUndefined = type.types.filter( t => !( t.getFlags() & ts.TypeFlags.Undefined ));
+
+    if( nonUndefined.length === 0 || nonUndefined.length === type.types.length ){ return type }
+
+    if( nonUndefined.length === 1 ){ return nonUndefined[0] }
+
+    const proto = typeof type === 'object' && type !== null ? Object.getPrototypeOf( type ) : Object.prototype;
+    let stripped: ts.Type;
+
+    if(
+        nonUndefined.length === 2 &&
+        nonUndefined.every( t => ( t.getFlags() & ts.TypeFlags.BooleanLiteral ) !== 0 )
+    )
+    {
+        stripped = Object.assign( Object.create( proto ), type, {
+            id            : undefined,
+            flags         : ts.TypeFlags.Boolean | ts.TypeFlags.Union,
+            getFlags      : () => ts.TypeFlags.Boolean | ts.TypeFlags.Union,
+            intrinsicName : 'boolean',
+            types         : nonUndefined
+        });
+    }
+    else
+    {
+        stripped = Object.assign( Object.create( proto ), type, {
+            id    : undefined,
+            types : nonUndefined
+        });
+    }
+
+    strippedUnionCache.set( type as object, stripped );
+
+    return stripped;
 }
 
 export function getTagPropertyValue( type: ts.Type ): any
@@ -938,4 +1026,64 @@ export function bigIntLiteralText( type: ts.Type ): string
     const raw = ( type as any ).value;
 
     return typeof raw === 'object' && raw ? `${raw.negative ? '-' : ''}${raw.base10Value}` : String( raw );
+}
+
+export interface NullableUnionClassification
+{
+    hasUndefined : boolean
+    hasNull      : boolean
+    nonNullish   : ts.Type[]
+}
+
+export function classifyNullableUnion( arms: readonly ts.Type[]): NullableUnionClassification
+{
+    let hasUndefined = false;
+    let hasNull = false;
+    const nonNullish: ts.Type[] = [];
+
+    for( const arm of arms )
+    {
+        const armFlags = arm.getFlags();
+
+        if( armFlags & ( ts.TypeFlags.Undefined | ts.TypeFlags.Void )){ hasUndefined = true }
+        else if( armFlags & ts.TypeFlags.Null ){ hasNull = true }
+        else { nonNullish.push( arm ) }
+    }
+
+    return { hasUndefined, hasNull, nonNullish };
+}
+
+export interface TupleInspection
+{
+    typeArgs     : readonly ts.Type[]
+    elementFlags : readonly ts.ElementFlags[]
+    hasRest      : boolean
+    hasOptional  : boolean
+    fixedCount   : number
+    minItems     : number
+}
+
+export function inspectTupleType( type: ts.Type, checker: ts.TypeChecker ): TupleInspection
+{
+    const tupleRef = type as ts.TupleTypeReference;
+    const fromChecker = ( checker as any ).getTypeArguments?.( tupleRef );
+    const typeArgs: readonly ts.Type[] = ( fromChecker && fromChecker.length > 0 )
+        ? fromChecker
+        : ( tupleRef.typeArguments || fromChecker || []);
+    const target = tupleRef.target || ( type as unknown as ts.TupleType );
+    const elementFlags: readonly ts.ElementFlags[] = target?.elementFlags || [];
+    const hasRest = elementFlags.some( f => ( f & ts.ElementFlags.Rest ) !== 0 );
+    const hasOptional = elementFlags.some( f => ( f & ts.ElementFlags.Optional ) !== 0 );
+    const fixedCount = hasRest && typeArgs.length > 0 ? typeArgs.length - 1 : typeArgs.length;
+    let minItems = 0;
+
+    for( let i = 0; i < fixedCount; i++ )
+    {
+        if( !( elementFlags[i] & ts.ElementFlags.Optional ))
+        {
+            minItems = i + 1;
+        }
+    }
+
+    return { typeArgs, elementFlags, hasRest, hasOptional, fixedCount, minItems };
 }

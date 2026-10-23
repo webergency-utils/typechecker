@@ -37,7 +37,7 @@ describe( 'Standard Schema v1 (~standard)', () =>
         const invalidRes = s['~standard'].validate({ name : 'Bob', age : 15 });
         expect( 'issues' in invalidRes ).toBe( true );
 
-        if( 'issues' in invalidRes )
+        if( 'issues' in invalidRes && invalidRes.issues )
         {
             expect( invalidRes.issues.length ).toBeGreaterThan( 0 );
             expect( invalidRes.issues[0].message ).toBeDefined();
@@ -103,7 +103,7 @@ describe( 'Standard Schema v1 (~standard)', () =>
         const failRes = standard['~standard'].validate( 123 );
         expect( 'issues' in failRes ).toBe( true );
 
-        if( 'issues' in failRes )
+        if( 'issues' in failRes && failRes.issues )
         {
             expect( failRes.issues.length ).toBe( 1 );
             expect( failRes.issues[0].message ).toBe( 'ExpectedString' );

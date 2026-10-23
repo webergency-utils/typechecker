@@ -28,10 +28,26 @@ export interface IValidationError {
     issues? : IValidationError[]
 }
 
+export interface IValidationSuccess<T>
+{
+    success : true
+    data    : T
+    errors  : IValidationError[]
+}
+
+export interface IValidationFailure<T = never>
+{
+    success : false
+    data?   : T
+    errors  : IValidationError[]
+}
+
+export type IValidation<T> = IValidationSuccess<T> | IValidationFailure<T>;
+
 /** Expected runtime kind for custom `from` — a dispatch tag, not `typeof` / a TS type. */
 export type CoercionKind =
     | 'string' | 'number' | 'boolean' | 'bigint' | 'function' | 'symbol' | 'never'
-    | 'Date' | 'RegExp' | 'Set' | 'Map' | 'Array' | 'Object' | 'instance'
+    | 'Date' | 'URL' | 'RegExp' | 'Set' | 'Map' | 'Array' | 'Object' | 'instance'
     | 'null' | 'undefined' | 'tuple' | 'literal';
 
 /** Shared context for `constraint.Custom` and custom `from` callbacks. */
@@ -116,31 +132,43 @@ export interface AssertOptions extends ValidationOptions {
 
 /** JSON Schema `type` values supported by `compileSchema`. */
 export type JsonSchemaType =
-    | 'string' | 'number' | 'integer' | 'boolean' | 'null' | 'array' | 'object';
+    | 'string' | 'number' | 'integer' | 'boolean' | 'null' | 'array' | 'object'
+    | ( string & {});
 
 /** `x-typescript-type` extensions emitted by `jsonSchema<T>()`. */
 export type JsonSchemaTypescriptType =
-    | 'Date' | 'RegExp' | 'bigint' | 'undefined' | 'Set' | 'Map' | 'Promise'
-    | 'Uint8Array' | 'Uint16Array' | 'Uint32Array'
+    | 'Date' | 'URL' | 'RegExp' | 'bigint' | 'undefined' | 'Set' | 'Map' | 'Promise'
+    | 'Uint8Array' | 'Uint8ClampedArray' | 'Uint16Array' | 'Uint32Array'
     | 'Int8Array' | 'Int16Array' | 'Int32Array'
     | 'Float32Array' | 'Float64Array'
-    | 'ArrayBuffer' | 'SharedArrayBuffer' | 'DataView' | 'Buffer';
+    | 'BigInt64Array' | 'BigUint64Array'
+    | 'ArrayBuffer' | 'SharedArrayBuffer' | 'DataView' | 'Buffer'
+    | ( string & {});
 
 /**
  * Supported JSON Schema object subset (draft-07 / selected 2019-09+ / 2020-12 keywords)
  * plus `x-typescript-type` extensions.
  * Root boolean schemas (`true` / `false`) still work at runtime but are not part of this type.
  */
+export type JsonSchemaTarget = 'draft-07' | 'draft-2020-12' | 'openapi-3.0' | 'openapi-3.1';
+
+export interface JsonSchemaOptions
+{
+    target? : JsonSchemaTarget
+}
+
 export type JsonSchema = JsonSchemaObject;
 
 export interface JsonSchemaObject
 {
     $schema?               : string
     $id?                   : string
-    $defs?                 : Record<string, JsonSchema>
-    definitions?           : Record<string, JsonSchema>
+    $defs?                 : Record<string, JsonSchema | boolean | undefined>
+    definitions?           : Record<string, JsonSchema | boolean>
+    components?            : { schemas? : Record<string, JsonSchema | boolean | undefined> }
     $ref?                  : string
     type?                  : JsonSchemaType | JsonSchemaType[]
+    nullable?              : boolean
     const?                 : unknown
     enum?                  : unknown[]
     minLength?             : number
@@ -164,7 +192,7 @@ export interface JsonSchemaObject
     minContains?           : number
     maxContains?           : number
     unevaluatedItems?      : boolean | JsonSchema
-    properties?            : Record<string, JsonSchema | boolean>
+    properties?            : Record<string, JsonSchema | boolean | undefined>
     patternProperties?     : Record<string, JsonSchema | boolean>
     propertyNames?         : JsonSchema | boolean
     required?              : string[]
@@ -195,7 +223,9 @@ export interface JsonSchemaObject
 
 export type SchemaValidator = ( v: any, path: string, ctx: ValidationContext ) => any;
 
-const report = ( ctx: ValidationContext, path: string, expected: string, value: any, message?: string ) => 
+export type CompiledSchema<T = unknown> = SchemaValidator & StandardSchemaV1<unknown, T>;
+
+export const report = ( ctx: ValidationContext, path: string, expected: string, value: any, message?: string ) => 
 {
     ctx.success = false;
     ctx.errors.push({ path, value, error : message || expected });
@@ -210,7 +240,7 @@ export function isPlainObject( v: any ): boolean
 {
     if( v === null || typeof v !== 'object' || Array.isArray( v )) { return false }
 
-    if( v instanceof Date || v instanceof RegExp || v instanceof Map || v instanceof Set ) { return false }
+    if( v instanceof Date || v instanceof URL || v instanceof RegExp || v instanceof Map || v instanceof Set ) { return false }
 
     if( typeof Buffer !== 'undefined' && typeof Buffer.isBuffer === 'function' && Buffer.isBuffer( v )) { return false }
 
@@ -219,7 +249,26 @@ export function isPlainObject( v: any ): boolean
     return true;
 }
 
-function setOwnProperty( target: any, key: PropertyKey, value: any ): void
+export function findExclusiveKeyArm( v: any, exclusiveKeys: string[] | undefined ): number
+{
+    if( !exclusiveKeys || !isPlainObject( v )){ return -1 }
+
+    let matchedIdx = -1;
+
+    for( let i = 0; i < exclusiveKeys.length; i++ )
+    {
+        if( v[exclusiveKeys[i]] !== undefined )
+        {
+            if( matchedIdx !== -1 ){ return -1 }
+
+            matchedIdx = i;
+        }
+    }
+
+    return matchedIdx;
+}
+
+export function setOwnProperty( target: any, key: PropertyKey, value: any ): void
 {
     if( key !== '__proto__' && key !== 'constructor' && key !== 'prototype' )
     {
@@ -236,7 +285,7 @@ function setOwnProperty( target: any, key: PropertyKey, value: any ): void
     });
 }
 
-function assignOwnProperties( target: any, source: any ): void
+export function assignOwnProperties( target: any, source: any ): void
 {
     for( const key of Object.keys( source ))
     {
@@ -244,146 +293,12 @@ function assignOwnProperties( target: any, source: any ): void
     }
 }
 
-function emptyAnnotations(): SchemaAnnotationFrame
-{
-    return { properties : new Set(), items : new Set(), itemsAll : false };
-}
-
-function ensureAnnotations( ctx: ValidationContext ): SchemaAnnotationFrame
-{
-    if( !ctx.annotations ){ ctx.annotations = emptyAnnotations() }
-
-    return ctx.annotations;
-}
-
-function mergeAnnotations( target: SchemaAnnotationFrame, source?: SchemaAnnotationFrame ): void
-{
-    if( !source ){ return }
-
-    for( const key of source.properties ){ target.properties.add( key ) }
-
-    for( const index of source.items ){ target.items.add( index ) }
-
-    if( source.itemsAll ){ target.itemsAll = true }
-}
-
-/** Run `check` on the same instance location; child annotations merge into the parent frame. */
-function runInPlace(
-    check: SchemaValidator,
-    v: any,
-    path: string,
-    ctx: ValidationContext
-): any
-{
-    const parent = ensureAnnotations( ctx );
-    const child = emptyAnnotations();
-    const prev = ctx.annotations;
-    ctx.annotations = child;
-    const result = check( v, path, ctx );
-    mergeAnnotations( parent, ctx.annotations );
-    ctx.annotations = parent;
-
-    return result;
-}
-
-/** Run `check` on a nested instance; annotations stay local to that call. */
-function runNested(
-    check: SchemaValidator,
-    v: any,
-    path: string,
-    ctx: ValidationContext
-): any
-{
-    const prev = ctx.annotations;
-    ctx.annotations = emptyAnnotations();
-    const result = check( v, path, ctx );
-    ctx.annotations = prev;
-
-    return result;
-}
-
-function markProperty( ctx: ValidationContext, key: string ): void
-{
-    ensureAnnotations( ctx ).properties.add( key );
-}
-
-function markItem( ctx: ValidationContext, index: number ): void
-{
-    ensureAnnotations( ctx ).items.add( index );
-}
-
-function markAllItems( ctx: ValidationContext ): void
-{
-    ensureAnnotations( ctx ).itemsAll = true;
-}
-
-function pushDynamicAnchor( ctx: ValidationContext, name: string, schema: JsonSchema | boolean ): void
-{
-    if( !ctx.dynamicAnchors ){ ctx.dynamicAnchors = [] }
-
-    const top = ctx.dynamicAnchors[ctx.dynamicAnchors.length - 1];
-
-    if( top )
-    {
-        top.set( name, schema );
-    }
-    else
-    {
-        ctx.dynamicAnchors.push( new Map([[ name, schema ]]));
-    }
-}
-
-function resolveDynamicAnchor( ctx: ValidationContext, name: string ): JsonSchema | boolean | undefined
-{
-    if( !ctx.dynamicAnchors ){ return undefined }
-
-    for( let i = ctx.dynamicAnchors.length - 1; i >= 0; i-- )
-    {
-        const found = ctx.dynamicAnchors[i].get( name );
-
-        if( found !== undefined ){ return found }
-    }
-
-    return undefined;
-}
-
-function decodeContentEncoding( value: string, encoding: string ): Buffer | string | undefined
-{
-    const normalized = encoding.toLowerCase();
-
-    if( normalized === 'base64' || normalized === 'base64url' )
-    {
-        try
-        {
-            const standard = normalized === 'base64url'
-                ? value.replace( /-/g, '+' ).replace( /_/g, '/' )
-                : value;
-            const buf = Buffer.from( standard, 'base64' );
-
-            if( buf.length === 0 && value.length > 0 ){ return undefined }
-
-            return buf;
-        }
-        catch
-        {
-            return undefined;
-        }
-    }
-
-    if( normalized === '7bit' || normalized === '8bit' || normalized === 'binary' || normalized === 'quoted-printable' )
-    {
-        return value;
-    }
-
-    return undefined;
-}
-
 function keySetHas( keys: string[] | Set<string>, key: string ): boolean
 {
     return keys instanceof Set ? keys.has( key ) : keys.includes( key );
 }
 
-function commitContainer( target: any, source: any ): boolean
+export function commitContainer( target: any, source: any ): boolean
 {
     if( target === source ){ return true }
 
@@ -446,7 +361,7 @@ export function isMultipleOfNumber( v: number, n: number ): boolean
     return Math.abs( q - Math.round( q )) <= 1e-8 * Math.max( 1, Math.abs( q ));
 }
 
-function shouldMutate( ctx: ValidationContext ): boolean 
+export function shouldMutate( ctx: ValidationContext ): boolean 
 {
     return ctx.mutate === true;
 }
@@ -612,8 +527,6 @@ export function coerceQueryDate( v: any ): any
     const fromJson = coerceJsonDate( v );
 
     if( fromJson !== v ){ return fromJson }
-
-    if( v instanceof Date && !Number.isNaN( v.getTime())){ return v }
 
     if( typeof v === 'number' && Number.isFinite( v ))
     {
@@ -818,14 +731,10 @@ function parseFormatDateTime( value: string ): Date | undefined
 
     if( !parseFormatDate( value.slice( 0, 10 ))){ return undefined }
 
-    const parsed = new Date( value );
-
-    if( Number.isNaN( parsed.getTime())){ return undefined }
-
-    return parsed;
+    return new Date( value );
 }
 
-function deepEqual( left: any, right: any, seen: WeakMap<object, WeakSet<object>> = new WeakMap()): boolean
+export function deepEqual( left: any, right: any, seen: WeakMap<object, WeakSet<object>> = new WeakMap()): boolean
 {
     if( left === right ){ return true }
 
@@ -856,6 +765,11 @@ function deepEqual( left: any, right: any, seen: WeakMap<object, WeakSet<object>
     if( left instanceof Date || right instanceof Date )
     {
         return left instanceof Date && right instanceof Date && left.getTime() === right.getTime();
+    }
+
+    if( left instanceof URL || right instanceof URL )
+    {
+        return left instanceof URL && right instanceof URL && left.href === right.href;
     }
 
     if( left instanceof RegExp || right instanceof RegExp )
@@ -1334,7 +1248,7 @@ export const validators = {
             catch ( e ) { /* ignore */ }
         }
 
-        if( wantsQuery( ctx ) && typeof v === 'number' && Number.isFinite( v ) && Number.isInteger( v )) 
+        if( wantsQuery( ctx ) && typeof v === 'number' && Number.isSafeInteger( v )) 
         {
             try 
             {
@@ -1404,6 +1318,32 @@ export const validators = {
         }
 
         report( ctx, path, 'Type<Date>', v );
+
+        return v;
+    },
+
+    urlInstance : ( v: any, path: string, ctx: ValidationContext ) =>
+    {
+        if( v instanceof URL ){ return v }
+
+        if( wantsJsonRevive( ctx ) && typeof v === 'string' && v.trim() !== '' )
+        {
+            try
+            {
+                return new URL( v );
+            }
+            catch
+            { /* fall through */ }
+        }
+
+        if( typeof ctx.from === 'function' )
+        {
+            const converted = fromCustom( ctx, path, v, 'URL' );
+
+            if( converted instanceof URL ){ return converted }
+        }
+
+        report( ctx, path, 'Type<URL>', v );
 
         return v;
     },
@@ -1524,7 +1464,7 @@ export const validators = {
                 catch
                 { /* ignore */ }
             }
-            else if( typeof v === 'number' && Number.isFinite( v ) && Number.isInteger( v ))
+            else if( typeof v === 'number' && Number.isSafeInteger( v ))
             {
                 const b = BigInt( v );
 
@@ -1581,7 +1521,9 @@ export const validators = {
         {
             for( let i = 0; i < v.length; i++ )
             {
-                v[i] = childValidator( v[i], indexPath( path, i ), ctx );
+                const next = childValidator( v[i], indexPath( path, i ), ctx );
+
+                if( !Object.is( v[i], next )){ v[i] = next }
             }
 
             return v;
@@ -1599,6 +1541,8 @@ export const validators = {
 
     props : ( v: any, data: any, path: string, ctx: ValidationContext, props: [string, boolean, Function, boolean?][]) => 
     {
+        const inPlace = data === v;
+
         for( const [key, isOptional, validator, hasDefault] of props ) 
         {
             const val = v[key];
@@ -1611,7 +1555,7 @@ export const validators = {
 
             const result = validator( val, childPath( path, key ), ctx );
 
-            if( ctx.success )
+            if( ctx.success && ( !inPlace || !Object.is( val, result ) || ( val === undefined && !Object.hasOwn( v, key ))))
             {
                 setOwnProperty( data, key, result );
             }
@@ -1672,16 +1616,110 @@ export const validators = {
     {
         if( !isPlainObject( v )){ return }
 
+        const inPlace = data === v;
         const probe = ctx.mode === 'strip' ? ctx.unionProbe : undefined;
         let matched = 0;
 
         for( const key of Object.keys( v )) 
         {
-            if( probe && v[key] !== undefined ){ matched++ }
+            const val = v[key];
+
+            if( probe && val !== undefined ){ matched++ }
 
             if( keySetHas( knownKeys, key )){ continue }
 
-            setOwnProperty( data, key, childValidator( v[key], childPath( path, key ), ctx ));
+            const next = childValidator( val, childPath( path, key ), ctx );
+
+            if( !inPlace || !Object.is( val, next ))
+            {
+                setOwnProperty( data, key, next );
+            }
+        }
+
+        if( probe && ctx.success ){ probe.matched += matched }
+    },
+
+    patternProps : (
+        v              : any,
+        data           : any,
+        path           : string,
+        ctx            : ValidationContext,
+        knownKeys      : string[] | Set<string>,
+        patterns       : [ RegExp, Function ][],
+        indexValidator?: Function
+    ) =>
+    {
+        if( !isPlainObject( v )){ return }
+
+        const inPlace = data === v;
+        const probe = ctx.mode === 'strip' ? ctx.unionProbe : undefined;
+        let matched = 0;
+
+        for( const key of Object.keys( v ))
+        {
+            const val = v[key];
+
+            if( keySetHas( knownKeys, key ))
+            {
+                if( probe && val !== undefined ){ matched++ }
+
+                continue;
+            }
+
+            let matchedPattern = false;
+            let next = val;
+
+            for( let i = 0; i < patterns.length; i++ )
+            {
+                const [ regex, validator ] = patterns[i];
+
+                if( testRegex( regex, key ))
+                {
+                    matchedPattern = true;
+                    next = validator( next, childPath( path, key ), ctx );
+                }
+            }
+
+            if( matchedPattern )
+            {
+                if( probe && val !== undefined ){ matched++ }
+
+                if( !inPlace || !Object.is( val, next ))
+                {
+                    setOwnProperty( data, key, next );
+                }
+
+                continue;
+            }
+
+            if( indexValidator )
+            {
+                if( probe && val !== undefined ){ matched++ }
+
+                const idxNext = indexValidator( val, childPath( path, key ), ctx );
+
+                if( !inPlace || !Object.is( val, idxNext ))
+                {
+                    setOwnProperty( data, key, idxNext );
+                }
+
+                continue;
+            }
+
+            if( ctx.mode === 'strict' )
+            {
+                report( ctx, path, `PropertyNotAllowed<${key}>`, val );
+            }
+            else if( ctx.mode === 'strip' )
+            {
+                if( probe && val !== undefined ){ probe.stripped++ }
+
+                if( inPlace ){ delete data[key] }
+            }
+            else if( !inPlace )
+            {
+                setOwnProperty( data, key, val );
+            }
         }
 
         if( probe && ctx.success ){ probe.matched += matched }
@@ -2006,7 +2044,16 @@ export const validators = {
 
     custom : ( v: any, path: string, ctx: ValidationContext, fn: Function, message?: string ) => 
     {
-        if( !fn( v, pathContext( path, ctx ))) 
+        const res = fn( v, pathContext( path, ctx ));
+
+        if( res && typeof ( res as PromiseLike<unknown> ).then === 'function' )
+        {
+            report( ctx, path, fn.name ? `AsyncCustomNotSupported<${fn.name}>` : 'AsyncCustomNotSupported', v, message );
+
+            return v;
+        }
+
+        if( !res ) 
         {
             report( ctx, path, fn.name ? `Custom<${fn.name}>` : 'Custom', v, message );
         }
@@ -2092,43 +2139,26 @@ export const validators = {
             return val;
         };
 
-        if( exclusiveKeys && isPlainObject( v ))
+        const matchedIdx = findExclusiveKeyArm( v, exclusiveKeys );
+
+        if( matchedIdx >= 0 )
         {
-            let matchedIdx = -1;
+            const armProbe = ctx.mode === 'strip' && ctx.unionProbe ? { stripped : 0, matched : 0 } : undefined;
+            subCtx.success = true;
+            subCtx.errors.length = 0;
+            subCtx.from = undefined;
+            subCtx.unionProbe = armProbe;
+            const val = checks[matchedIdx]( v, path, subCtx );
 
-            for( let i = 0; i < exclusiveKeys.length; i++ )
+            if( subCtx.success )
             {
-                if( v[exclusiveKeys[i]] !== undefined )
+                if( armProbe && ctx.unionProbe )
                 {
-                    if( matchedIdx !== -1 )
-                    {
-                        matchedIdx = -1;
-                        break;
-                    }
-
-                    matchedIdx = i;
+                    ctx.unionProbe.stripped += armProbe.stripped;
+                    ctx.unionProbe.matched += armProbe.matched;
                 }
-            }
 
-            if( matchedIdx >= 0 )
-            {
-                const armProbe = ctx.mode === 'strip' && ctx.unionProbe ? { stripped : 0, matched : 0 } : undefined;
-                subCtx.success = true;
-                subCtx.errors.length = 0;
-                subCtx.from = undefined;
-                subCtx.unionProbe = armProbe;
-                const val = checks[matchedIdx]( v, path, subCtx );
-
-                if( subCtx.success )
-                {
-                    if( armProbe && ctx.unionProbe )
-                    {
-                        ctx.unionProbe.stripped += armProbe.stripped;
-                        ctx.unionProbe.matched += armProbe.matched;
-                    }
-
-                    return accept( val );
-                }
+                return accept( val );
             }
         }
 
@@ -2293,38 +2323,58 @@ export const validators = {
         return v;
     },
 
-    tuple : ( v: any, path: string, ctx: ValidationContext, checks: Function[]) => 
+    tuple : ( v: any, path: string, ctx: ValidationContext, checks: Function[], minItems?: number, restValidator?: Function ) => 
     {
-        if( !Array.isArray( v ) || v.length !== checks.length ) 
+        const minLen = minItems !== undefined ? minItems : checks.length;
+        const maxLen = restValidator ? Infinity : checks.length;
+        const lengthValid = ( arr: any[]): boolean => arr.length >= minLen && arr.length <= maxLen;
+
+        if( !Array.isArray( v ) || !lengthValid( v )) 
         {
             if( typeof ctx.from === 'function' )
             {
                 const converted = fromCustom( ctx, path, v, 'tuple' );
 
-                if( Array.isArray( converted ) && converted.length === checks.length )
+                if( Array.isArray( converted ) && lengthValid( converted ))
                 {
                     v = converted;
                 }
                 else 
                 {
-                    report( ctx, path, `Tuple<${checks.length}>`, v );
+                    report( ctx, path, `Tuple<${minLen}>`, v );
 
                     return v;
                 }
             }
             else 
             {
-                report( ctx, path, `Tuple<${checks.length}>`, v );
+                report( ctx, path, `Tuple<${minLen}>`, v );
 
                 return v;
             }
         }
 
+        const fixedCount = Math.min( v.length, checks.length );
+
         if( shouldMutate( ctx ))
         {
-            for( let i = 0; i < checks.length; i++ )
+            for( let i = 0; i < fixedCount; i++ )
             {
-                v[i] = checks[i]( v[i], indexPath( path, i ), ctx );
+                if( i >= minLen && v[i] === undefined ){ continue }
+
+                const next = checks[i]( v[i], indexPath( path, i ), ctx );
+
+                if( !Object.is( v[i], next )){ v[i] = next }
+            }
+
+            if( restValidator )
+            {
+                for( let i = fixedCount; i < v.length; i++ )
+                {
+                    const next = restValidator( v[i], indexPath( path, i ), ctx );
+
+                    if( !Object.is( v[i], next )){ v[i] = next }
+                }
             }
 
             return v;
@@ -2332,9 +2382,23 @@ export const validators = {
 
         const data: any[] = [];
 
-        for( let i = 0; i < checks.length; i++ )
+        for( let i = 0; i < fixedCount; i++ )
         {
+            if( i >= minLen && v[i] === undefined )
+            {
+                data[i] = undefined;
+                continue;
+            }
+
             data[i] = checks[i]( v[i], indexPath( path, i ), ctx );
+        }
+
+        if( restValidator )
+        {
+            for( let i = fixedCount; i < v.length; i++ )
+            {
+                data[i] = restValidator( v[i], indexPath( path, i ), ctx );
+            }
         }
 
         return data;
@@ -2436,9 +2500,16 @@ export const validators = {
 
         for( const key of Object.keys( v )) 
         {
-            if( probe && v[key] !== undefined ){ matched++ }
+            const val = v[key];
 
-            setOwnProperty( data, key, childValidator( v[key], childPath( path, key ), ctx ));
+            if( probe && val !== undefined ){ matched++ }
+
+            const next = childValidator( val, childPath( path, key ), ctx );
+
+            if( !mutate || !Object.is( val, next ))
+            {
+                setOwnProperty( data, key, next );
+            }
         }
 
         if( probe && ctx.success ){ probe.matched += matched }
@@ -2484,17 +2555,28 @@ export const validators = {
                 return v;
             }
         }
-        const source = [...v];
         let index = 0;
 
         if( shouldMutate( ctx ))
         {
-            v.clear();
+            const nextItems: any[] = [];
+            let changed = false;
 
-            for( const item of source )
+            for( const item of v )
             {
-                v.add( childValidator( item, `${path}[${index}]`, ctx ));
+                const next = childValidator( item, `${path}[${index}]`, ctx );
+                nextItems.push( next );
+
+                if( !Object.is( item, next )){ changed = true }
+
                 index++;
+            }
+
+            if( changed )
+            {
+                v.clear();
+
+                for( const item of nextItems ){ v.add( item ) }
             }
 
             return v;
@@ -2502,7 +2584,7 @@ export const validators = {
 
         const data = new Set();
 
-        for( const item of source )
+        for( const item of v )
         {
             data.add( childValidator( item, `${path}[${index}]`, ctx ));
             index++;
@@ -2552,7 +2634,6 @@ export const validators = {
             }
         }
 
-        const source = [...v.entries()];
         const prevFrom = ctx.from;
         const runKey = ( key: any ) =>
         {
@@ -2575,13 +2656,23 @@ export const validators = {
 
         if( shouldMutate( ctx ))
         {
-            v.clear();
+            const nextEntries: [ any, any ][] = [];
+            let changed = false;
 
-            for( const [key, val] of source )
+            for( const [ key, val ] of v.entries())
             {
                 const validatedKey = runKey( key );
                 const validatedVal = valueValidator( val, `${path}[${key}]`, ctx );
-                v.set( validatedKey, validatedVal );
+                nextEntries.push([ validatedKey, validatedVal ]);
+
+                if( !Object.is( key, validatedKey ) || !Object.is( val, validatedVal )){ changed = true }
+            }
+
+            if( changed )
+            {
+                v.clear();
+
+                for( const [ validatedKey, validatedVal ] of nextEntries ){ v.set( validatedKey, validatedVal ) }
             }
 
             return v;
@@ -2589,7 +2680,7 @@ export const validators = {
 
         const data = new Map();
 
-        for( const [key, val] of source )
+        for( const [ key, val ] of v.entries())
         {
             const validatedKey = runKey( key );
             const validatedVal = valueValidator( val, `${path}[${key}]`, ctx );
@@ -2599,27 +2690,6 @@ export const validators = {
         return data;
     }
 };
-
-const compiledSchemas = new WeakMap<object, SchemaValidator>();
-
-export function getOrCompileSchema( schema: JsonSchema | boolean ): SchemaValidator
-{
-    if( typeof schema === 'boolean' ){ return compileSchema( schema ) }
-
-    if( typeof schema !== 'object' || schema === null || Array.isArray( schema ))
-    {
-        throw new Error( 'Invalid JSON Schema: must be a non-null object or boolean' );
-    }
-    let compiled = compiledSchemas.get( schema );
-
-    if( !compiled )
-    {
-        compiled = compileSchema( schema );
-        compiledSchemas.set( schema, compiled );
-    }
-
-    return compiled;
-}
 
 export function is( validator: Function, value: any, options?: ValidationMode | GuardOptions ): boolean
 {
@@ -2700,7 +2770,7 @@ export function assertGuard( validator: Function, value: any, options?: Validati
     throw new Error( 'Validation Error: ' + ctx.errors.map( e => e.path ? `${e.path}: ${e.error}` : e.error ).join( ', ' ));
 }
 
-export function validate( validator: Function, value: any, options?: ValidationMode | ValidationOptions ): { success : boolean, errors : IValidationError[], data? : any }
+export function validate<T = any>( validator: Function, value: any, options?: ValidationMode | ValidationOptions ): IValidation<T>
 {
     const opt = options;
     const mode = typeof opt === 'string' ? opt : ( opt?.mode || 'strict' );
@@ -2753,1752 +2823,7 @@ export function groupErrorsByPath( errors: IValidationError[]): Record<string, {
     return grouped;
 }
 
-function decodeJsonPointerToken( token: string ): string
-{
-    return token.replace( /~1/g, '/' ).replace( /~0/g, '~' );
-}
-
-const SCHEMA_META_KEYS = new Set([
-    '$schema', '$id', '$defs', 'definitions',
-    '$anchor', '$dynamicAnchor', '$recursiveAnchor'
-]);
-
-const SCHEMA_COMBINATOR_KEYS = new Set([
-    '$ref', '$dynamicRef', '$recursiveRef', 'allOf', 'anyOf', 'oneOf'
-]);
-
-/** Resolve a local JSON Pointer / anchor `$ref` against the compiled root schema. */
-function resolveSchemaRef(
-    root: JsonSchema | boolean,
-    ref: string,
-    anchors?: Map<string, JsonSchema | boolean>
-): JsonSchema | boolean
-{
-    if( ref === '#' || ref === '#/' )
-    {
-        return root;
-    }
-
-    if( /^https?:\/\//i.test( ref ))
-    {
-        throw new Error( `Unsupported JSON Schema reference: ${ref}` );
-    }
-
-    // Plain fragment anchor: `#name` (not a JSON Pointer `#/…`).
-    if( ref.startsWith( '#' ) && !ref.startsWith( '#/' ))
-    {
-        const name = decodeURIComponent( ref.slice( 1 ));
-        const found = anchors?.get( name );
-
-        if( found !== undefined ){ return found }
-
-        throw new Error( `Schema reference not found: ${ref}` );
-    }
-
-    if( !ref.startsWith( '#/' ))
-    {
-        throw new Error( `Schema reference not found: ${ref}` );
-    }
-
-    if( typeof root !== 'object' || root === null )
-    {
-        throw new Error( `Schema reference not found: ${ref}` );
-    }
-
-    const tokens = ref.slice( 2 ).split( '/' ).map( decodeJsonPointerToken );
-    let current: any = root;
-
-    for( const token of tokens )
-    {
-        if( Array.isArray( current ))
-        {
-            const index = Number( token );
-
-            if( !Number.isInteger( index ) || index < 0 || index >= current.length )
-            {
-                throw new Error( `Schema reference not found: ${ref}` );
-            }
-
-            current = current[index];
-            continue;
-        }
-
-        if( current === null || typeof current !== 'object' || !Object.hasOwn( current, token ))
-        {
-            throw new Error( `Schema reference not found: ${ref}` );
-        }
-
-        current = current[token];
-    }
-
-    if( current === true || current === false )
-    {
-        return current;
-    }
-
-    if( current === null || typeof current !== 'object' || Array.isArray( current ))
-    {
-        throw new Error( `Schema reference not found: ${ref}` );
-    }
-
-    return current as JsonSchema;
-}
-
-function collectSchemaAnchors( node: unknown, anchors: Map<string, JsonSchema | boolean> ): void
-{
-    if( node === true || node === false || node === null || typeof node !== 'object' ){ return }
-
-    if( Array.isArray( node ))
-    {
-        for( const item of node ){ collectSchemaAnchors( item, anchors ) }
-
-        return;
-    }
-
-    const schema = node as JsonSchemaObject;
-
-    if( typeof schema.$anchor === 'string' ){ anchors.set( schema.$anchor, schema ) }
-
-    if( typeof schema.$dynamicAnchor === 'string' ){ anchors.set( schema.$dynamicAnchor, schema ) }
-
-    if( typeof schema.$recursiveAnchor === 'string' ){ anchors.set( schema.$recursiveAnchor, schema ) }
-
-    if( schema.$recursiveAnchor === true ){ anchors.set( '', schema ) }
-
-    for( const value of Object.values( schema ))
-    {
-        collectSchemaAnchors( value, anchors );
-    }
-}
-
-function schemaHasCombinator( schema: JsonSchemaObject ): boolean
-{
-    return !!( schema.$ref || schema.$dynamicRef || schema.$recursiveRef ||
-        schema.allOf || schema.anyOf || schema.oneOf );
-}
-
-function schemaHasSignificantSibling( schema: JsonSchemaObject ): boolean
-{
-    for( const key of Object.keys( schema ))
-    {
-        if( SCHEMA_META_KEYS.has( key ) || SCHEMA_COMBINATOR_KEYS.has( key )){ continue }
-
-        return true;
-    }
-
-    return false;
-}
-
-function dynamicAnchorName( schema: JsonSchemaObject ): string | undefined
-{
-    if( typeof schema.$dynamicAnchor === 'string' ){ return schema.$dynamicAnchor }
-
-    if( typeof schema.$recursiveAnchor === 'string' ){ return schema.$recursiveAnchor }
-
-    if( schema.$recursiveAnchor === true ){ return '' }
-
-    return undefined;
-}
-
-/**
- * Schemas produced by {@link openAllOfMemberRoot}: unknown keys must be allowed for sibling-member
- * merging, but must NOT be annotation-evaluated (so parent `unevaluatedProperties` can see them).
- */
-const allofOpenedRoots = new WeakSet<object>();
-
-/**
- * Typeless object schemas inferred during compile: JSON Schema allows undeclared keys by default
- * without applying the `additionalProperties` applicator (so they stay unevaluated).
- */
-const typelessInferredObjects = new WeakSet<object>();
-
-/**
- * allOf members that close unknown keys must not reject sibling keys contributed by other members.
- * Open only the member's own root object; nested `additionalProperties` stay intact and see the
- * caller's real `mode`.
- */
-function openAllOfMemberRoot( schema: JsonSchema | boolean ): JsonSchema | boolean
-{
-    if( typeof schema !== 'object' || schema === null || schema.type !== 'object' )
-    {
-        return schema;
-    }
-
-    if( 'additionalProperties' in schema && schema.additionalProperties !== false )
-    {
-        return schema;
-    }
-
-    const opened = { ...schema, additionalProperties : true as const };
-    allofOpenedRoots.add( opened );
-
-    return opened;
-}
-
-export function compileSchema( schema: JsonSchema | boolean ): SchemaValidator
-{
-    const rootSchema = schema;
-    const compiledDefs = new Map<string, SchemaValidator>();
-    const anchors = new Map<string, JsonSchema | boolean>();
-
-    collectSchemaAnchors( rootSchema, anchors );
-
-    function withEnum( check: SchemaValidator, subSchema: JsonSchemaObject ): SchemaValidator
-    {
-        if( !Array.isArray( subSchema.enum )){ return check }
-
-        const values = subSchema.enum;
-
-        return ( v, path, ctx ) =>
-        {
-            v = check( v, path, ctx );
-
-            if( !values.some( expected => deepEqual( v, expected )))
-            {
-                report(
-                    ctx,
-                    path,
-                    `Enum<${values.map( expected => JSON.stringify( expected )).join( '|' )}>`,
-                    v
-                );
-            }
-
-            return v;
-        };
-    }
-
-    function withConst( check: SchemaValidator, subSchema: JsonSchemaObject ): SchemaValidator
-    {
-        if( !Object.hasOwn( subSchema, 'const' )){ return check }
-
-        const expected = subSchema.const;
-
-        return ( v, path, ctx ) =>
-        {
-            v = check( v, path, ctx );
-
-            if( !deepEqual( v, expected ))
-            {
-                report( ctx, path, `Const<${JSON.stringify( expected )}>`, v );
-            }
-
-            return v;
-        };
-    }
-
-    function maybeWrapDynamicAnchor( check: SchemaValidator, subSchema: JsonSchemaObject ): SchemaValidator
-    {
-        const name = dynamicAnchorName( subSchema );
-
-        if( name === undefined ){ return check }
-
-        return ( v, path, ctx ) =>
-        {
-            pushDynamicAnchor( ctx, name, subSchema );
-
-            return check( v, path, ctx );
-        };
-    }
-
-    function finalize( check: SchemaValidator, subSchema: JsonSchemaObject ): SchemaValidator
-    {
-        let wrapped = check;
-
-        if( Object.hasOwn( subSchema, 'not' ))
-        {
-            const inner = build( subSchema.not );
-            const prev = wrapped;
-
-            wrapped = ( v, path, ctx ) =>
-            {
-                const out = prev( v, path, ctx );
-
-                if( !ctx.success ){ return out }
-
-                const probe: ValidationContext =
-                {
-                    success        : true,
-                    errors         : [],
-                    mode           : ctx.mode,
-                    from           : ctx.from,
-                    mutate         : false,
-                    root           : ctx.root,
-                    dynamicAnchors : ctx.dynamicAnchors
-                };
-                inner( v, path, probe );
-
-                if( probe.success )
-                {
-                    report( ctx, path, 'Schema<not>', v );
-                }
-
-                return out;
-            };
-        }
-
-        if( Object.hasOwn( subSchema, 'if' ))
-        {
-            const ifCheck = build( subSchema.if ?? true );
-            const thenCheck = subSchema.then !== undefined ? build( subSchema.then ) : null;
-            const elseCheck = subSchema.else !== undefined ? build( subSchema.else ) : null;
-            const prev = wrapped;
-
-            wrapped = ( v, path, ctx ) =>
-            {
-                let out = prev( v, path, ctx );
-
-                if( !ctx.success ){ return out }
-
-                const probe: ValidationContext =
-                {
-                    success        : true,
-                    errors         : [],
-                    mode           : ctx.mode,
-                    from           : ctx.from,
-                    mutate         : false,
-                    root           : ctx.root,
-                    annotations    : emptyAnnotations(),
-                    dynamicAnchors : ctx.dynamicAnchors
-                };
-                ifCheck( v, path, probe );
-                mergeAnnotations( ensureAnnotations( ctx ), probe.annotations );
-
-                if( probe.success )
-                {
-                    if( thenCheck ){ out = runInPlace( thenCheck, v, path, ctx ) }
-                }
-                else if( elseCheck )
-                {
-                    out = runInPlace( elseCheck, v, path, ctx );
-                }
-
-                return out;
-            };
-        }
-
-        if( 'unevaluatedProperties' in subSchema || 'unevaluatedItems' in subSchema )
-        {
-            const unevaluatedProps = subSchema.unevaluatedProperties;
-            const unevaluatedPropsCheck = unevaluatedProps && typeof unevaluatedProps === 'object'
-                ? build( unevaluatedProps )
-                : undefined;
-            const unevaluatedItems = subSchema.unevaluatedItems;
-            const unevaluatedItemsCheck = unevaluatedItems && typeof unevaluatedItems === 'object'
-                ? build( unevaluatedItems )
-                : undefined;
-            const prev = wrapped;
-
-            wrapped = ( v, path, ctx ) =>
-            {
-                const out = prev( v, path, ctx );
-
-                if( !ctx.success ){ return out }
-
-                if( 'unevaluatedProperties' in subSchema && isPlainObject( out ))
-                {
-                    const evaluated = ensureAnnotations( ctx ).properties;
-
-                    for( const key of Object.keys( out ))
-                    {
-                        if( evaluated.has( key )){ continue }
-
-                        if( unevaluatedProps === false )
-                        {
-                            report( ctx, path, `UnevaluatedProperty<${key}>`, out[key]);
-                        }
-                        else if( unevaluatedPropsCheck )
-                        {
-                            setOwnProperty(
-                                out,
-                                key,
-                                runNested( unevaluatedPropsCheck, out[key], childPath( path, key ), ctx )
-                            );
-                        }
-                    }
-                }
-
-                if( 'unevaluatedItems' in subSchema && Array.isArray( out ))
-                {
-                    const ann = ensureAnnotations( ctx );
-
-                    for( let i = 0; i < out.length; i++ )
-                    {
-                        if( ann.itemsAll || ann.items.has( i )){ continue }
-
-                        if( unevaluatedItems === false )
-                        {
-                            report( ctx, path, `UnevaluatedItem<${i}>`, out[i]);
-                        }
-                        else if( unevaluatedItemsCheck )
-                        {
-                            setOwnProperty(
-                                out,
-                                i,
-                                runNested( unevaluatedItemsCheck, out[i], indexPath( path, i ), ctx )
-                            );
-                        }
-                    }
-                }
-
-                return out;
-            };
-        }
-
-        return withConst( withEnum( wrapped, subSchema ), subSchema );
-    }
-
-    function buildRefValidator( refPath: string ): SchemaValidator
-    {
-        if( compiledDefs.has( refPath ))
-        {
-            return compiledDefs.get( refPath )!;
-        }
-
-        const targetSchema = resolveSchemaRef( rootSchema, refPath, anchors );
-
-        let resolved: SchemaValidator | null = null;
-        const proxy: SchemaValidator = ( v, path, ctx ) =>
-        {
-            if( !resolved )
-            {
-                resolved = build( targetSchema );
-            }
-
-            return runInPlace( resolved, v, path, ctx );
-        };
-
-        compiledDefs.set( refPath, proxy );
-
-        return proxy;
-    }
-
-    function buildDynamicRefValidator( refPath: string ): SchemaValidator
-    {
-        const name = refPath.startsWith( '#' ) && !refPath.startsWith( '#/' )
-            ? decodeURIComponent( refPath.slice( 1 ))
-            : refPath === '#' || refPath === '#/'
-                ? ''
-                : decodeURIComponent( refPath.replace( /^#/, '' ));
-
-        return ( v, path, ctx ) =>
-        {
-            const target = resolveDynamicAnchor( ctx, name ) ?? anchors.get( name );
-
-            if( target === undefined )
-            {
-                throw new Error( `Schema reference not found: ${refPath}` );
-            }
-
-            return runInPlace( build( target ), v, path, ctx );
-        };
-    }
-
-    function peelCombinators( subSchema: JsonSchemaObject ): SchemaValidator
-    {
-        const rest: JsonSchemaObject = { ...subSchema };
-        const members: ( JsonSchema | boolean )[] = [];
-
-        if( rest.$ref )
-        {
-            members.push({ $ref : rest.$ref });
-            delete rest.$ref;
-        }
-
-        if( rest.$dynamicRef )
-        {
-            members.push({ $dynamicRef : rest.$dynamicRef });
-            delete rest.$dynamicRef;
-        }
-
-        if( rest.$recursiveRef )
-        {
-            members.push({ $recursiveRef : rest.$recursiveRef });
-            delete rest.$recursiveRef;
-        }
-
-        if( rest.allOf )
-        {
-            members.push( ...rest.allOf );
-            delete rest.allOf;
-        }
-
-        if( rest.anyOf )
-        {
-            members.push({ anyOf : rest.anyOf });
-            delete rest.anyOf;
-        }
-
-        if( rest.oneOf )
-        {
-            members.push({ oneOf : rest.oneOf });
-            delete rest.oneOf;
-        }
-
-        const composed: JsonSchemaObject = { allOf : [] };
-
-        // Lift unevaluated* onto the composed schema so finalize sees merged sibling annotations.
-        if( 'unevaluatedProperties' in rest )
-        {
-            composed.unevaluatedProperties = rest.unevaluatedProperties;
-            delete rest.unevaluatedProperties;
-        }
-
-        if( 'unevaluatedItems' in rest )
-        {
-            composed.unevaluatedItems = rest.unevaluatedItems;
-            delete rest.unevaluatedItems;
-        }
-
-        const restSignificant = Object.keys( rest ).some( key => !SCHEMA_META_KEYS.has( key ));
-        const allOfMembers: ( JsonSchema | boolean )[] = [];
-
-        if( restSignificant ){ allOfMembers.push( rest ) }
-
-        allOfMembers.push( ...members );
-        composed.allOf = allOfMembers;
-
-        return build( composed, { skipPeel : true });
-    }
-
-    function build( subSchema: JsonSchema | boolean | undefined, opts?: { skipPeel? : boolean }): SchemaValidator
-    {
-        if( subSchema === true || subSchema === undefined )
-        {
-            return ( v ) => v;
-        }
-
-        if( subSchema === false )
-        {
-            return ( v, path, ctx ) =>
-            {
-                report( ctx, path, 'Schema<false>', v );
-
-                return v;
-            };
-        }
-
-        if( !subSchema || typeof subSchema !== 'object' || Array.isArray( subSchema ))
-        {
-            throw new Error( 'Invalid JSON Schema: subschemas must be objects or booleans' );
-        }
-
-        if( Array.isArray( subSchema.type ))
-        {
-            const types = subSchema.type;
-
-            for( const t of types )
-            {
-                if( ![ 'string', 'number', 'integer', 'boolean', 'null', 'array', 'object' ].includes( t ))
-                {
-                    throw new Error( `Unsupported JSON Schema type: ${t}` );
-                }
-            }
-
-            const { type : _type, ...rest } = subSchema;
-
-            return maybeWrapDynamicAnchor( build({
-                ...rest,
-                anyOf : types.map( t => ({ ...rest, type : t }))
-            }), subSchema );
-        }
-
-        if( typeof subSchema.type === 'string' &&
-            !['string', 'number', 'integer', 'boolean', 'null', 'array', 'object'].includes( subSchema.type ))
-        {
-            throw new Error( `Unsupported JSON Schema type: ${subSchema.type}` );
-        }
-
-        if( !opts?.skipPeel && schemaHasCombinator( subSchema ) && schemaHasSignificantSibling( subSchema ))
-        {
-            return maybeWrapDynamicAnchor( peelCombinators( subSchema ), subSchema );
-        }
-
-        if( subSchema.$ref )
-        {
-            return maybeWrapDynamicAnchor( buildRefValidator( subSchema.$ref ), subSchema );
-        }
-
-        if( subSchema.$dynamicRef )
-        {
-            return maybeWrapDynamicAnchor( buildDynamicRefValidator( subSchema.$dynamicRef ), subSchema );
-        }
-
-        if( subSchema.$recursiveRef )
-        {
-            return maybeWrapDynamicAnchor( buildDynamicRefValidator( subSchema.$recursiveRef ), subSchema );
-        }
-
-        if( subSchema['x-typescript-type'] === 'Date' )
-        {
-            return finalize(( v, path, ctx ) => validators.date( v, path, ctx ), subSchema );
-        }
-
-        if( subSchema['x-typescript-type'] === 'RegExp' )
-        {
-            return finalize(( v, path, ctx ) => validators.regexp( v, path, ctx ), subSchema );
-        }
-
-        if( subSchema['x-typescript-type'] === 'bigint' )
-        {
-            return finalize(( v, path, ctx ) => validators.bigint( v, path, ctx ), subSchema );
-        }
-
-        if( subSchema['x-typescript-type'] === 'undefined' )
-        {
-            return finalize(( v, path, ctx ) => validators.undefined( v, path, ctx ), subSchema );
-        }
-
-        if( subSchema['x-typescript-type'] === 'Set' )
-        {
-            const child = build( subSchema.items && !Array.isArray( subSchema.items ) ? subSchema.items : {});
-
-            return finalize(( v, path, ctx ) => validators.set( v, path, ctx, child ), subSchema );
-        }
-
-        if( subSchema['x-typescript-type'] === 'Map' )
-        {
-            const keyCheck = build( subSchema.key || { type : 'string' });
-            const valueCheck = build( subSchema.value || {});
-
-            return finalize(( v, path, ctx ) => validators.map( v, path, ctx, keyCheck, valueCheck ), subSchema );
-        }
-
-        if( subSchema['x-typescript-type'] === 'Promise' )
-        {
-            return finalize(( v, path, ctx ) =>
-            {
-                if( !( v instanceof Promise ))
-                {
-                    report( ctx, path, 'Type<Promise>', v );
-                }
-
-                return v;
-            }, subSchema );
-        }
-
-        if( typeof subSchema['x-typescript-type'] === 'string' &&
-            ['Uint8Array', 'Uint16Array', 'Uint32Array', 'Int8Array', 'Int16Array', 'Int32Array', 'Float32Array', 'Float64Array', 'ArrayBuffer', 'SharedArrayBuffer', 'DataView', 'Buffer'].includes( subSchema['x-typescript-type']))
-        {
-            const typeName = subSchema['x-typescript-type'];
-
-            return finalize(( v, path, ctx ) =>
-            {
-                const ctor = ( globalThis as any )[typeName];
-
-                if( !ctor || !( v instanceof ctor ))
-                {
-                    report( ctx, path, `Type<${typeName}>`, v );
-                }
-
-                return v;
-            }, subSchema );
-        }
-
-        if( 'x-typescript-type' in subSchema )
-        {
-            throw new Error( `Unsupported x-typescript-type: ${subSchema['x-typescript-type']}` );
-        }
-
-        if( subSchema.allOf )
-        {
-            const openedMembers = subSchema.allOf.map(( s ) => openAllOfMemberRoot( s ));
-            const checks = openedMembers.map(( s ) => build( s ));
-            const mergeKeys = openedMembers.map(( s ) =>
-            {
-                if( typeof s !== 'object' || s === null || s.type !== 'object' )
-                {
-                    return undefined;
-                }
-
-                // Synthetic opens / explicit additionalProperties:true — only declared props merge;
-                // extras stay on the instance for parent unevaluated* or combinedKeys.
-                if( allofOpenedRoots.has( s ))
-                {
-                    return new Set<string>( Object.keys( s.properties || {}));
-                }
-
-                if( 'additionalProperties' in s && s.additionalProperties !== false )
-                {
-                    return undefined;
-                }
-
-                return new Set<string>( Object.keys( s.properties || {}));
-            });
-            const allOriginallyClosedObjects = subSchema.allOf.length > 0 &&
-                subSchema.allOf.every(( s ) =>
-                    typeof s === 'object' && s !== null && s.type === 'object' &&
-                    !( 'additionalProperties' in s && s.additionalProperties !== false )
-                );
-            // Parent `unevaluatedProperties` owns unknown-key policy. Otherwise closed allOf
-            // still rejects undeclared extras via combinedKeys after members succeed.
-            const allowsAdditional = ( 'unevaluatedProperties' in subSchema ) ||
-                !allOriginallyClosedObjects;
-            const combinedKeys = allowsAdditional
-                ? undefined
-                : new Set<string>( subSchema.allOf.flatMap(( s ) =>
-                    typeof s === 'object' && s !== null ? Object.keys( s.properties || {}) : []
-                ));
-
-            return maybeWrapDynamicAnchor( finalize(( v, path, ctx ) =>
-            {
-                const errors: IValidationError[] = [];
-                let data: any = undefined;
-                const subCtx: ValidationContext =
-                {
-                    success        : true,
-                    errors         : [],
-                    mode           : ctx.mode,
-                    from           : ctx.from,
-                    mutate         : false,
-                    root           : ctx.root,
-                    annotations    : emptyAnnotations(),
-                    dynamicAnchors : ctx.dynamicAnchors
-                };
-
-                for( let i = 0; i < checks.length; i++ )
-                {
-                    const check = checks[i];
-                    subCtx.success = true;
-                    subCtx.errors.length = 0;
-                    subCtx.from = ctx.from;
-                    subCtx.root = ctx.root;
-                    subCtx.annotations = emptyAnnotations();
-                    subCtx.dynamicAnchors = ctx.dynamicAnchors;
-                    const val = check( v, path, subCtx );
-
-                    errors.push( ...subCtx.errors );
-
-                    if( subCtx.success )
-                    {
-                        mergeAnnotations( ensureAnnotations( ctx ), subCtx.annotations );
-                    }
-
-                    if( data === undefined )
-                    {
-                        data = isPlainObject( val ) ? {} : val;
-                    }
-
-                    if( isPlainObject( val ) && isPlainObject( data ))
-                    {
-                        const keys = mergeKeys[i] || new Set( Object.keys( val ));
-
-                        for( const key of keys )
-                        {
-                            if( Object.hasOwn( val, key )){ setOwnProperty( data, key, val[key]) }
-                        }
-                    }
-                    else if( data !== val )
-                    {
-                        data = val;
-                    }
-                }
-
-                if( errors.length > 0 )
-                {
-                    ctx.success = false;
-                    ctx.errors.push( ...errors );
-
-                    return v;
-                }
-
-                if( combinedKeys && isPlainObject( v ) && isPlainObject( data ))
-                {
-                    for( const key of Object.keys( v ))
-                    {
-                        if( combinedKeys.has( key )){ continue }
-
-                        if( ctx.mode === 'strict' )
-                        {
-                            report( ctx, path, `PropertyNotAllowed<${key}>`, v[key]);
-                        }
-                        else if( ctx.mode === 'strip' )
-                        {
-                            delete data[key];
-                        }
-                        else if( ctx.mode === 'relaxed' )
-                        {
-                            setOwnProperty( data, key, v[key]);
-                        }
-                    }
-                }
-                else if(( 'unevaluatedProperties' in subSchema ) && isPlainObject( v ) && isPlainObject( data ))
-                {
-                    // Member merges only copy evaluated keys; keep unevaluated extras on the
-                    // result so finalize's unevaluatedProperties can see them.
-                    for( const key of Object.keys( v ))
-                    {
-                        if( Object.hasOwn( data, key )){ continue }
-
-                        setOwnProperty( data, key, v[key]);
-                    }
-                }
-
-                if(( 'unevaluatedItems' in subSchema ) && Array.isArray( v ) && Array.isArray( data ))
-                {
-                    for( let i = 0; i < v.length; i++ )
-                    {
-                        if( Object.hasOwn( data, i )){ continue }
-
-                        setOwnProperty( data, i, v[i]);
-                    }
-                }
-
-                if( !ctx.success ){ return v }
-
-                if( shouldMutate( ctx ) && commitContainer( v, data )){ return v }
-
-                return data === undefined ? v : data;
-            }, subSchema ), subSchema );
-        }
-
-        if( subSchema.oneOf )
-        {
-            const checks = subSchema.oneOf.map(( s ) => build( s ));
-
-            return maybeWrapDynamicAnchor( finalize(( v, path, ctx ) =>
-            {
-                const matches: any[] = [];
-                const matchAnnotations: SchemaAnnotationFrame[] = [];
-                const armErrors: IValidationError[] = [];
-                const subCtx: ValidationContext =
-                {
-                    success        : true,
-                    errors         : [],
-                    mode           : ctx.mode,
-                    from           : undefined,
-                    mutate         : false,
-                    root           : ctx.root,
-                    annotations    : emptyAnnotations(),
-                    dynamicAnchors : ctx.dynamicAnchors
-                };
-
-                const runPass = ( from: ValidationContext['from']) =>
-                {
-                    matches.length = 0;
-                    matchAnnotations.length = 0;
-                    armErrors.length = 0;
-
-                    for( const check of checks )
-                    {
-                        subCtx.success = true;
-                        subCtx.errors.length = 0;
-                        subCtx.from = from;
-                        subCtx.root = ctx.root;
-                        subCtx.annotations = emptyAnnotations();
-                        subCtx.dynamicAnchors = ctx.dynamicAnchors;
-                        const val = check( v, path, subCtx );
-
-                        if( subCtx.success )
-                        {
-                            matches.push( val );
-                            matchAnnotations.push( subCtx.annotations ?? emptyAnnotations());
-                        }
-                        else
-                        {
-                            armErrors.push( ...subCtx.errors );
-                        }
-                    }
-                };
-
-                runPass( undefined );
-
-                if( matches.length === 0 && ctx.from )
-                {
-                    runPass( ctx.from );
-                }
-
-                if( matches.length === 1 )
-                {
-                    mergeAnnotations( ensureAnnotations( ctx ), matchAnnotations[0]);
-                    const val = matches[0];
-
-                    if( shouldMutate( ctx ) && commitContainer( v, val )){ return v }
-
-                    return val;
-                }
-
-                ctx.success = false;
-                ctx.errors.push({
-                    path,
-                    value  : v,
-                    error  : matches.length === 0 ? 'Type<OneOf>' : 'Type<OneOf:multiple>',
-                    issues : armErrors.length > 0 ? armErrors : undefined
-                });
-
-                return v;
-            }, subSchema ), subSchema );
-        }
-
-        if( subSchema.type === 'string' )
-        {
-            const minLength = subSchema.minLength;
-            const maxLength = subSchema.maxLength;
-            const pattern = subSchema.pattern ? createSafeRegex( subSchema.pattern ) : undefined;
-            const patternStr = subSchema.pattern;
-            const format = subSchema.format;
-            const contentEncoding = subSchema.contentEncoding;
-            const contentMediaType = subSchema.contentMediaType;
-            const contentSchemaCheck = subSchema.contentSchema !== undefined
-                ? build( subSchema.contentSchema )
-                : undefined;
-
-            return maybeWrapDynamicAnchor( finalize(( v, path, ctx ) =>
-            {
-                v = validators.string( v, path, ctx );
-
-                if( v === undefined || v === null ){ return v }
-
-                if( minLength !== undefined ){ validators.minLength( v, path, ctx, minLength ) }
-
-                if( maxLength !== undefined ){ validators.maxLength( v, path, ctx, maxLength ) }
-
-                if( pattern !== undefined && patternStr !== undefined )
-                {
-                    validators.pattern( v, path, ctx, pattern, patternStr );
-                }
-
-                if( format !== undefined ){ v = validators.format( v, path, ctx, format ) }
-
-                if( typeof v === 'string' &&
-                    ( contentEncoding !== undefined || contentMediaType !== undefined || contentSchemaCheck ))
-                {
-                    let decoded: Buffer | string = v;
-
-                    if( contentEncoding !== undefined )
-                    {
-                        const result = decodeContentEncoding( v, contentEncoding );
-
-                        if( result === undefined )
-                        {
-                            report( ctx, path, 'ContentEncoding', v );
-
-                            return v;
-                        }
-
-                        decoded = result;
-                    }
-
-                    if( contentMediaType === 'application/json' )
-                    {
-                        let parsed: any;
-
-                        try
-                        {
-                            const text = typeof decoded === 'string' ? decoded : decoded.toString( 'utf8' );
-                            parsed = JSON.parse( text );
-                        }
-                        catch
-                        {
-                            report( ctx, path, 'ContentMediaType', v );
-
-                            return v;
-                        }
-
-                        if( contentSchemaCheck )
-                        {
-                            runNested( contentSchemaCheck, parsed, path, ctx );
-                        }
-                    }
-                    else if( contentSchemaCheck )
-                    {
-                        const text = typeof decoded === 'string' ? decoded : decoded.toString( 'utf8' );
-                        runNested( contentSchemaCheck, text, path, ctx );
-                    }
-                }
-
-                return v;
-            }, subSchema ), subSchema );
-        }
-
-        if( subSchema.type === 'number' || subSchema.type === 'integer' )
-        {
-            const isInt = subSchema.type === 'integer';
-            const minimum = subSchema.minimum;
-            const maximum = subSchema.maximum;
-            const exclusiveMinimum = subSchema.exclusiveMinimum;
-            const exclusiveMaximum = subSchema.exclusiveMaximum;
-            const multipleOf = subSchema.multipleOf;
-
-            return maybeWrapDynamicAnchor( finalize(( v, path, ctx ) =>
-            {
-                v = validators.number( v, path, ctx );
-
-                if( v === undefined || v === null ){ return v }
-
-                if( isInt && typeof v === 'number' && !Number.isInteger( v ))
-                {
-                    report( ctx, path, 'Type<integer>', v );
-                }
-
-                if( typeof exclusiveMinimum === 'boolean' )
-                {
-                    if( exclusiveMinimum === true && minimum !== undefined )
-                    {
-                        validators.exclusiveMinimum( v, path, ctx, minimum );
-                    }
-                    else if( minimum !== undefined )
-                    {
-                        validators.minimum( v, path, ctx, minimum );
-                    }
-                }
-                else
-                {
-                    if( minimum !== undefined ){ validators.minimum( v, path, ctx, minimum ) }
-
-                    if( exclusiveMinimum !== undefined )
-                    {
-                        validators.exclusiveMinimum( v, path, ctx, exclusiveMinimum );
-                    }
-                }
-
-                if( typeof exclusiveMaximum === 'boolean' )
-                {
-                    if( exclusiveMaximum === true && maximum !== undefined )
-                    {
-                        validators.exclusiveMaximum( v, path, ctx, maximum );
-                    }
-                    else if( maximum !== undefined )
-                    {
-                        validators.maximum( v, path, ctx, maximum );
-                    }
-                }
-                else
-                {
-                    if( maximum !== undefined ){ validators.maximum( v, path, ctx, maximum ) }
-
-                    if( exclusiveMaximum !== undefined )
-                    {
-                        validators.exclusiveMaximum( v, path, ctx, exclusiveMaximum );
-                    }
-                }
-
-                if( multipleOf !== undefined ){ validators.multipleOf( v, path, ctx, multipleOf ) }
-
-                return v;
-            }, subSchema ), subSchema );
-        }
-
-        if( subSchema.type === 'boolean' )
-        {
-            return maybeWrapDynamicAnchor(
-                finalize(( v, path, ctx ) => validators.boolean( v, path, ctx ), subSchema ),
-                subSchema
-            );
-        }
-
-        if( subSchema.type === 'null' )
-        {
-            return maybeWrapDynamicAnchor(
-                finalize(( v, path, ctx ) => validators.null( v, path, ctx ), subSchema ),
-                subSchema
-            );
-        }
-
-        if( subSchema.anyOf )
-        {
-            const checks = subSchema.anyOf.map(( s ) => build( s ));
-
-            return maybeWrapDynamicAnchor( finalize(( v, path, ctx ) =>
-            {
-                const successes: any[] = [];
-                const successAnnotations: SchemaAnnotationFrame[] = [];
-                const unionErrors: IValidationError[] = [];
-                const subCtx: ValidationContext =
-                {
-                    success        : true,
-                    errors         : [],
-                    mode           : ctx.mode,
-                    from           : undefined,
-                    mutate         : false,
-                    root           : ctx.root,
-                    annotations    : emptyAnnotations(),
-                    dynamicAnchors : ctx.dynamicAnchors
-                };
-
-                const runPass = ( from: ValidationContext['from']) =>
-                {
-                    successes.length = 0;
-                    successAnnotations.length = 0;
-                    unionErrors.length = 0;
-
-                    for( const check of checks )
-                    {
-                        subCtx.success = true;
-                        subCtx.errors.length = 0;
-                        subCtx.from = from;
-                        subCtx.root = ctx.root;
-                        subCtx.annotations = emptyAnnotations();
-                        subCtx.dynamicAnchors = ctx.dynamicAnchors;
-                        const val = check( v, path, subCtx );
-
-                        if( subCtx.success )
-                        {
-                            successes.push( val );
-                            successAnnotations.push( subCtx.annotations ?? emptyAnnotations());
-                        }
-                        else
-                        {
-                            unionErrors.push( ...subCtx.errors );
-                        }
-                    }
-                };
-
-                runPass( undefined );
-
-                if( successes.length === 0 && ctx.from )
-                {
-                    runPass( ctx.from );
-                }
-
-                if( successes.length > 0 )
-                {
-                    for( const ann of successAnnotations )
-                    {
-                        mergeAnnotations( ensureAnnotations( ctx ), ann );
-                    }
-
-                    const val = successes[0];
-
-                    if( shouldMutate( ctx ) && commitContainer( v, val )){ return v }
-
-                    return val;
-                }
-
-                ctx.success = false;
-                ctx.errors.push({
-                    path,
-                    value  : v,
-                    error  : 'Type<Union>',
-                    issues : unionErrors.length > 0 ? unionErrors : undefined
-                });
-
-                return v;
-            }, subSchema ), subSchema );
-        }
-
-        if( subSchema.type === 'array' )
-        {
-            const draft7Tuple = !!( !subSchema.prefixItems && Array.isArray( subSchema.items ));
-            const prefixSchemas = subSchema.prefixItems
-                ?? ( draft7Tuple ? subSchema.items as ( JsonSchema | boolean )[] : undefined );
-            const prefixChecks = prefixSchemas ? prefixSchemas.map(( s ) => build( s )) : undefined;
-
-            // Draft-07 tuple uses `additionalItems` (default true). Draft 2020-12 uses `items`
-            // after `prefixItems`; omitting it leaves trailing items unevaluated.
-            let restSchema: boolean | JsonSchema | undefined;
-            let restAllowsWithoutEvaluating = false;
-
-            if( draft7Tuple )
-            {
-                restSchema = 'additionalItems' in subSchema ? subSchema.additionalItems : true;
-            }
-            else if( 'prefixItems' in subSchema )
-            {
-                if( 'items' in subSchema && subSchema.items !== undefined )
-                {
-                    restSchema = subSchema.items as boolean | JsonSchema | undefined;
-                }
-                else
-                {
-                    restAllowsWithoutEvaluating = true;
-                    restSchema = undefined;
-                }
-            }
-            else
-            {
-                restSchema = subSchema.items as boolean | JsonSchema | undefined;
-            }
-
-            const restCheck = restSchema !== undefined && restSchema !== true && restSchema !== false
-                ? build( restSchema )
-                : undefined;
-            const rejectAllItems = !prefixChecks && restSchema === false;
-            // When there is no prefix, `restAllowsWithoutEvaluating` is unreachable (it only
-            // applies after `prefixItems`), so plain `items`-less arrays allow every element.
-            const allowAllItems = !prefixChecks && ( restSchema === true ||
-                ( restSchema === undefined &&
-                    !( 'unevaluatedItems' in subSchema ) &&
-                    !( 'contains' in subSchema )));
-            const minItems = subSchema.minItems;
-            const maxItems = subSchema.maxItems;
-            const uniqueItems = subSchema.uniqueItems;
-            const containsCheck = 'contains' in subSchema ? build( subSchema.contains ) : undefined;
-            const minContains = subSchema.minContains ?? ( containsCheck ? 1 : undefined );
-            const maxContains = subSchema.maxContains;
-
-            return maybeWrapDynamicAnchor( finalize(( v, path, ctx ) =>
-            {
-                if( !Array.isArray( v ))
-                {
-                    v = validators.array( v, path, ctx, ( x: any ) => x );
-
-                    if( !Array.isArray( v )){ return v }
-                }
-
-                const data = shouldMutate( ctx ) ? v : v.slice();
-
-                if( prefixChecks )
-                {
-                    for( let i = 0; i < prefixChecks.length; i++ )
-                    {
-                        if( i >= v.length ){ break }
-
-                        setOwnProperty(
-                            data,
-                            i,
-                            runNested( prefixChecks[i], v[i], indexPath( path, i ), ctx )
-                        );
-                        markItem( ctx, i );
-                    }
-
-                    for( let i = prefixChecks.length; i < v.length; i++ )
-                    {
-                        if( restSchema === false )
-                        {
-                            report( ctx, path, `AdditionalItem<${i}>`, v[i]);
-                            markItem( ctx, i );
-                        }
-                        else if( restCheck )
-                        {
-                            setOwnProperty(
-                                data,
-                                i,
-                                runNested( restCheck, v[i], indexPath( path, i ), ctx )
-                            );
-                            markItem( ctx, i );
-                        }
-                        else if( restAllowsWithoutEvaluating )
-                        {
-                            setOwnProperty( data, i, v[i]);
-                        }
-                        else
-                        {
-                            setOwnProperty( data, i, v[i]);
-                            markItem( ctx, i );
-                        }
-                    }
-                }
-                else if( rejectAllItems )
-                {
-                    for( let i = 0; i < v.length; i++ )
-                    {
-                        report( ctx, path, `AdditionalItem<${i}>`, v[i]);
-                        markItem( ctx, i );
-                    }
-                }
-                else if( restCheck )
-                {
-                    for( let i = 0; i < v.length; i++ )
-                    {
-                        setOwnProperty(
-                            data,
-                            i,
-                            runNested( restCheck, v[i], indexPath( path, i ), ctx )
-                        );
-                    }
-
-                    markAllItems( ctx );
-                }
-                else if( allowAllItems )
-                {
-                    for( let i = 0; i < v.length; i++ )
-                    {
-                        setOwnProperty( data, i, v[i]);
-                    }
-
-                    if( restSchema === true ){ markAllItems( ctx ) }
-                    else
-                    {
-                        for( let i = 0; i < v.length; i++ ){ markItem( ctx, i ) }
-                    }
-                }
-                else
-                {
-                    for( let i = 0; i < v.length; i++ )
-                    {
-                        setOwnProperty( data, i, v[i]);
-                    }
-                }
-
-                if( minItems !== undefined ){ validators.minItems( data, path, ctx, minItems ) }
-
-                if( maxItems !== undefined ){ validators.maxItems( data, path, ctx, maxItems ) }
-
-                if( uniqueItems ){ validators.uniqueItems( data, path, ctx ) }
-
-                if( containsCheck )
-                {
-                    let count = 0;
-
-                    for( let i = 0; i < v.length; i++ )
-                    {
-                        const probe: ValidationContext =
-                        {
-                            success        : true,
-                            errors         : [],
-                            mode           : ctx.mode,
-                            from           : ctx.from,
-                            mutate         : false,
-                            root           : ctx.root,
-                            dynamicAnchors : ctx.dynamicAnchors
-                        };
-                        containsCheck( v[i], indexPath( path, i ), probe );
-
-                        if( probe.success )
-                        {
-                            count++;
-                            markItem( ctx, i );
-                        }
-                    }
-
-                    if( minContains !== undefined && count < minContains )
-                    {
-                        report( ctx, path, `Contains<min:${minContains}>`, v );
-                    }
-
-                    if( maxContains !== undefined && count > maxContains )
-                    {
-                        report( ctx, path, `Contains<max:${maxContains}>`, v );
-                    }
-                }
-
-                return data;
-            }, subSchema ), subSchema );
-        }
-
-        if( subSchema.type === 'object' )
-        {
-            const properties = subSchema.properties || {};
-            const required = subSchema.required || [];
-            const propVals: [string, boolean, SchemaValidator][] = Object.entries( properties ).map(([ key, s ]) =>
-            {
-                const isOptional = !required.includes( key );
-                const inner = build( s );
-                const check: SchemaValidator = ( val, p, c ) => runNested( inner, val, p, c );
-
-                return [ key, isOptional, check ];
-            });
-
-            for( const key of required )
-            {
-                if( Object.hasOwn( properties, key )){ continue }
-
-                propVals.push([
-                    key,
-                    false,
-                    ( val, path, ctx ) =>
-                    {
-                        if( val === undefined )
-                        {
-                            report( ctx, path, `Required<${key}>`, val );
-                        }
-
-                        return val;
-                    }
-                ]);
-            }
-
-            const patternEntries = Object.entries( subSchema.patternProperties || {}).map(([ pattern, schema ]) =>
-                ({
-                    regex : createSafeRegex( pattern ),
-                    check : build( schema )
-                }));
-            const propertyNamesCheck = 'propertyNames' in subSchema
-                ? build( subSchema.propertyNames )
-                : undefined;
-            const hasUnevaluatedProps = 'unevaluatedProperties' in subSchema;
-            // Omit `additionalProperties` when only `unevaluatedProperties` is present (or when the
-            // object was inferred from a typeless schema) so unknown keys stay unevaluated.
-            // Explicit `type: 'object'` still defaults to closed otherwise.
-            const additional = 'additionalProperties' in subSchema
-                ? subSchema.additionalProperties
-                : ( hasUnevaluatedProps || typelessInferredObjects.has( subSchema ) ? undefined : false );
-            const additionalCheck = additional && typeof additional === 'object' ? build( additional ) : undefined;
-            // Synthetic allOf opens allow extras without evaluating them for unevaluated*.
-            const allowWithoutEvaluating = additional === true && allofOpenedRoots.has( subSchema );
-            const propertyKeys = Object.keys( properties );
-            const knownPropKeys = new Set<string>([ ...propertyKeys, ...required ]);
-            const canUseStrictKeys = additional === false &&
-                patternEntries.length === 0 &&
-                !hasUnevaluatedProps;
-            const closedShape = additional === false ||
-                !!additionalCheck ||
-                patternEntries.length > 0 ||
-                hasUnevaluatedProps;
-            const minProperties = subSchema.minProperties;
-            const maxProperties = subSchema.maxProperties;
-            const dependentRequired = subSchema.dependentRequired || {};
-            const dependentRequiredEntries = Object.entries( dependentRequired );
-            const dependentSchemas = Object.entries( subSchema.dependentSchemas || {}).map(([ key, schema ]) =>
-                ({ key, check : build( openAllOfMemberRoot( schema ))}));
-            const dependencies = Object.entries( subSchema.dependencies || {}).map(([ key, dep ]) =>
-            {
-                if( Array.isArray( dep ))
-                {
-                    return { key, required : dep as string[], check : undefined as SchemaValidator | undefined };
-                }
-
-                return { key, required : undefined as string[] | undefined, check : build( openAllOfMemberRoot( dep )) };
-            });
-
-            return maybeWrapDynamicAnchor( finalize(( v, path, ctx ) =>
-            {
-                const obj = validators.object(
-                    v,
-                    path,
-                    ctx,
-                    canUseStrictKeys ? knownPropKeys : undefined,
-                    'Object'
-                );
-
-                if( obj === false ){ return v }
-
-                const data = validators.objectShell( obj, ctx, closedShape );
-
-                if( propertyNamesCheck )
-                {
-                    for( const key of Object.keys( obj ))
-                    {
-                        runNested( propertyNamesCheck, key, childPath( path, key ), ctx );
-                    }
-                }
-
-                validators.props( obj, data, path, ctx, propVals );
-
-                if( canUseStrictKeys )
-                {
-                    if( ctx.annotations )
-                    {
-                        for( const key of propertyKeys )
-                        {
-                            if( Object.hasOwn( obj, key )){ markProperty( ctx, key ) }
-                        }
-                    }
-
-                    validators.stripExtras( data, ctx, knownPropKeys );
-                }
-                else
-                {
-                    const evaluated = new Set<string>();
-                    const objKeys = Object.keys( obj );
-
-                    for( const key of propertyKeys )
-                    {
-                        if( !Object.hasOwn( obj, key )){ continue }
-
-                        evaluated.add( key );
-                        markProperty( ctx, key );
-                    }
-
-                    for( const key of objKeys )
-                    {
-                        for( const entry of patternEntries )
-                        {
-                            if( !testRegex( entry.regex, key )){ continue }
-
-                            evaluated.add( key );
-                            markProperty( ctx, key );
-                            setOwnProperty(
-                                data,
-                                key,
-                                runNested( entry.check, obj[key], childPath( path, key ), ctx )
-                            );
-                        }
-                    }
-
-                    const forAdditional = objKeys.filter( key => !evaluated.has( key ));
-
-                    if( additionalCheck )
-                    {
-                        for( const key of forAdditional )
-                        {
-                            evaluated.add( key );
-                            markProperty( ctx, key );
-                            setOwnProperty(
-                                data,
-                                key,
-                                runNested( additionalCheck, obj[key], childPath( path, key ), ctx )
-                            );
-                        }
-                    }
-                    else if( additional === true )
-                    {
-                        for( const key of forAdditional )
-                        {
-                            setOwnProperty( data, key, obj[key]);
-
-                            if( allowWithoutEvaluating ){ continue }
-
-                            evaluated.add( key );
-                            markProperty( ctx, key );
-                        }
-                    }
-                    else if( additional === false )
-                    {
-                        for( const key of forAdditional )
-                        {
-                            if( ctx.mode === 'strict' )
-                            {
-                                report( ctx, path, `PropertyNotAllowed<${key}>`, obj[key]);
-                            }
-                            else if( ctx.mode === 'strip' )
-                            {
-                                delete data[key];
-                            }
-                            else
-                            {
-                                setOwnProperty( data, key, obj[key]);
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // `additionalProperties` absent (typically with `unevaluatedProperties`): keep
-                        // values on the shell but leave them unevaluated.
-                        for( const key of forAdditional )
-                        {
-                            setOwnProperty( data, key, obj[key]);
-                        }
-                    }
-                }
-
-                if( minProperties !== undefined ){ validators.minProperties( data, path, ctx, minProperties ) }
-
-                if( maxProperties !== undefined ){ validators.maxProperties( data, path, ctx, maxProperties ) }
-
-                for( const [ key, deps ] of dependentRequiredEntries )
-                {
-                    if( !Object.hasOwn( obj, key )){ continue }
-
-                    for( const dep of deps )
-                    {
-                        if( !Object.hasOwn( obj, dep ))
-                        {
-                            report( ctx, childPath( path, dep ), `Required<${dep}>`, undefined );
-                        }
-                    }
-                }
-
-                for( const entry of dependentSchemas )
-                {
-                    if( !Object.hasOwn( obj, entry.key )){ continue }
-
-                    const next = runInPlace( entry.check, obj, path, ctx );
-
-                    if( isPlainObject( next ) && isPlainObject( data ))
-                    {
-                        assignOwnProperties( data, next );
-                    }
-                }
-
-                for( const entry of dependencies )
-                {
-                    if( !Object.hasOwn( obj, entry.key )){ continue }
-
-                    if( entry.required )
-                    {
-                        for( const dep of entry.required )
-                        {
-                            if( !Object.hasOwn( obj, dep ))
-                            {
-                                report( ctx, childPath( path, dep ), `Required<${dep}>`, undefined );
-                            }
-                        }
-                    }
-                    else if( entry.check )
-                    {
-                        const next = runInPlace( entry.check, obj, path, ctx );
-
-                        if( isPlainObject( next ) && isPlainObject( data ))
-                        {
-                            assignOwnProperties( data, next );
-                        }
-                    }
-                }
-
-                return data;
-            }, subSchema ), subSchema );
-        }
-
-        // Typeless schemas: JSON Schema applies type-specific keywords only when the instance
-        // already has that type. Explicit `type: 'object'` still defaults additionalProperties to
-        // false (TS closed shapes); inferred object schemas default to true.
-        if( subSchema.type === undefined )
-        {
-            const hasStringKeywords = subSchema.minLength !== undefined ||
-                subSchema.maxLength !== undefined ||
-                subSchema.pattern !== undefined ||
-                subSchema.format !== undefined ||
-                subSchema.contentEncoding !== undefined ||
-                subSchema.contentMediaType !== undefined ||
-                subSchema.contentSchema !== undefined;
-            const hasNumberKeywords = subSchema.minimum !== undefined ||
-                subSchema.maximum !== undefined ||
-                subSchema.exclusiveMinimum !== undefined ||
-                subSchema.exclusiveMaximum !== undefined ||
-                subSchema.multipleOf !== undefined;
-            const hasArrayKeywords = subSchema.items !== undefined ||
-                subSchema.prefixItems !== undefined ||
-                'additionalItems' in subSchema ||
-                subSchema.minItems !== undefined ||
-                subSchema.maxItems !== undefined ||
-                subSchema.uniqueItems === true ||
-                'contains' in subSchema ||
-                subSchema.minContains !== undefined ||
-                subSchema.maxContains !== undefined ||
-                'unevaluatedItems' in subSchema;
-            const hasObjectKeywords = subSchema.properties !== undefined ||
-                subSchema.patternProperties !== undefined ||
-                'propertyNames' in subSchema ||
-                subSchema.required !== undefined ||
-                'additionalProperties' in subSchema ||
-                'unevaluatedProperties' in subSchema ||
-                subSchema.dependencies !== undefined ||
-                subSchema.dependentRequired !== undefined ||
-                subSchema.dependentSchemas !== undefined ||
-                subSchema.minProperties !== undefined ||
-                subSchema.maxProperties !== undefined;
-
-            if( hasStringKeywords || hasNumberKeywords || hasArrayKeywords || hasObjectKeywords )
-            {
-                const stringCheck = hasStringKeywords
-                    ? build({
-                        type             : 'string',
-                        minLength        : subSchema.minLength,
-                        maxLength        : subSchema.maxLength,
-                        pattern          : subSchema.pattern,
-                        format           : subSchema.format,
-                        contentEncoding  : subSchema.contentEncoding,
-                        contentMediaType : subSchema.contentMediaType,
-                        contentSchema    : subSchema.contentSchema
-                    })
-                    : undefined;
-                const numberCheck = hasNumberKeywords
-                    ? build({
-                        type             : 'number',
-                        minimum          : subSchema.minimum,
-                        maximum          : subSchema.maximum,
-                        exclusiveMinimum : subSchema.exclusiveMinimum,
-                        exclusiveMaximum : subSchema.exclusiveMaximum,
-                        multipleOf       : subSchema.multipleOf
-                    })
-                    : undefined;
-                const arrayCheck = hasArrayKeywords
-                    ? build({
-                        type : 'array',
-                        ...( subSchema.items !== undefined ? { items : subSchema.items } : {}),
-                        ...( subSchema.prefixItems !== undefined
-                            ? { prefixItems : subSchema.prefixItems }
-                            : {}),
-                        ...( 'additionalItems' in subSchema
-                            ? { additionalItems : subSchema.additionalItems }
-                            : {}),
-                        ...( subSchema.minItems !== undefined ? { minItems : subSchema.minItems } : {}),
-                        ...( subSchema.maxItems !== undefined ? { maxItems : subSchema.maxItems } : {}),
-                        ...( subSchema.uniqueItems === true ? { uniqueItems : true } : {}),
-                        ...( 'contains' in subSchema ? { contains : subSchema.contains } : {}),
-                        ...( subSchema.minContains !== undefined
-                            ? { minContains : subSchema.minContains }
-                            : {}),
-                        ...( subSchema.maxContains !== undefined
-                            ? { maxContains : subSchema.maxContains }
-                            : {}),
-                        ...( 'unevaluatedItems' in subSchema
-                            ? { unevaluatedItems : subSchema.unevaluatedItems }
-                            : {})
-                    })
-                    : undefined;
-                const objectCheck = hasObjectKeywords
-                    ? build((() =>
-                    {
-                        const inferred: JsonSchemaObject =
-                        {
-                            type : 'object',
-                            ...( subSchema.properties !== undefined
-                                ? { properties : subSchema.properties }
-                                : {}),
-                            ...( subSchema.patternProperties !== undefined
-                                ? { patternProperties : subSchema.patternProperties }
-                                : {}),
-                            ...( 'propertyNames' in subSchema
-                                ? { propertyNames : subSchema.propertyNames }
-                                : {}),
-                            ...( subSchema.required !== undefined ? { required : subSchema.required } : {}),
-                            ...( 'additionalProperties' in subSchema
-                                ? { additionalProperties : subSchema.additionalProperties }
-                                : {}),
-                            ...( 'unevaluatedProperties' in subSchema
-                                ? { unevaluatedProperties : subSchema.unevaluatedProperties }
-                                : {}),
-                            ...( subSchema.dependencies !== undefined
-                                ? { dependencies : subSchema.dependencies }
-                                : {}),
-                            ...( subSchema.dependentRequired !== undefined
-                                ? { dependentRequired : subSchema.dependentRequired }
-                                : {}),
-                            ...( subSchema.dependentSchemas !== undefined
-                                ? { dependentSchemas : subSchema.dependentSchemas }
-                                : {}),
-                            ...( subSchema.minProperties !== undefined
-                                ? { minProperties : subSchema.minProperties }
-                                : {}),
-                            ...( subSchema.maxProperties !== undefined
-                                ? { maxProperties : subSchema.maxProperties }
-                                : {})
-                        };
-
-                        if( !( 'additionalProperties' in subSchema ))
-                        {
-                            typelessInferredObjects.add( inferred );
-                        }
-
-                        return inferred;
-                    })())
-                    : undefined;
-
-                return maybeWrapDynamicAnchor( finalize(( v, path, ctx ) =>
-                {
-                    if( typeof v === 'string' && stringCheck ){ return stringCheck( v, path, ctx ) }
-
-                    if( typeof v === 'number' && numberCheck ){ return numberCheck( v, path, ctx ) }
-
-                    if( Array.isArray( v ) && arrayCheck ){ return arrayCheck( v, path, ctx ) }
-
-                    if( isPlainObject( v ) && objectCheck ){ return objectCheck( v, path, ctx ) }
-
-                    return v;
-                }, subSchema ), subSchema );
-            }
-        }
-
-        return maybeWrapDynamicAnchor( finalize(( v ) => v, subSchema ), subSchema );
-    }
-
-    const compiled = build( schema );
-
-    Object.defineProperty( compiled, '~standard', {
-        value : {
-            version : 1,
-            vendor  : 'webergency-typechecker',
-            validate( value: unknown ): StandardSchemaV1.Result<unknown>
-            {
-                const res = validate( compiled, value );
-
-                if( res.success )
-                {
-                    return { value : res.data };
-                }
-
-                return { issues : toStandardSchemaIssues( res.errors ) };
-            }
-        },
-        writable     : true,
-        configurable : true,
-        enumerable   : false
-    });
-
-    return compiled;
-}
+export { compileSchema, getOrCompileSchema } from './schema-compiler.js';
 
 /**
  * Array indices become numbers, the way Zod reports them. Every other segment stays a string, so an
@@ -4625,10 +2950,10 @@ export function toStandardSchemaIssues( errors: IValidationError[]): StandardSch
     return issues;
 }
 
-export function createStandardSchema<T = unknown>(
+export function createStandardSchema<T = unknown, Input = T>(
     validator : Function,
     options?  : ValidationMode | ValidationOptions
-): StandardSchemaV1<unknown, T>
+): StandardSchemaV1<Input, T>
 {
     return {
         '~standard' : {
@@ -4636,11 +2961,11 @@ export function createStandardSchema<T = unknown>(
             vendor  : 'webergency-typechecker',
             validate( value: unknown ): StandardSchemaV1.Result<T>
             {
-                const res = validate( validator, value, options );
+                const res = validate<T>( validator, value, options );
 
                 if( res.success )
                 {
-                    return { value : res.data as T };
+                    return { value : res.data };
                 }
 
                 return { issues : toStandardSchemaIssues( res.errors ) };
@@ -4648,5 +2973,57 @@ export function createStandardSchema<T = unknown>(
         }
     };
 }
+
+export interface CompiledValidator<T = unknown, Input = T> extends StandardSchemaV1<Input, T>
+{
+    ( input: unknown, options?: ValidationMode | ValidationOptions ) : IValidation<T>
+    validate    : ( input: unknown, options?: ValidationMode | ValidationOptions ) => IValidation<T>
+    is          : ( input: unknown, options?: ValidationMode | GuardOptions ) => input is T
+    assert      : ( input: unknown, options?: ValidationMode | AssertOptions ) => T
+    assertGuard : ( input: unknown, options?: ValidationMode | AssertGuardOptions ) => void
+}
+
+function mergeValidationOptions<O extends GuardOptions>(
+    defaults? : ValidationMode | O,
+    override? : ValidationMode | O
+): ValidationMode | O | undefined
+{
+    if( override === undefined ){ return defaults }
+
+    if( defaults === undefined ){ return override }
+
+    const baseObj = typeof defaults === 'string' ? { mode : defaults } : defaults;
+    const overObj = typeof override === 'string' ? { mode : override } : override;
+
+    return { ...baseObj, ...overObj } as O;
+}
+
+export function createValidator<T = unknown, Input = T>(
+    validator : Function,
+    options?  : ValidationMode | ValidationOptions
+): CompiledValidator<T, Input>
+{
+    const fn = (( input: unknown, overrideOptions?: ValidationMode | ValidationOptions ): IValidation<T> =>
+        validate<T>( validator, input, mergeValidationOptions( options, overrideOptions ))
+    ) as CompiledValidator<T, Input>;
+
+    fn.validate = fn;
+    fn.is = ( input: unknown, overrideOptions?: ValidationMode | GuardOptions ): input is T =>
+        is( validator, input, mergeValidationOptions( options, overrideOptions ));
+    fn.assert = ( input: unknown, overrideOptions?: ValidationMode | AssertOptions ): T =>
+        assert( validator, input, mergeValidationOptions( options as AssertOptions | ValidationMode | undefined, overrideOptions ));
+    fn.assertGuard = ( input: unknown, overrideOptions?: ValidationMode | AssertGuardOptions ): void =>
+        assertGuard( validator, input, mergeValidationOptions( options as AssertGuardOptions | ValidationMode | undefined, overrideOptions ));
+
+    Object.defineProperty( fn, '~standard', {
+        value        : createStandardSchema<T, Input>( validator, options )['~standard'],
+        writable     : true,
+        configurable : true,
+        enumerable   : false
+    });
+
+    return fn;
+}
+
 
 

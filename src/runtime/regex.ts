@@ -1,11 +1,33 @@
 const regexSafetyCache = new WeakMap<RegExp, boolean>();
 const compiledPatternCache = new Map<string, RegExp>();
+const MAX_PATTERN_CACHE_SIZE = 1024;
+
+function isDisjointLiteralAlternation( inner: string ): boolean
+{
+    if( /[.*+?^${}()[\]\\]/.test( inner )){ return false }
+
+    const branches = inner.split( '|' );
+    const seenFirst = new Set<string>();
+
+    for( const b of branches )
+    {
+        if( b.length === 0 ){ return false }
+
+        const first = b[0];
+
+        if( seenFirst.has( first )){ return false }
+
+        seenFirst.add( first );
+    }
+
+    return true;
+}
 
 export function isSafeRegexSource( source: string ): boolean
 {
     if( source.length > 1024 || /\\[1-9]/.test( source )){ return false }
 
-    const groups: { hasRepeat : boolean, hasAlternation : boolean }[] = [];
+    const groups: { hasRepeat : boolean, hasAlternation : boolean, start : number }[] = [];
     let inClass = false;
     let escaped = false;
 
@@ -41,7 +63,8 @@ export function isSafeRegexSource( source: string ): boolean
 
         if( ch === '(' )
         {
-            groups.push({ hasRepeat : false, hasAlternation : false });
+            const bodyStart = source.startsWith( '?:', i + 1 ) ? i + 3 : i + 1;
+            groups.push({ hasRepeat : false, hasAlternation : false, start : bodyStart });
             continue;
         }
 
@@ -63,9 +86,17 @@ export function isSafeRegexSource( source: string ): boolean
             const next = source[i + 1];
             const isRepeated = next === '*' || next === '+' || next === '{';
 
-            if( isRepeated && ( group.hasRepeat || group.hasAlternation )){ return false }
+            if( isRepeated )
+            {
+                if( group.hasRepeat ){ return false }
 
-            if( isRepeated && groups.length > 0 ){ groups[groups.length - 1].hasRepeat = true }
+                if( group.hasAlternation && !isDisjointLiteralAlternation( source.slice( group.start, i )))
+                {
+                    return false;
+                }
+
+                if( groups.length > 0 ){ groups[groups.length - 1].hasRepeat = true }
+            }
         }
     }
 
@@ -105,6 +136,13 @@ export function getCachedPattern( source: string ): RegExp | undefined
 
     const regex = new RegExp( source );
     regexSafetyCache.set( regex, true );
+
+    if( compiledPatternCache.size >= MAX_PATTERN_CACHE_SIZE )
+    {
+        const oldest = compiledPatternCache.keys().next().value!;
+        compiledPatternCache.delete( oldest );
+    }
+
     compiledPatternCache.set( source, regex );
 
     return regex;

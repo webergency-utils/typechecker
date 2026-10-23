@@ -111,29 +111,28 @@ export type FormatCasing<S extends string, Casing extends CasingFormat, Options 
         ? FormatCoreCasing<StripLeading<StripTrailing<S>>, Casing>
         : `${Leading<S>}${FormatCoreCasing<StripLeading<StripTrailing<S>>, Casing>}${Trailing<S>}`;
 
-type ExtractArray<T> = T extends any[] ? T : never;
-
 type NonConvertibleType = 
     | Date 
+    | URL
     | RegExp 
     | Function 
-    | Map<any, any> 
-    | Set<any> 
+    | ReadonlyMap<any, any> 
+    | ReadonlySet<any> 
     | Promise<any>
     | Uint8Array
     | ArrayBuffer
+    | SharedArrayBuffer
     | ArrayBufferView;
 
 export type ConvertPropertyCasing<T, Casing extends CasingFormat, Options extends ConvertCasingOptions = Record<never, never>> = 
-    T extends [infer F, ...infer R] ? [ConvertPropertyCasing<F, Casing, Options>, ...ExtractArray<ConvertPropertyCasing<R, Casing, Options>>] :
-        T extends ( infer E )[] ? ConvertPropertyCasing<E, Casing, Options>[] :
-            T extends string | number | boolean | symbol | bigint | null | undefined ? T :
-                T extends NonConvertibleType ? T :
-                    T extends object ? 
-                        {
-                            [K in keyof T as K extends string ? FormatCasing<K, Casing, Options> : K]: ConvertPropertyCasing<T[K], Casing, Options>
-                        } 
-                        : T;
+    T extends readonly unknown[] ? { [K in keyof T]: ConvertPropertyCasing<T[K], Casing, Options> } :
+        T extends string | number | boolean | symbol | bigint | null | undefined ? T :
+            T extends NonConvertibleType ? T :
+                T extends object ? 
+                    {
+                        [K in keyof T as K extends string ? FormatCasing<K, Casing, Options> : K]: ConvertPropertyCasing<T[K], Casing, Options>
+                    } 
+                    : T;
 
 function normalizeString( str: string ): string
 {
@@ -148,24 +147,26 @@ function normalizeString( str: string ): string
     return str.replace( /_+/g, '_' ).replace( /^_|_$/g, '' );
 }
 
+const casingCache = new Map<string, string>();
+
 function formatCasing( str: string, casing: CasingFormat, options: ConvertCasingOptions = {}): string
 {
     const preserveEnds = options.preserveEnds !== false;
-    
+    const cacheKey = `${casing}:${preserveEnds ? 1 : 0}:${str}`;
+    const cached = casingCache.get( cacheKey );
+
+    if( cached !== undefined ){ return cached }
+
     let leading = '';
     let trailing = '';
-    let core = str;
+    let core: string;
 
     if( preserveEnds )
     {
-        const match = str.match( /^([_\-.$]*)(.*?)([_\-.$]*)$/ );
-
-        if( match )
-        {
-            leading = match[ 1 ];
-            core = match[ 2 ];
-            trailing = match[ 3 ];
-        }
+        const match = /^([_\-.$]*)([\s\S]*?)([_\-.$]*)$/.exec( str )!;
+        leading = match[ 1 ];
+        core = match[ 2 ];
+        trailing = match[ 3 ];
     }
     else 
     {
@@ -195,7 +196,11 @@ function formatCasing( str: string, casing: CasingFormat, options: ConvertCasing
         }
     }
 
-    return preserveEnds ? `${leading}${formatted}${trailing}` : formatted;
+    const out = preserveEnds ? `${leading}${formatted}${trailing}` : formatted;
+
+    if( casingCache.size < 2048 ){ casingCache.set( cacheKey, out ) }
+
+    return out;
 }
 
 export function convertPropertyCasing<T, C extends CasingFormat>
@@ -207,7 +212,7 @@ export function convertPropertyCasing<T, C extends CasingFormat>
 {
     if( !obj || typeof obj !== 'object' ){ return obj as any }
 
-    if( obj instanceof Date || obj instanceof RegExp || obj instanceof Map || obj instanceof Set || typeof obj === 'function' ){ return obj as any }
+    if( obj instanceof Date || obj instanceof URL || obj instanceof RegExp || obj instanceof Map || obj instanceof Set || typeof obj === 'function' ){ return obj as any }
 
     if( typeof Buffer !== 'undefined' && typeof Buffer.isBuffer === 'function' && Buffer.isBuffer( obj )){ return obj as any }
 
@@ -221,8 +226,9 @@ export function convertPropertyCasing<T, C extends CasingFormat>
     const result: any = {};
     const sourceKeys = new Map<string, string>();
 
-    for( const [ key, value ] of Object.entries( obj ))
+    for( const key of Object.keys( obj ))
     {
+        const value = ( obj as any )[key];
         const newKey = formatCasing( key, casing, options );
         const previousKey = sourceKeys.get( newKey );
 

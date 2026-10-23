@@ -1,4 +1,5 @@
 export * from './validators.js';
+export * from './schema-compiler.js';
 export * from './serializer-runtime.js';
 export * from './parse-runtime.js';
 export

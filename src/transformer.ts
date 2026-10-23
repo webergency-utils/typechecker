@@ -3,11 +3,12 @@ import { buildValidator, generateHash, buildJsonSchema, objectToAst } from './en
 export { buildValidator, generateHash, buildJsonSchema } from './engine/resolver.js';
 import { hoistEmitLocals, resolveEmitNames } from './engine/hoister.js';
 import { createCustomFunctionScope, type ICustomFunctionScope } from './engine/customFns.js';
-import { installStaticConstraintDiagnostics } from './engine/staticAsserts.js';
+import { installStaticConstraintDiagnostics, unwrapExpression, isTypecheckerImport } from './engine/staticAsserts.js';
+export { collectStaticConstraintDiagnostics } from './engine/staticAsserts.js';
 import { generateSerializerCode, SerializerGeneratorOptions, SerializeFormat } from './engine/serializer-generator.js';
 import { generateParseCode, ParseGeneratorOptions, ParseSource } from './engine/parse-generator.js';
 import { templateToAst } from './engine/generators.js';
-import { ValidationMode, UnionResolution } from './runtime/validators.js';
+import { ValidationMode, UnionResolution, JsonSchemaTarget, JsonSchemaOptions } from './runtime/validators.js';
 import { VERBATIM_CUSTOM_SCOPE } from './engine/type-helpers.js';
 
 export function buildSerializer(
@@ -69,7 +70,7 @@ export function buildParser(
     return ts.factory.createIdentifier( `__parse_${resolvedHash}` );
 }
 
-const TYPE_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate', 'jsonSchema', 'serializer', 'stringify', 'parse', 'standardSchema'];
+const TYPE_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate', 'validator', 'jsonSchema', 'serializer', 'stringify', 'safeSerialize', 'parse', 'parser', 'safeParse', 'standardSchema'];
 const VALIDATION_FUNCTIONS = ['is', 'assert', 'assertGuard', 'validate'];
 
 function runtimeCall( runtimeNs: string, method: string, args: ts.Expression[]): ts.CallExpression
@@ -105,6 +106,44 @@ function getPropName( prop: ts.ObjectLiteralElementLike ): string | undefined
     return undefined;
 }
 
+function resolveOptionsObjectLiteral(
+    optsArg : ts.Expression | undefined,
+    checker : ts.TypeChecker
+): ts.ObjectLiteralExpression | undefined
+{
+    if( !optsArg ){ return undefined }
+
+    const unwrapped = unwrapExpression( optsArg );
+
+    if( ts.isObjectLiteralExpression( unwrapped )){ return unwrapped }
+
+    if( ts.isIdentifier( unwrapped ))
+    {
+        try
+        {
+            let sym = checker.getSymbolAtLocation( unwrapped );
+
+            if( sym && ( sym.flags & ts.SymbolFlags.Alias ))
+            {
+                sym = checker.getAliasedSymbol( sym );
+            }
+
+            const decl = sym?.valueDeclaration || sym?.declarations?.[0];
+
+            if( decl && ts.isVariableDeclaration( decl ) && decl.initializer )
+            {
+                const init = unwrapExpression( decl.initializer );
+
+                if( ts.isObjectLiteralExpression( init )){ return init }
+            }
+        }
+        catch
+        { /* ignore */ }
+    }
+
+    return undefined;
+}
+
 function extractStringValue(
     exprOrProp : ts.Expression | ts.ObjectLiteralElementLike | undefined,
     checker?   : ts.TypeChecker
@@ -117,8 +156,9 @@ function extractStringValue(
     if( ts.isPropertyAssignment( exprOrProp as ts.ObjectLiteralElementLike ))
     {
         const pa = exprOrProp as ts.PropertyAssignment;
+        const init = unwrapExpression( pa.initializer );
 
-        if( ts.isStringLiteral( pa.initializer )){ return pa.initializer.text }
+        if( ts.isStringLiteral( init )){ return init.text }
 
         if( checker )
         {
@@ -152,32 +192,39 @@ function extractStringValue(
             { /* ignore */ }
         }
     }
-    else if( checker && ts.isExpression( exprOrProp as ts.Node ))
+    else if( ts.isExpression( exprOrProp as ts.Node ))
     {
-        try
-        {
-            const t = checker.getTypeAtLocation( exprOrProp as ts.Expression );
+        const unwrapped = unwrapExpression( exprOrProp as ts.Expression );
 
-            if( t && typeof t.isStringLiteral === 'function' && t.isStringLiteral())
+        if( ts.isStringLiteral( unwrapped )){ return unwrapped.text }
+
+        if( checker )
+        {
+            try
             {
-                return t.value;
+                const t = checker.getTypeAtLocation( exprOrProp as ts.Expression );
+
+                if( t && typeof t.isStringLiteral === 'function' && t.isStringLiteral())
+                {
+                    return t.value;
+                }
             }
+            catch
+            { /* ignore */ }
         }
-        catch
-        { /* ignore */ }
     }
 
     return undefined;
 }
 
-function parseUnionResolution(
-    optsArg : ts.Expression | undefined,
+function extractUnionResolution(
+    objLit  : ts.ObjectLiteralExpression | undefined,
     checker : ts.TypeChecker
 ): UnionResolution
 {
-    if( optsArg && ts.isObjectLiteralExpression( optsArg ))
+    if( objLit )
     {
-        const resProp = optsArg.properties.find( p => getPropName( p ) === 'unionResolution' );
+        const resProp = objLit.properties.find( p => getPropName( p ) === 'unionResolution' );
         const extracted = extractStringValue( resProp, checker );
 
         if( extracted === 'declaration-order' || extracted === 'specificity' )
@@ -189,6 +236,14 @@ function parseUnionResolution(
     return 'specificity';
 }
 
+function parseUnionResolution(
+    optsArg : ts.Expression | undefined,
+    checker : ts.TypeChecker
+): UnionResolution
+{
+    return extractUnionResolution( resolveOptionsObjectLiteral( optsArg, checker ), checker );
+}
+
 function parseSerializerOptions(
     optsArg : ts.Expression | undefined,
     checker : ts.TypeChecker
@@ -196,15 +251,12 @@ function parseSerializerOptions(
 {
     let mode: ValidationMode = 'strip';
     let format: SerializeFormat = 'json';
-    const unionResolution = parseUnionResolution( optsArg, checker );
+    const objLit = resolveOptionsObjectLiteral( optsArg, checker );
+    const unionResolution = extractUnionResolution( objLit, checker );
 
-    if( optsArg && ts.isStringLiteral( optsArg ))
+    if( objLit )
     {
-        mode = optsArg.text as ValidationMode;
-    }
-    else if( optsArg && ts.isObjectLiteralExpression( optsArg ))
-    {
-        const modeProp = optsArg.properties.find( p => getPropName( p ) === 'mode' );
+        const modeProp = objLit.properties.find( p => getPropName( p ) === 'mode' );
         const extractedMode = extractStringValue( modeProp, checker );
 
         if( extractedMode )
@@ -212,7 +264,7 @@ function parseSerializerOptions(
             mode = extractedMode as ValidationMode;
         }
 
-        const formatProp = optsArg.properties.find( p =>
+        const formatProp = objLit.properties.find( p =>
         {
             const name = getPropName( p );
 
@@ -245,15 +297,12 @@ function parseParseOptions(
 {
     let mode: ValidationMode = 'strip';
     let from: ParseSource = 'json';
-    const unionResolution = parseUnionResolution( optsArg, checker );
+    const objLit = resolveOptionsObjectLiteral( optsArg, checker );
+    const unionResolution = extractUnionResolution( objLit, checker );
 
-    if( optsArg && ts.isStringLiteral( optsArg ))
+    if( objLit )
     {
-        mode = optsArg.text as ValidationMode;
-    }
-    else if( optsArg && ts.isObjectLiteralExpression( optsArg ))
-    {
-        const modeProp = optsArg.properties.find( p => getPropName( p ) === 'mode' );
+        const modeProp = objLit.properties.find( p => getPropName( p ) === 'mode' );
         const extractedMode = extractStringValue( modeProp, checker );
 
         if( extractedMode )
@@ -261,7 +310,7 @@ function parseParseOptions(
             mode = extractedMode as ValidationMode;
         }
 
-        const fromProp = optsArg.properties.find( p => getPropName( p ) === 'from' );
+        const fromProp = objLit.properties.find( p => getPropName( p ) === 'from' );
         const extractedFrom = extractStringValue( fromProp, checker );
 
         if( extractedFrom )
@@ -328,10 +377,8 @@ export default function transformer( program: ts.Program )
                 const moduleName = ts.isStringLiteral( statement.moduleSpecifier )
                     ? statement.moduleSpecifier.text
                     : '';
-                const isTypecheckerImport = moduleName === '@webergency-utils/typechecker' ||
-                    /(?:^|\/)(?:src\/)?index\.(?:js|ts)$/.test( moduleName );
 
-                if( !isTypecheckerImport ){ continue }
+                if( !isTypecheckerImport( moduleName )){ continue }
 
                 const bindings = statement.importClause?.namedBindings;
 
@@ -384,7 +431,7 @@ export default function transformer( program: ts.Program )
                             const type = checker.getTypeFromTypeNode( typeArg );
                             const hash = getTypeHash( type );
 
-                            if( fnName === 'serializer' || fnName === 'stringify' )
+                            if( fnName === 'serializer' || fnName === 'stringify' || fnName === 'safeSerialize' )
                             {
                                 const optsIdx = fnName === 'serializer' ? 0 : 1;
                                 const optsArg = node.arguments[optsIdx];
@@ -409,31 +456,81 @@ export default function transformer( program: ts.Program )
 
                                 const inputVisitorResult = visitArgOrUndefined( node.arguments, 0, visitor );
 
+                                if( fnName === 'safeSerialize' )
+                                {
+                                    return runtimeCall( emitNames.runtimeNs, 'safeSerialize', [ serRef, inputVisitorResult, visitedOpts ]);
+                                }
+
                                 return ts.factory.createCallExpression( serRef, undefined, [ inputVisitorResult, visitedOpts ]);
                             }
 
-                            if( fnName === 'parse' )
+                            if( fnName === 'parse' || fnName === 'parser' || fnName === 'safeParse' )
                             {
-                                const options = parseParseOptions( node.arguments[1], checker );
+                                const optsIdx = fnName === 'parser' ? 0 : 1;
+                                const options = parseParseOptions( node.arguments[optsIdx], checker );
                                 const parseRef = buildParser( type, checker, parserCache, hash, options, customFns );
+                                const visitedOpts = visitArgOrUndefined( node.arguments, optsIdx, visitor );
+
+                                if( fnName === 'parser' )
+                                {
+                                    return ts.factory.createArrowFunction(
+                                        undefined,
+                                        undefined,
+                                        [ts.factory.createParameterDeclaration( undefined, undefined, 'input' )],
+                                        undefined,
+                                        ts.factory.createToken( ts.SyntaxKind.EqualsGreaterThanToken ),
+                                        ts.factory.createCallExpression( parseRef, undefined, [
+                                            ts.factory.createIdentifier( 'input' ),
+                                            visitedOpts
+                                        ])
+                                    );
+                                }
+
                                 const inputVisitorResult = visitArgOrUndefined( node.arguments, 0, visitor );
-                                const visitedOpts = visitArgOrUndefined( node.arguments, 1, visitor );
+
+                                if( fnName === 'safeParse' )
+                                {
+                                    return runtimeCall( emitNames.runtimeNs, 'safeParse', [ parseRef, inputVisitorResult, visitedOpts ]);
+                                }
 
                                 return ts.factory.createCallExpression( parseRef, undefined, [ inputVisitorResult, visitedOpts ]);
                             }
 
                             if( fnName === 'jsonSchema' )
                             {
-                                if( !schemasCache.has( hash ))
+                                const optsArg = node.arguments[0];
+                                const objLit = resolveOptionsObjectLiteral( optsArg, checker );
+                                let target: JsonSchemaTarget | undefined;
+
+                                if( objLit )
                                 {
-                                    const schemaObj = buildJsonSchema( type, checker );
-                                    schemasCache.set( hash, objectToAst( schemaObj ));
+                                    const targetProp = objLit.properties.find( p => getPropName( p ) === 'target' );
+                                    const extracted = extractStringValue( targetProp, checker );
+
+                                    if( extracted ){ target = extracted as JsonSchemaTarget }
+                                }
+                                else if( optsArg )
+                                {
+                                    const extracted = extractStringValue( optsArg, checker );
+
+                                    if( extracted ){ target = extracted as JsonSchemaTarget }
                                 }
 
-                                return ts.factory.createIdentifier( `__schema_${hash}` );
+                                const schemaKey = target && target !== 'draft-07'
+                                    ? `${hash}_${target.replace( /[^a-zA-Z0-9_]/g, '_' )}`
+                                    : hash;
+
+                                if( !schemasCache.has( schemaKey ))
+                                {
+                                    const schemaOpts: JsonSchemaOptions | undefined = target ? { target } : undefined;
+                                    const schemaObj = buildJsonSchema( type, checker, schemaOpts );
+                                    schemasCache.set( schemaKey, objectToAst( schemaObj ));
+                                }
+
+                                return ts.factory.createIdentifier( `__schema_${schemaKey}` );
                             }
 
-                            if( fnName === 'standardSchema' )
+                            if( fnName === 'standardSchema' || fnName === 'validator' )
                             {
                                 const unionResolution = parseUnionResolution( node.arguments[0], checker );
                                 const valKey = unionResolution === 'declaration-order' ? `${hash}_decl` : hash;
@@ -445,8 +542,9 @@ export default function transformer( program: ts.Program )
 
                                 const validatorRef = ts.factory.createIdentifier( `__val_${valKey}` );
                                 const optionsArg = visitArgOrUndefined( node.arguments, 0, visitor );
+                                const helperMethod = fnName === 'validator' ? 'createValidator' : 'createStandardSchema';
 
-                                return runtimeCall( emitNames.runtimeNs, 'createStandardSchema', [ validatorRef, optionsArg ]);
+                                return runtimeCall( emitNames.runtimeNs, helperMethod, [ validatorRef, optionsArg ]);
                             }
 
                             if( VALIDATION_FUNCTIONS.includes( fnName ))

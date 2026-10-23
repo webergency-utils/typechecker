@@ -1,12 +1,15 @@
 import { ResolveDefaults } from './runtime/tags.js';
+import { getOrCompileSchema, compileSchema } from './runtime/schema-compiler.js';
 import {
-    getOrCompileSchema,
     is as runIs,
     assert as runAssert,
     assertGuard as runAssertGuard,
     validate as runValidate
 } from './runtime/validators.js';
 import type {
+    IValidation,
+    IValidationSuccess,
+    IValidationFailure,
     IValidationError,
     ValidationMode,
     UnionResolution,
@@ -15,16 +18,14 @@ import type {
     ValidationOptions,
     AssertOptions,
     JsonSchema,
-    StandardSchemaV1
+    JsonSchemaTarget,
+    JsonSchemaOptions,
+    StandardSchemaV1,
+    CompiledValidator
 } from './runtime/validators.js';
+import type { SafeParseResult } from './runtime/parse-runtime.js';
+import type { SafeSerializeResult } from './runtime/serializer-runtime.js';
 import type { JsonReviver, JsonReplacer, TransformFn } from './runtime/transform.js';
-
-export interface IValidation<T>
-{
-    success : boolean
-    data?   : T
-    errors? : IValidationError[]
-}
 
 const TRANSFORMER_MISSING =
     'Typechecker transformer was not applied. Register { "transform": "@webergency-utils/typechecker/transformer" } in tsconfig plugins (requires ts-patch).';
@@ -52,13 +53,19 @@ export function validate<T>( _input: unknown, _options?: ValidationMode | Valida
     throw new Error( TRANSFORMER_MISSING );
 }
 
-export function jsonSchema<T>(): JsonSchema
+export function jsonSchema<T>( _options?: JsonSchemaTarget | JsonSchemaOptions ): JsonSchema
 {
     throw new Error( TRANSFORMER_MISSING );
 }
 
 /** Standard Schema v1 (~standard) compliant schema wrapper for type `T`. */
-export function standardSchema<T>( _options?: ValidationMode | ValidationOptions ): StandardSchemaV1<unknown, ResolveDefaults<T>>
+export function standardSchema<T>( _options?: ValidationMode | ValidationOptions ): StandardSchemaV1<T, ResolveDefaults<T>>
+{
+    throw new Error( TRANSFORMER_MISSING );
+}
+
+/** AOT Macro: Compiles a reusable validator object for type `T` with `.validate()`, `.is()`, `.assert()`, `.assertGuard()`, and `['~standard']`. */
+export function validator<T>( _options?: ValidationMode | ValidationOptions ): CompiledValidator<ResolveDefaults<T>, T>
 {
     throw new Error( TRANSFORMER_MISSING );
 }
@@ -87,9 +94,8 @@ export function validateSchema<T = unknown>( schema: JsonSchema, input: unknown,
     return runValidate( getOrCompileSchema( schema ), input, options );
 }
 
+export { getOrCompileSchema, compileSchema };
 export {
-    getOrCompileSchema,
-    compileSchema,
     validators,
     coerceQueryNumber,
     coerceQueryBoolean,
@@ -99,9 +105,13 @@ export {
     toZodIssues,
     ZodLikeError,
     createStandardSchema,
+    createValidator,
     toStandardSchemaIssues
 } from './runtime/validators.js';
 export type {
+    IValidation,
+    IValidationSuccess,
+    IValidationFailure,
     IValidationError,
     ValidationMode,
     UnionResolution,
@@ -117,7 +127,11 @@ export type {
     JsonSchemaObject,
     JsonSchemaType,
     JsonSchemaTypescriptType,
+    JsonSchemaTarget,
+    JsonSchemaOptions,
     SchemaValidator,
+    CompiledSchema,
+    CompiledValidator,
     SchemaAnnotationFrame,
     StandardSchemaV1
 } from './runtime/validators.js';
@@ -163,8 +177,26 @@ export function stringify<T>( _input: T, _options?: ValidationMode | SerializerO
     throw new Error( TRANSFORMER_MISSING );
 }
 
+/** AOT Macro: Non-throwing single-pass validation and serialization into `{ success, data, error }`. */
+export function safeSerialize<T>( _input: T, _options?: ValidationMode | SerializerOptions ): SafeSerializeResult
+{
+    throw new Error( TRANSFORMER_MISSING );
+}
+
 /** AOT Macro: Single-pass parses and validates `input` into type `T`. */
 export function parse<T>( _input: string, _options?: ValidationMode | ParseOptions ): ResolveDefaults<T>
+{
+    throw new Error( TRANSFORMER_MISSING );
+}
+
+/** AOT Macro: Compiles a fast reusable parser function for type `T`. */
+export function parser<T>( _options?: ValidationMode | ParseOptions ): ( input: string ) => ResolveDefaults<T>
+{
+    throw new Error( TRANSFORMER_MISSING );
+}
+
+/** AOT Macro: Non-throwing single-pass parse and validation into `{ success, data, error }`. */
+export function safeParse<T>( _input: string, _options?: ValidationMode | ParseOptions ): SafeParseResult<ResolveDefaults<T>>
 {
     throw new Error( TRANSFORMER_MISSING );
 }

@@ -2,16 +2,16 @@ import ts from 'typescript';
 import
 {
     BUFFER_LIKE,
+    TemplateIndexInfo,
     enumMemberTypes,
     isNativeEnumType,
-    mapStructuralProps,
     peelTaggedIntersection,
-    stringIndexType,
     stripUndefinedFromType,
     tryMergeObjectTypes,
     typeSymbolName
 }
     from './type-helpers.js';
+import { resolveTypeIr } from './type-ir.js';
 
 export const MAX_SPECIFICITY_DEPTH = 16;
 
@@ -44,12 +44,13 @@ function getSpecificityCache( checker: ts.TypeChecker ): Map<number, Specificity
 }
 
 function scoreObjectShape(
-    props     : { type : ts.Type, isOptional : boolean }[],
-    indexType : ts.Type | undefined,
-    checker   : ts.TypeChecker,
-    visited   : Set<number>,
-    depth     : number,
-    state     : SpecificityWalkState
+    props        : { type : ts.Type, isOptional : boolean }[],
+    indexType    : ts.Type | undefined,
+    patternInfos : TemplateIndexInfo[] | undefined,
+    checker      : ts.TypeChecker,
+    visited      : Set<number>,
+    depth        : number,
+    state        : SpecificityWalkState
 ): number
 {
     if( props.length > 0 )
@@ -65,9 +66,29 @@ function scoreObjectShape(
             score += prop.isOptional ? 0.25 * weight : weight;
         }
 
+        if( patternInfos && patternInfos.length > 0 )
+        {
+            for( const pInfo of patternInfos )
+            {
+                score += 0.6 + 0.95 * getDeepSpecificityInternal( pInfo.valueType, checker, visited, depth + 1, state );
+            }
+        }
+
         if( indexType )
         {
             score += 0.5 + 0.95 * getDeepSpecificityInternal( indexType, checker, visited, depth + 1, state );
+        }
+
+        return score;
+    }
+
+    if( patternInfos && patternInfos.length > 0 )
+    {
+        let score = depth === 0 ? 600 : 0.6;
+
+        for( const pInfo of patternInfos )
+        {
+            score += 0.95 * getDeepSpecificityInternal( pInfo.valueType, checker, visited, depth + 1, state );
         }
 
         return score;
@@ -200,7 +221,7 @@ function computeDeepSpecificityBody(
 
             if( merged )
             {
-                return constraintBonus + scoreObjectShape( merged.props, merged.indexType, checker, visited, depth, state );
+                return constraintBonus + scoreObjectShape( merged.props, merged.indexType, merged.patternIndexInfos, checker, visited, depth, state );
             }
 
             return constraintBonus;
@@ -351,7 +372,7 @@ function computeDeepSpecificityBody(
 
     const symbolName = typeSymbolName( type );
 
-    if( symbolName === 'Set' )
+    if( symbolName === 'Set' || symbolName === 'ReadonlySet' )
     {
         const typeArgs = typeof checker.getTypeArguments === 'function'
             ? checker.getTypeArguments( type as ts.TypeReference )
@@ -363,7 +384,7 @@ function computeDeepSpecificityBody(
         return ( depth === 0 ? 15 : 0.3 ) + 0.95 * elemScore;
     }
 
-    if( symbolName === 'Map' )
+    if( symbolName === 'Map' || symbolName === 'ReadonlyMap' )
     {
         const typeArgs = typeof checker.getTypeArguments === 'function'
             ? checker.getTypeArguments( type as ts.TypeReference )
@@ -380,6 +401,7 @@ function computeDeepSpecificityBody(
 
     if(
         symbolName === 'Date' ||
+        symbolName === 'URL' ||
         symbolName === 'RegExp' ||
         symbolName === 'Error' ||
         symbolName === 'Promise' ||
@@ -396,10 +418,12 @@ function computeDeepSpecificityBody(
         return 0;
     }
 
-    const props = mapStructuralProps( type, checker );
-    const idxType = stringIndexType( type, checker );
+    const ir = resolveTypeIr( type, checker );
+    const props = ir.getProps();
+    const idxType = ir.getStringIndexType();
+    const patternInfos = ir.getTemplateIndexInfos();
 
-    return scoreObjectShape( props, idxType, checker, visited, depth, state );
+    return scoreObjectShape( props, idxType, patternInfos, checker, visited, depth, state );
 }
 
 export function sortUnionArmsBySpecificity(
@@ -477,7 +501,7 @@ export function isFallbackUnionArm(
 
         const symbolName = typeSymbolName( current );
 
-        if( symbolName === 'Set' )
+        if( symbolName === 'Set' || symbolName === 'ReadonlySet' )
         {
             const typeArgs = typeof checker.getTypeArguments === 'function'
                 ? checker.getTypeArguments( current as ts.TypeReference )
@@ -486,7 +510,7 @@ export function isFallbackUnionArm(
             return Boolean( typeArgs[0] && isFallbackUnionArm( typeArgs[0], checker, visited ));
         }
 
-        if( symbolName === 'Map' )
+        if( symbolName === 'Map' || symbolName === 'ReadonlyMap' )
         {
             const typeArgs = typeof checker.getTypeArguments === 'function'
                 ? checker.getTypeArguments( current as ts.TypeReference )
@@ -582,7 +606,7 @@ function getCompetingCategory(
 
         const symbolName = typeSymbolName( current );
 
-        if( symbolName === 'Set' )
+        if( symbolName === 'Set' || symbolName === 'ReadonlySet' )
         {
             const typeArgs = typeof checker.getTypeArguments === 'function'
                 ? checker.getTypeArguments( current as ts.TypeReference )
@@ -591,7 +615,7 @@ function getCompetingCategory(
             return typeArgs[0] && containsObjectCandidate( typeArgs[0], checker, visited ) ? 'set' : undefined;
         }
 
-        if( symbolName === 'Map' )
+        if( symbolName === 'Map' || symbolName === 'ReadonlyMap' )
         {
             const typeArgs = typeof checker.getTypeArguments === 'function'
                 ? checker.getTypeArguments( current as ts.TypeReference )
@@ -604,6 +628,7 @@ function getCompetingCategory(
 
         if(
             symbolName === 'Date' ||
+            symbolName === 'URL' ||
             symbolName === 'RegExp' ||
             symbolName === 'Error' ||
             symbolName === 'Promise' ||
@@ -729,7 +754,7 @@ export function tryExclusiveKeyUnion(
 
             if( merged )
             {
-                if( merged.indexType ){ return undefined }
+                if( merged.indexType || ( merged.patternIndexInfos && merged.patternIndexInfos.length > 0 )){ return undefined }
 
                 const allKeys = new Set( merged.props.map( p => p.name ));
                 const reqKeys = merged.props
@@ -756,12 +781,16 @@ export function tryExclusiveKeyUnion(
 
         if( typeof current.getCallSignatures === 'function' && current.getCallSignatures().length > 0 ){ return undefined }
 
-        const symbolName = typeSymbolName( current );
+        const ir = resolveTypeIr( current, checker );
+        const symbolName = ir.symbolName;
 
         if(
             symbolName === 'Date' ||
+            symbolName === 'URL' ||
             symbolName === 'Set' ||
+            symbolName === 'ReadonlySet' ||
             symbolName === 'Map' ||
+            symbolName === 'ReadonlyMap' ||
             symbolName === 'RegExp' ||
             symbolName === 'Error' ||
             symbolName === 'Promise' ||
@@ -771,9 +800,9 @@ export function tryExclusiveKeyUnion(
             return undefined;
         }
 
-        if( stringIndexType( current, checker )){ return undefined }
+        if( ir.getStringIndexType() || ir.getTemplateIndexInfos().length > 0 ){ return undefined }
 
-        const props = mapStructuralProps( current, checker );
+        const props = ir.getProps();
         const allKeys = new Set( props.map( p => p.name ));
         const reqKeys = props
             .filter( p => !p.isOptional && !p.hasDefault && !acceptsUndefinedOrWildcard( p.type, checker ))

@@ -19,18 +19,33 @@ const STATICALLY_CHECKED: ReadonlySet<string> = new Set<TagName>([
 ]);
 
 const STATIC_MACRO_FUNCTIONS: ReadonlySet<string> = new Set([
-    'is', 'assert', 'assertGuard', 'validate', 'stringify'
+    'is', 'assert', 'assertGuard', 'validate', 'stringify', 'safeSerialize', 'parse', 'safeParse'
 ]);
 
 const MAX_STATIC_DEPTH = 8;
+
+function unwrapNonNullishType( type: ts.Type ): ts.Type
+{
+    if( typeof type.isUnion === 'function' && type.isUnion())
+    {
+        const nonNullish = type.types.filter(
+            t => ( t.flags & ( ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void )) === 0
+        );
+
+        if( nonNullish.length === 1 ){ return nonNullish[0] }
+    }
+
+    return type;
+}
 
 /**
  * Extract Minimum / Length / Items-style constraints from a (possibly intersected) type.
  */
 export function extractStaticConstraints( type: ts.Type, checker: ts.TypeChecker ): IStaticConstraint[]
 {
+    const target = unwrapNonNullishType( type );
     const constraints: IStaticConstraint[] = [];
-    const types = typeof type.isIntersection === 'function' && type.isIntersection() ? type.types : [type];
+    const types = typeof target.isIntersection === 'function' && target.isIntersection() ? target.types : [target];
 
     for( const sub of types )
     {
@@ -53,7 +68,12 @@ function getSymbolType( checker: ts.TypeChecker, symbol: ts.Symbol ): ts.Type | 
 {
     const decl = symbol.valueDeclaration || symbol.declarations?.[0];
 
-    if( !decl ){ return undefined }
+    if( !decl )
+    {
+        return typeof ( checker as any ).getTypeOfSymbol === 'function'
+            ? ( checker as any ).getTypeOfSymbol( symbol )
+            : undefined;
+    }
 
     return checker.getTypeOfSymbolAtLocation( symbol, decl );
 }
@@ -64,19 +84,25 @@ type ConstantValue =
     | { kind : 'array', value : any[] }
     | { kind : 'object', keyCount : number };
 
-function unwrapExpression( expr: ts.Expression ): ts.Expression
+export function unwrapExpression( expr: ts.Expression ): ts.Expression
 {
     while(
         ts.isParenthesizedExpression( expr ) ||
         ts.isAsExpression( expr ) ||
-        ts.isTypeAssertionExpression( expr ) ||
-        ts.isSatisfiesExpression( expr )
+        ( typeof ts.isSatisfiesExpression === 'function' && ts.isSatisfiesExpression( expr )) ||
+        ts.isTypeAssertionExpression( expr )
     )
     {
         expr = expr.expression;
     }
 
     return expr;
+}
+
+export function isTypecheckerImport( moduleName: string ): boolean
+{
+    return moduleName === '@webergency-utils/typechecker' ||
+        /(?:^|\/)(?:src\/|dist\/)?index(?:\.(?:js|cjs|mjs|ts))?$/.test( moduleName );
 }
 
 function tryGetConstantObject( obj: ts.ObjectLiteralExpression ): Record<string, any> | undefined
@@ -354,6 +380,8 @@ function checkExpressionAgainstType(
 {
     if( depth > MAX_STATIC_DEPTH ){ return }
 
+    type = unwrapNonNullishType( type );
+
     const constraints = extractStaticConstraints( type, checker );
     const unwrapped = unwrapExpression( expr );
 
@@ -556,10 +584,8 @@ export function collectStaticConstraintDiagnostics(
         const moduleName = ts.isStringLiteral( statement.moduleSpecifier )
             ? statement.moduleSpecifier.text
             : '';
-        const isTypecheckerImport = moduleName === '@webergency-utils/typechecker' ||
-            /(?:^|\/)(?:src\/)?index\.(?:js|ts)$/.test( moduleName );
 
-        if( !isTypecheckerImport ){ continue }
+        if( !isTypecheckerImport( moduleName )){ continue }
 
         const bindings = statement.importClause?.namedBindings;
 
@@ -583,17 +609,11 @@ export function collectStaticConstraintDiagnostics(
 
     const visit = ( node: ts.Node ) =>
     {
-        if( ts.isVariableDeclaration( node ) && node.type && node.initializer )
-        {
-            const type = checker.getTypeFromTypeNode( node.type );
-            checkExpressionAgainstType( node.initializer, type, checker, rawDiagnostics );
-        }
-        else if( ts.isPropertyDeclaration( node ) && node.type && node.initializer )
-        {
-            const type = checker.getTypeFromTypeNode( node.type );
-            checkExpressionAgainstType( node.initializer, type, checker, rawDiagnostics );
-        }
-        else if( ts.isParameter( node ) && node.type && node.initializer )
+        if(
+            ( ts.isVariableDeclaration( node ) || ts.isPropertyDeclaration( node ) || ts.isParameter( node )) &&
+            node.type &&
+            node.initializer
+        )
         {
             const type = checker.getTypeFromTypeNode( node.type );
             checkExpressionAgainstType( node.initializer, type, checker, rawDiagnostics );

@@ -1,5 +1,5 @@
 import ts from 'typescript';
-import { collectStaticConstraintDiagnostics } from './engine/staticAsserts.js';
+import { collectStaticConstraintDiagnostics } from './transformer.js';
 
 function init( modules: { typescript : typeof ts })
 {

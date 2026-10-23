@@ -27,7 +27,7 @@ describe( 'parse / stringify reviver, replacer, and transform', () =>
         const seenText: string[] = [];
 
         // Act
-        const fromText = mod.fromText( '{"name":"Ada","drop":1}', function( key, value )
+        const fromText = mod.fromText( '{"name":"Ada","drop":1}', function( this: any, key, value )
         {
             seenText.push( key );
 

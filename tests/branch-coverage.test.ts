@@ -3,19 +3,41 @@ import {
     validators,
     groupErrorsByPath,
     coerceQueryDate,
+    coerceQueryNumber,
+    deepEqual,
+    hasUniqueItems,
+    toStandardSchemaIssues,
     type ValidationContext,
     getOrCompileSchema,
+    compileSchema,
     is,
     validate,
     parseSet,
     parseMap,
+    parseUnion,
+    parseQueryString,
+    coerceBuffer,
     applyParseConstraints,
+    applyContains,
+    applyPropertyNames,
+    reviveTree,
+    applyParseTransform,
+    recordParseObjectStats,
+    ParseError,
     serializeSet,
     serializeMap,
+    serializeUnion,
+    serializeBuffer,
+    appendQueryAny,
+    applySerializeTransform,
+    recordSerializerObjectStats,
+    SerializationError,
+    convertPropertyCasing,
     resolvePath,
     getValueAtPath,
     hasPath
 } from '../src/runtime/index.js';
+import { isSafeRegexSource, testRegex } from '../src/runtime/regex.js';
 
 describe( 'Branch coverage edges', () =>
 {
@@ -350,7 +372,7 @@ describe( 'Branch coverage edges', () =>
             ctx = { success : true, errors : [], mode : 'strict', root : { 'x' : 1 } };
 
             // Act — synthesize a path with a non-numeric index via custom
-            validators.custom( 1, 'row[nope]', ctx, ( _val, pc ) =>
+            validators.custom( 1, 'row[nope]', ctx, ( _val: any, pc: any ) =>
             {
                 seen.push( pc );
 
@@ -369,7 +391,7 @@ describe( 'Branch coverage edges', () =>
             ctx = { success : true, errors : [], mode : 'strict', root : {} };
 
             // Act
-            validators.custom( 1, 'row[unclosed', ctx, ( _val, pc ) =>
+            validators.custom( 1, 'row[unclosed', ctx, ( _val: any, pc: any ) =>
             {
                 seen.push( pc );
 
@@ -457,7 +479,7 @@ describe( 'Branch coverage edges', () =>
             ctx = { success : true, errors : [], mode : 'strict', root : [10, 20] };
 
             // Act
-            validators.array([10, 20], 'rows', ctx, ( v, path, c ) =>
+            validators.array([10, 20], 'rows', ctx, ( v: any, path: string, c: any ) =>
             {
                 validators.custom( v, path, c, ( val: any, pc: any ) =>
                 {
@@ -666,6 +688,514 @@ describe( 'Branch coverage edges', () =>
             // Non-plain-objects (Date, Set, Array) are ignored by minProperties/maxProperties in applyParseConstraints
             const d = new Date();
             expect( applyParseConstraints( d, 'd', [{ type : 'minProperties', value : 1 }, { type : 'maxProperties', value : 0 }])).toBe( d );
+        });
+
+        it( 'should cover remaining casing, regex, and serializer-runtime branches', () =>
+        {
+            // casing.ts: constructor / prototype keys defined via Object.defineProperty
+            const converted = convertPropertyCasing({ constructor : 1, prototype : 2 }, 'camelCase' );
+            expect(( converted as any ).constructor ).toBe( 1 );
+            expect(( converted as any ).prototype ).toBe( 2 );
+
+            // regex.ts: meta-char in alternation, empty alternation branch, and over-length subject
+            expect( isSafeRegexSource( '(a.|b)+' )).toBe( false );
+            expect( isSafeRegexSource( '(a|)+' )).toBe( false );
+            expect( testRegex( /a/, 'a'.repeat( 10_001 ))).toBe( false );
+
+            // serializer-runtime.ts: undefined property in appendQueryAny, serializeUnion worse stripped arm, applySerializeTransform null/undefined
+            const params: string[] = [];
+            appendQueryAny( params, { a : undefined, b : 1 }, 'p' );
+            expect( params ).toEqual([ 'p%5Bb%5D=1' ]);
+
+            const serRes = serializeUnion(
+                { a : 1, b : 2, c : 3 },
+                '',
+                'Type<U>',
+                [
+                    () =>
+                    {
+                        recordSerializerObjectStats( 1, 2 );
+
+                        return '{"a":1,"b":2}';
+                    },
+                    () =>
+                    {
+                        recordSerializerObjectStats( 2, 1 );
+
+                        return '{"a":1}';
+                    }
+                ],
+                true
+            );
+            expect( serRes ).toBe( '{"a":1,"b":2}' );
+
+            expect( applySerializeTransform( 42, '', undefined, 'number', [], 42 )).toBe( 42 );
+        });
+
+        it( 'should cover remaining parse-runtime branches', () =>
+        {
+            // parseErrorCode with empty path '' when last error matches expected
+            expect(() => parseUnion( 1, '', 'Type<string>', [
+                () =>
+                {
+                    throw new ParseError( '', 'Type<string>' );
+                }
+            ])).toThrow( ParseError );
+
+            // parseUnion probeBestFit when second arm strips more keys than first arm
+            const parsedBest = parseUnion(
+                { a : 1, b : 2, c : 3 },
+                '',
+                'Type<U>',
+                [
+                    () =>
+                    {
+                        recordParseObjectStats( 1, 2 );
+
+                        return { a : 1, b : 2 };
+                    },
+                    () =>
+                    {
+                        recordParseObjectStats( 2, 1 );
+
+                        return { a : 1 };
+                    }
+                ],
+                true
+            );
+            expect( parsedBest ).toEqual({ a : 1, b : 2 });
+
+            // maxNumericKey with existing numeric and non-numeric keys in object
+            const q1 = parseQueryString( 'a[x]=1&a[0]=first&a[2]=third&a[1]=second&a[]=fourth' );
+            expect( q1.a[3]).toBe( 'fourth' );
+
+            // MAX_QUERY_DEPTH truncation (> 32 brackets)
+            const deepKey = 'a' + '[b]'.repeat( 35 ) + '=1';
+            expect( parseQueryString( deepKey )).toBeDefined();
+
+            // Falsy value at obj[k] before nested bracket key
+            const q2 = parseQueryString( 'a[0]=&a[][b]=1' );
+            expect( q2.a ).toBeDefined();
+
+            // MAX_QUERY_KEYS (> 10000 params)
+            const manyParams = 'a=1&'.repeat( 10002 );
+            expect( parseQueryString( manyParams ).a.length ).toBe( 10000 );
+
+            // applyParseConstraints edge branches
+            expect( applyParseConstraints( null, 'p', [{ type : 'minLength', value : 1 }])).toBeNull();
+            expect( applyParseConstraints( 'hi', 'p', [{ type : 'transform', value : 'unknownTransform' }])).toBe( 'hi' );
+            expect( applyParseConstraints( false, 'p', [
+                { type : 'maxLength', value : 5 },
+                { type : 'multipleOf', value : 2 },
+                { type : 'pattern', value : '^a$' }
+            ])).toBe( false );
+            expect( applyParseConstraints( 124, 'p', [{ type : 'multipleOf', value : 2 }])).toBe( 124 );
+            expect( applyParseConstraints( 'a', 'p', [{ type : 'pattern', value : '^a$', regex : /^a$/ }])).toBe( 'a' );
+            expect(() => applyParseConstraints( 'bad', 'p', [{ type : 'format', value : 'email', message : 'CustomFormatMsg' }], 'json', {})).toThrow( /CustomFormatMsg/ );
+
+            // applyContains non-array & non-ParseError rethrow
+            expect( applyContains( 'not-array', 'p', () => 'x' )).toBe( 'not-array' );
+            expect(() => applyContains([ 1 ], 'p', () =>
+            {
+                throw new TypeError( 'boom' );
+            })).toThrow( TypeError );
+
+            // applyPropertyNames non-object, empty path, and non-ParseError rethrow
+            expect( applyPropertyNames( null, 'p', () => 'x' )).toBeNull();
+            expect( applyPropertyNames({ a : 1 }, '', k => k )).toEqual({ a : 1 });
+            expect(() => applyPropertyNames({ a : 1 }, '', () =>
+            {
+                throw new TypeError( 'boom' );
+            })).toThrow( TypeError );
+
+            // reviveTree throwing non-Error string at root and object with custom path
+            expect(() => reviveTree({ a : 1 }, () =>
+            {
+                 
+                throw 'raw-string-error';
+            })).toThrow( /raw-string-error/ );
+            expect(() => reviveTree({ a : 1 }, () =>
+            {
+                 
+                throw { path : 'custom.path' };
+            })).toThrow( ParseError );
+
+            // applyParseTransform with undefined transform
+            expect( applyParseTransform( 42, '', undefined, 'number', [], 42 )).toBe( 42 );
+        });
+
+        it( 'should cover remaining validators.ts branches', () =>
+        {
+            // coerceQueryNumber signs and exponent edge cases
+            expect( coerceQueryNumber( '+42' )).toBe( 42 );
+            expect( coerceQueryNumber( '1e+2' )).toBe( 100 );
+            expect( coerceQueryNumber( '1e2x' )).toBe( '1e2x' );
+            expect( coerceQueryNumber( '1e+' )).toBe( '1e+' );
+
+            // date-time invalid calendar date (Feb 31)
+            const dtCtx: ValidationContext = { success : true, errors : [], mode : 'strict' };
+            validators.format( '2024-02-31T10:00:00Z', 'dt', dtCtx, 'date-time' );
+            expect( dtCtx.success ).toBe( false );
+
+            // deepEqual seenRight.add(right) and key length mismatch
+            const shared = { k : 1 };
+            expect( deepEqual([ shared, shared ], [ { k : 1 }, { k : 2 } ])).toBe( false );
+            expect( deepEqual({ a : 1 }, { a : 1, b : 2 })).toBe( false );
+
+            // uniqueContentHash nested types inside hasUniqueItems (Date and RegExp before Symbol)
+            const sym = Symbol( 'x' );
+            expect( hasUniqueItems([
+                { a : null, b : true, c : false, e : new Date( 1000 ), f : /abc/g },
+                { a : null, b : false, c : true, e : new Date( 2000 ), f : /def/i },
+                { g : sym }
+            ])).toBe( true );
+
+            // literal coercion edge branches
+            const qCtx: ValidationContext = { success : true, errors : [], mode : 'strict', from : 'query' };
+            expect( validators.literal( '99', 'p', qCtx, 42 )).toBe( '99' );
+            expect( validators.literal( 'hello', 'p', { success : true, errors : [], mode : 'strict', from : 'query' }, 'world' )).toBe( 'hello' );
+            expect( validators.literal( false, 'p', { success : true, errors : [], mode : 'strict', from : 'json' }, 10n )).toBe( false );
+            expect( validators.literal( 11, 'p', { success : true, errors : [], mode : 'strict', from : 'json' }, 10n )).toBe( 11 );
+            expect( validators.literal( 'x', 'p', { success : true, errors : [], mode : 'strict', from : () => 'y' }, 'z' )).toBe( 'x' );
+
+            // props inPlace with own undefined property
+            const inPlaceObj: any = { a : undefined };
+            validators.props( inPlaceObj, inPlaceObj, '', { success : true, errors : [], mode : 'strict', mutate : true }, [
+                [ 'a', false, ( v: any ) => v ]
+            ]);
+            expect( 'a' in inPlaceObj ).toBe( true );
+
+            // additionalProps inPlace when value is unchanged
+            const addObj: any = { a : 1, extra : 'ok' };
+            validators.additionalProps( addObj, addObj, '', { success : true, errors : [], mode : 'strict', mutate : true }, [ 'a' ], validators.string );
+            expect( addObj.extra ).toBe( 'ok' );
+
+            // patternProps with unionProbe, indexValidator, and inPlace modes
+            const patObj: any = { known : 1, p_1 : 'a', idx_1 : 10, extra : true };
+            const patProbeCtx: ValidationContext = {
+                success    : true,
+                errors     : [],
+                mode       : 'strip',
+                mutate     : true,
+                unionProbe : { stripped : 0, matched : 0 }
+            };
+            validators.patternProps(
+                patObj,
+                patObj,
+                '',
+                patProbeCtx,
+                [ 'known' ],
+                [[ /^p_/, validators.string ]]
+            );
+            expect( patProbeCtx.unionProbe?.matched ).toBe( 2 );
+            expect( patProbeCtx.unionProbe?.stripped ).toBe( 2 );
+            expect( 'extra' in patObj ).toBe( false );
+
+            const patIdxObj: any = { known : undefined, idx_1 : 10, idx_undef : undefined };
+            const patIdxCtx: ValidationContext = {
+                success    : true,
+                errors     : [],
+                mode       : 'strip',
+                mutate     : true,
+                unionProbe : { stripped : 0, matched : 0 }
+            };
+            validators.patternProps(
+                patIdxObj,
+                patIdxObj,
+                '',
+                patIdxCtx,
+                [ 'known' ],
+                [[ /^p_/, validators.string ]],
+                ( v: any ) => v
+            );
+            expect( patIdxCtx.unionProbe?.matched ).toBe( 1 );
+
+            const patNonInPlaceObj: any = { extra : undefined };
+            const patNonInPlaceCtx: ValidationContext = {
+                success    : true,
+                errors     : [],
+                mode       : 'strip',
+                mutate     : false,
+                unionProbe : { stripped : 0, matched : 0 }
+            };
+            validators.patternProps(
+                patNonInPlaceObj,
+                {},
+                '',
+                patNonInPlaceCtx,
+                [],
+                []
+            );
+            expect( patNonInPlaceCtx.unionProbe?.stripped ).toBe( 0 );
+
+            const patRelaxedObj: any = { extra : 1 };
+            validators.patternProps(
+                patRelaxedObj,
+                patRelaxedObj,
+                '',
+                { success : true, errors : [], mode : 'relaxed', mutate : true },
+                [],
+                []
+            );
+            expect( patRelaxedObj.extra ).toBe( 1 );
+
+            // minItems, maxItems, minProperties, maxProperties, contains, propertyNames on non-matching types
+            const dummyCtx: ValidationContext = { success : true, errors : [], mode : 'strict' };
+            expect( validators.minItems( new Set([ 1, 2 ]), 'p', dummyCtx, 1 )).toEqual( new Set([ 1, 2 ]));
+            expect( validators.minItems( 123, 'p', dummyCtx, 1 )).toBe( 123 );
+            expect( validators.maxItems( 123, 'p', dummyCtx, 1 )).toBe( 123 );
+            expect( validators.minProperties( 123, 'p', dummyCtx, 1 )).toBe( 123 );
+            expect( validators.maxProperties( 123, 'p', dummyCtx, 1 )).toBe( 123 );
+            expect( validators.contains( 123, 'p', dummyCtx, validators.string )).toBe( 123 );
+            expect( validators.propertyNames( 123, 'p', dummyCtx, validators.string )).toBe( 123 );
+
+            // propertyNames with empty errors array on probe failure
+            const emptyErrCheck = ( _v: any, _p: string, c: ValidationContext ) =>
+            {
+                c.success = false;
+            };
+            const pnCtx: ValidationContext = { success : true, errors : [], mode : 'strict' };
+            validators.propertyNames({ a : 1 }, 'p', pnCtx, emptyErrCheck );
+            expect( pnCtx.errors[0].error ).toBe( 'PropertyNames' );
+
+            // anonymous async custom function & anonymous class in instanceOf
+            const asyncCtx: ValidationContext = { success : true, errors : [], mode : 'strict' };
+            validators.custom( 1, 'p', asyncCtx, (() => () => Promise.resolve( true ))());
+            expect( asyncCtx.errors[0].error ).toBe( 'AsyncCustomNotSupported' );
+
+            const instCtx: ValidationContext = { success : true, errors : [], mode : 'strict' };
+            validators.instanceOf({}, 'p', instCtx, (() => function () {})());
+            expect( instCtx.errors[0].error ).toBe( 'Type<Object>' );
+
+            // validators.set and validators.map query / json edge branches
+            expect( validators.set( undefined, 'p', { success : true, errors : [], mode : 'strict', from : 'query' }, validators.string )).toEqual( new Set());
+            expect( validators.set({ a : 1 }, 'p', { success : true, errors : [], mode : 'strict', from : 'query' }, ( x: any ) => x )).toEqual( new Set([{ a : 1 }]));
+            expect( validators.map( undefined, 'p', { success : true, errors : [], mode : 'strict', from : 'query' }, validators.string, validators.string )).toEqual( new Map());
+            expect( validators.map( null, 'p', { success : true, errors : [], mode : 'strict', from : 'query' }, validators.string, validators.string )).toEqual( new Map());
+            expect( validators.map([ 'x' ], 'p', { success : true, errors : [], mode : 'strict', from : 'query' }, validators.string, validators.string )).toEqual( new Map([[ '0', 'x' ]]));
+            expect( validators.map( 'bad', 'p', { success : true, errors : [], mode : 'strict', from : 'query' }, validators.string, validators.string )).toBe( 'bad' );
+            expect( validators.map({ a : undefined, b : 'ok' }, 'p', { success : true, errors : [], mode : 'strict', from : 'json' }, validators.string, validators.string )).toEqual( new Map([[ 'b', 'ok' ]]));
+
+            // toStandardSchemaIssues with nested union issues
+            const stdIssues = toStandardSchemaIssues([
+                {
+                    path   : 'user',
+                    value  : {},
+                    error  : 'Type<Union>',
+                    issues : [{ path : 'user.id', value : 'bad', error : 'Type<number>' }]
+                }
+            ]);
+            expect( stdIssues.length ).toBe( 2 );
+        });
+
+        it( 'should cover remaining schema-compiler.ts branches', () =>
+        {
+            // resolveSchemaRef root '#' / '#/', invalid ref format, boolean root, array traversal, boolean target, non-object target
+            const rootRefSchema = compileSchema({
+                type       : 'object',
+                properties : { self : { $ref : '#' } }
+            });
+            expect( is( rootRefSchema, { self : {} })).toBe( true );
+
+            expect(() => compileSchema({ $ref : 'relative/ref' })({}, '', ctx )).toThrow( /Schema reference not found/ );
+            expect(() => compileSchema({
+                $defs : { Bad : 123 as any },
+                $ref  : '#/$defs/Bad'
+            })({}, '', ctx )).toThrow( /Schema reference not found/ );
+
+            const arrayPointerSchema = compileSchema({
+                allOf : [{ type : 'string' }],
+                $ref  : '#/allOf/0'
+            });
+            expect( is( arrayPointerSchema, 'hello' )).toBe( true );
+
+            expect(() => compileSchema({
+                allOf : [{ type : 'string' }],
+                $ref  : '#/allOf/99'
+            })( 'hello', '', ctx )).toThrow( /Schema reference not found/ );
+
+            const boolTargetSchema = compileSchema({
+                $defs : { Always : true },
+                $ref  : '#/$defs/Always'
+            });
+            expect( is( boolTargetSchema, 'anything' )).toBe( true );
+
+            // string $recursiveAnchor + missing $dynamicRef target (with non-empty dynamicAnchors stack)
+            const recAnchorSchema = compileSchema({
+                $recursiveAnchor : 'myNode',
+                type             : 'string'
+            });
+            expect( is( recAnchorSchema, 'ok' )).toBe( true );
+
+            const missingDynSchema = compileSchema({
+                $dynamicAnchor : 'rootAnchor',
+                type           : 'object',
+                properties     : {
+                    bad : { $dynamicRef : '#nonexistent' }
+                }
+            });
+            expect(() => is( missingDynSchema, { bad : 1 })).toThrow( /Schema reference not found/ );
+
+            // dynamicAnchors stack search when top frame doesn't have anchor
+            const multiAnchorSchema = compileSchema({
+                $dynamicAnchor : 'first',
+                type           : 'object',
+                properties     : {
+                    nested : {
+                        $dynamicAnchor : 'second',
+                        $dynamicRef    : '#first'
+                    }
+                }
+            });
+            expect( is( multiAnchorSchema, { nested : {} })).toBe( true );
+
+            // not & if when base check fails (!ctx.success) + if without then / else
+            const notFailSchema = compileSchema({ type : 'string', not : { const : 'a' } });
+            expect( is( notFailSchema, 123 )).toBe( false );
+
+            const ifFailSchema = compileSchema({
+                type : 'string',
+                if   : { minLength : 2 },
+                else : { const : 'a' }
+            });
+            expect( is( ifFailSchema, 123 )).toBe( false );
+            expect( is( ifFailSchema, 'abc' )).toBe( true );
+            expect( is( ifFailSchema, 'a' )).toBe( true );
+
+            const ifNoElseSchema = compileSchema({
+                type : 'string',
+                if   : { minLength : 3 },
+                then : { maxLength : 5 }
+            });
+            expect( is( ifNoElseSchema, 'a' )).toBe( true );
+
+            // peelCombinators with $ref, $dynamicRef, $recursiveRef + sibling keyword
+            const peeledRef = compileSchema({
+                $defs     : { Str : { type : 'string' } },
+                $ref      : '#/$defs/Str',
+                minLength : 2
+            });
+            expect( is( peeledRef, 'ab' )).toBe( true );
+            expect( is( peeledRef, 'a' )).toBe( false );
+
+            const peeledDyn = compileSchema({
+                $dynamicAnchor : 'd',
+                $dynamicRef    : '#d',
+                type           : 'string'
+            });
+            expect( is( peeledDyn, 'ok' )).toBe( true );
+
+            const peeledRec = compileSchema({
+                $recursiveAnchor : true,
+                $recursiveRef    : '#',
+                type             : 'string'
+            });
+            expect( is( peeledRec, 'ok' )).toBe( true );
+
+            // Invalid type in type array
+            expect(() => compileSchema({ type : [ 'string', 'invalid' as any ] })).toThrow( /Unsupported JSON Schema type/ );
+
+            // allOf with relaxed mode, closed object without properties, & unevaluatedItems on array
+            const allOfRelaxed = compileSchema({
+                allOf : [
+                    { type : 'object', properties : { a : { type : 'number' } } }
+                ]
+            });
+            expect( validate( allOfRelaxed, { a : 1, extra : 2 }, 'relaxed' ).data ).toEqual({ a : 1, extra : 2 });
+
+            const allOfClosedNoProps = compileSchema({
+                allOf : [
+                    { type : 'object' }
+                ]
+            });
+            expect( validate( allOfClosedNoProps, { extra : 1 }, 'strip' ).data ).toEqual({});
+
+            const allOfUnevalItems = compileSchema({
+                allOf            : [{ type : 'array', prefixItems : [{ type : 'number' }] }],
+                unevaluatedItems : false
+            });
+            expect( is( allOfUnevalItems, [ 1 ])).toBe( true );
+            expect( is( allOfUnevalItems, [ 1, 2 ])).toBe( false );
+
+            const unevalItemsTrueSchema = compileSchema({
+                type             : 'array',
+                prefixItems      : [{ type : 'number' }],
+                unevaluatedItems : true
+            });
+            expect( is( unevalItemsTrueSchema, [ 1, 'extra' ])).toBe( true );
+
+            // string contentEncoding / contentMediaType / contentSchema combinations
+            const mediaOnlySchema = compileSchema({
+                type             : 'string',
+                contentMediaType : 'application/json'
+            });
+            expect( is( mediaOnlySchema, '{"a":1}' )).toBe( true );
+
+            const encodingWithSchema = compileSchema({
+                type            : 'string',
+                contentEncoding : '7bit',
+                contentSchema   : { type : 'string', minLength : 2 }
+            });
+            expect( is( encodingWithSchema, 'hello' )).toBe( true );
+
+            const encodingOnlySchema = compileSchema({
+                type            : 'string',
+                contentEncoding : '7bit'
+            });
+            expect( is( encodingOnlySchema, 'hello' )).toBe( true );
+
+            // draft-04 boolean false exclusiveMinimum / exclusiveMaximum without minimum / maximum
+            const draft04BoolExcl = compileSchema({
+                type             : 'number',
+                exclusiveMinimum : false as any,
+                exclusiveMaximum : false as any
+            });
+            expect( is( draft04BoolExcl, 5 )).toBe( true );
+
+            // oneOf and anyOf with from: 'query' and mutate: true
+            const oneOfCoerce = compileSchema({
+                oneOf : [
+                    { type : 'object', properties : { n : { type : 'number' } }, required : [ 'n' ] }
+                ]
+            });
+            expect( validate( oneOfCoerce, { n : '42' }, { from : 'query', mutate : true }).data ).toEqual({ n : 42 });
+
+            const anyOfMutate = compileSchema({
+                anyOf : [
+                    { type : 'object', properties : { n : { type : 'number' } }, required : [ 'n' ] }
+                ]
+            });
+            expect( validate( anyOfMutate, { n : 42 }, { mutate : true }).data ).toEqual({ n : 42 });
+
+            // items: true with unevaluatedItems: false
+            const itemsTrueSchema = compileSchema({
+                type             : 'array',
+                items            : true,
+                unevaluatedItems : false
+            });
+            expect( is( itemsTrueSchema, [ 1, 'extra' ])).toBe( true );
+
+            // dependencies when key is absent on object, plus typeless object with additionalProperties
+            const depSchema = compileSchema({
+                type         : 'object',
+                properties   : { a : { type : 'number' } },
+                dependencies : { a : [ 'b' ] }
+            });
+            expect( is( depSchema, {})).toBe( true );
+
+            const depNonPlainSchema = compileSchema({
+                type                 : 'object',
+                additionalProperties : true,
+                dependentSchemas     : { a : { type : 'string' } },
+                dependencies         : { b : { type : 'string' } }
+            });
+            expect( validate( depNonPlainSchema, { a : 1, b : 2 }, { from : () => 'coerced' }).success ).toBe( true );
+
+            const typelessWithAddProps = compileSchema({
+                properties           : { a : { type : 'number' } },
+                additionalProperties : false
+            });
+            expect( is( typelessWithAddProps, { a : 1 })).toBe( true );
         });
     });
 });

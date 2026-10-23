@@ -23,7 +23,7 @@ describe( 'Validators', () =>
             ctx.from = 'query';
             expect( validators.number( '42', 'n', ctx )).toBe( 42 );
             expect( assert(
-                ( v, path, c ) => validators.number( coerceQueryNumber( v ), path, c ),
+                ( v: any, path: string, c: any ) => validators.number( coerceQueryNumber( v ), path, c ),
                 '42'
             )).toBe( 42 );
         });
@@ -321,7 +321,7 @@ describe( 'Validators', () =>
 
         it( 'should revive objects via custom from', () => 
         {
-            ctx.from = ( value, c ) => 
+            ctx.from = ( value: any, c: any ) => 
             {
                 if( c.kind === 'Object' && value instanceof Map )
                 {
@@ -378,7 +378,7 @@ describe( 'Validators', () =>
             ]);
 
             expect( ctx.success ).toBe( false );
-            expect( ctx.errors.some( e => e.path === 'obj.a' )).toBe( true );
+            expect( ctx.errors.some(( e: any ) => e.path === 'obj.a' )).toBe( true );
         });
 
         it( 'should reject exotic objects for object and record', () => 
@@ -460,7 +460,7 @@ describe( 'Validators', () =>
             validators.object( input, 'o', ctx, ['id']);
 
             expect( ctx.success ).toBe( false );
-            expect( ctx.errors.some( e => e.error === 'PropertyNotAllowed<save>' )).toBe( true );
+            expect( ctx.errors.some(( e: any ) => e.error === 'PropertyNotAllowed<save>' )).toBe( true );
         });
 
         it( 'should accept constructor functions in instanceOf', () =>

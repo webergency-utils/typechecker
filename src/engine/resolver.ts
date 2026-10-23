@@ -10,6 +10,7 @@ import {
     NullableKind,
     createObjectCheck,
     createDateCheck,
+    createUrlCheck,
     createNullCheck,
     createUndefinedCheck,
     createIntersectionCheck,
@@ -21,7 +22,8 @@ import {
     wrapOptionTransform,
     createSetCheck,
     createMapCheck,
-    createInstanceOfCheck
+    createInstanceOfCheck,
+    templateToAst
 } from './generators.js';
 import {
     ICustomFunctionScope,
@@ -35,11 +37,17 @@ import {
     collectConstraintsFromProps,
     enumMemberTypes,
     getPropertyType,
+    getTemplateIndexInfos,
     getTypeProps,
+    inspectTupleType,
+    isBrandOnlyType,
     isConstraintOnlyType,
     isNativeEnumType,
+    isTagKey,
+    mapStructuralProps,
     minifyTypeString,
     peelTaggedIntersection,
+    stripUndefinedFromUnion,
     tryMergeObjectTypes,
     tryTaggedUnionTypes,
     typeHasDefaultTag,
@@ -47,6 +55,7 @@ import {
     VERBATIM_CUSTOM_SCOPE,
     type ParsedConstraint
 } from './type-helpers.js';
+import { resolveTypeIr } from './type-ir.js';
 import
 {
     hasCompetingObjectArms,
@@ -182,8 +191,12 @@ function tryMergeObjectIntersection(
     const indexValidator = merged.indexType
         ? buildValidatorScoped( merged.indexType, checker, validatorsMap, scope, undefined, unionResolution )
         : undefined;
+    const patternChecks = merged.patternIndexInfos?.map( pInfo => ({
+        pattern   : pInfo.pattern,
+        validator : buildValidatorScoped( pInfo.valueType, checker, validatorsMap, scope, undefined, unionResolution )
+    }));
 
-    return createObjectCheck( props, expected, indexValidator );
+    return createObjectCheck( props, expected, indexValidator, patternChecks );
 }
 
 /**
@@ -245,12 +258,17 @@ function constrainedBaseKind( type: ts.Type, checker: ts.TypeChecker ): { baseNa
         return { baseName : 'date', baseType : type };
     }
 
-    if( typeSymbolName( type ) === 'Set' )
+    if( typeSymbolName( type ) === 'URL' )
+    {
+        return { baseName : 'urlInstance', baseType : type };
+    }
+
+    if( typeSymbolName( type ) === 'Set' || typeSymbolName( type ) === 'ReadonlySet' )
     {
         return { baseName : 'set', baseType : type };
     }
 
-    if( typeSymbolName( type ) === 'Map' )
+    if( typeSymbolName( type ) === 'Map' || typeSymbolName( type ) === 'ReadonlyMap' )
     {
         return { baseName : 'map', baseType : type };
     }
@@ -289,8 +307,15 @@ function buildValidatorScoped(
         ? `${baseHash}_decl`
         : baseHash;
 
-    if( validatorsMap.has( resolvedHash )) 
+    const existing = validatorsMap.get( resolvedHash );
+
+    if( existing ) 
     {
+        if( ts.isIdentifier( existing ) && existing.text === `PENDING_${resolvedHash}` )
+        {
+            return templateToAst( `(v, path, ctx) => __val_${resolvedHash}(v, path, ctx)` );
+        }
+
         return ts.factory.createIdentifier( `__val_${resolvedHash}` );
     }
 
@@ -300,7 +325,7 @@ function buildValidatorScoped(
     let result: ts.Expression;
     const flags = type.getFlags();
 
-    const isUnion = ((( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion()) && ( type as any ).types ) ? true : false;
+    const isUnion = !( flags & ts.TypeFlags.Boolean ) && ((( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion()) && ( type as any ).types ) ? true : false;
     const isIntersection = ((( flags & ts.TypeFlags.Intersection ) !== 0 || type.isIntersection()) && ( type as any ).types ) ? true : false;
 
     if( isUnion ) 
@@ -390,7 +415,8 @@ function buildValidatorScoped(
                 }
                 else if( kind.baseType && ( kind.baseType.getFlags() & ts.TypeFlags.TemplateLiteral ))
                 {
-                    const baseValidator = buildValidatorScoped( kind.baseType, checker, validatorsMap, scope, undefined, unionResolution );
+                    const regexStr = buildTemplateLiteralRegex( kind.baseType as ts.TemplateLiteralType );
+                    const baseValidator = createTemplateLiteralCheck( regexStr, checker.typeToString( kind.baseType ));
                     result = createConstrainedPrimitiveCheck( kind.baseName, constraints, baseValidator );
                 }
                 else
@@ -459,16 +485,20 @@ function buildValidatorScoped(
     {
         result = wrapOptionTransform( createDateCheck(), 'Date' );
     }
+    else if( type.getSymbol()?.name === 'URL' )
+    {
+        result = wrapOptionTransform( createUrlCheck(), 'URL' );
+    }
     else if( type.getSymbol()?.name === 'RegExp' ) 
     {
         result = wrapOptionTransform( createRegExpCheck(), 'RegExp' );
     }
-    else if( type.getSymbol()?.name === 'Set' ) 
+    else if( type.getSymbol()?.name === 'Set' || type.getSymbol()?.name === 'ReadonlySet' ) 
     {
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
         result = createSetCheck( buildValidatorScoped( elementType, checker, validatorsMap, scope, undefined, unionResolution ));
     }
-    else if( type.getSymbol()?.name === 'Map' ) 
+    else if( type.getSymbol()?.name === 'Map' || type.getSymbol()?.name === 'ReadonlyMap' ) 
     {
         const keyType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
         const valueType = ( type as ts.TypeReference ).typeArguments?.[1] || checker.getAnyType();
@@ -540,8 +570,43 @@ function buildValidatorScoped(
     }
     else if( checker.isTupleType( type )) 
     {
-        const typeArgs = ( type as ts.TupleTypeReference ).typeArguments || [];
-        result = createTupleCheck( typeArgs.map( t => buildValidatorScoped( t, checker, validatorsMap, scope, undefined, unionResolution )));
+        const { typeArgs, elementFlags, hasRest, hasOptional, fixedCount, minItems } = inspectTupleType( type, checker );
+
+        if( hasRest && typeArgs.length > 0 )
+        {
+            const fixedArgs = typeArgs.slice( 0, fixedCount );
+            const restType = typeArgs[typeArgs.length - 1];
+            const checks = fixedArgs.map(( t, i ) =>
+                buildValidatorScoped(
+                    ( elementFlags[i] & ts.ElementFlags.Optional ) ? stripUndefinedFromUnion( t ) : t,
+                    checker,
+                    validatorsMap,
+                    scope,
+                    undefined,
+                    unionResolution
+                )
+            );
+            const restValidator = buildValidatorScoped( restType, checker, validatorsMap, scope, undefined, unionResolution );
+            result = createTupleCheck( checks, minItems, restValidator );
+        }
+        else if( hasOptional )
+        {
+            const checks = typeArgs.map(( t, i ) =>
+                buildValidatorScoped(
+                    ( elementFlags[i] & ts.ElementFlags.Optional ) ? stripUndefinedFromUnion( t ) : t,
+                    checker,
+                    validatorsMap,
+                    scope,
+                    undefined,
+                    unionResolution
+                )
+            );
+            result = createTupleCheck( checks, minItems );
+        }
+        else
+        {
+            result = createTupleCheck( typeArgs.map( t => buildValidatorScoped( t, checker, validatorsMap, scope, undefined, unionResolution )));
+        }
     }
     else if( checker.isArrayType( type )) 
     {
@@ -580,20 +645,25 @@ function buildValidatorScoped(
         }
         else
         {
+            const ir = resolveTypeIr( type, checker );
             const stringIndexInfo = checker.getIndexInfoOfType( type, ts.IndexKind.String );
-            const props = checker.getPropertiesOfType( type ).map( prop =>
-            {
-                const propType = getPropertyType( type, prop, checker );
+            const patternInfos = ir.getTemplateIndexInfos();
+            const rawProps = checker.getPropertiesOfType( type );
+            const hasInterfaceTags = rawProps.some( p => isTagKey( p.getName()));
+            const props = ir.getProps().map( p => ({
+                name       : p.name,
+                isOptional : p.isOptional,
+                validator  : buildValidatorScoped( p.type, checker, validatorsMap, scope, undefined, unionResolution ),
+                hasDefault : p.hasDefault
+            }));
+            const patternChecks = patternInfos.length > 0
+                ? patternInfos.map( pInfo => ({
+                    pattern   : pInfo.pattern,
+                    validator : buildValidatorScoped( pInfo.valueType, checker, validatorsMap, scope, undefined, unionResolution )
+                }))
+                : undefined;
 
-                return {
-                    name       : prop.getName(),
-                    isOptional : ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0,
-                    validator  : buildValidatorScoped( propType, checker, validatorsMap, scope, undefined, unionResolution ),
-                    hasDefault : typeHasDefaultTag( propType, checker )
-                };
-            });
-
-            if( stringIndexInfo && props.length === 0 )
+            if( stringIndexInfo && props.length === 0 && !patternChecks )
             {
                 result = createRecordCheck( buildValidatorScoped( stringIndexInfo.type, checker, validatorsMap, scope, undefined, unionResolution ));
             }
@@ -601,17 +671,34 @@ function buildValidatorScoped(
             {
                 result = wrapOptionTransform( createRecordCheck( createPrimitiveCheck( 'any' )), 'Object' );
             }
-            else if( flags & ts.TypeFlags.Object || type.isClassOrInterface() || type.isTypeParameter() || stringIndexInfo )
+            else if( flags & ts.TypeFlags.Object || type.isClassOrInterface() || type.isTypeParameter() || stringIndexInfo || patternChecks )
             {
                 const typeName = checker.typeToString( type );
                 const indexValidator = stringIndexInfo
                     ? buildValidatorScoped( stringIndexInfo.type, checker, validatorsMap, scope, undefined, unionResolution )
                     : undefined;
-                result = createObjectCheck( props, typeName, indexValidator );
+                result = createObjectCheck( props, typeName, indexValidator, patternChecks );
             }
             else
             {
                 result = wrapOptionTransform( createPrimitiveCheck( 'any' ), 'Object' );
+            }
+
+            if( hasInterfaceTags )
+            {
+                const rawConstraints = collectConstraintsFromProps( rawProps, checker, scope );
+
+                if( rawConstraints.length > 0 )
+                {
+                    const attached = attachNestedConstraintChecks(
+                        rawConstraints,
+                        checker,
+                        validatorsMap,
+                        scope,
+                        unionResolution
+                    );
+                    result = createConstrainedPrimitiveCheck( 'any', attached, result );
+                }
             }
         }
     }
@@ -634,9 +721,7 @@ function buildStructuralSignature( type: ts.Type, checker: ts.TypeChecker, visit
 
     if( memo !== undefined ){ return memo }
 
-    if( !typeId ){ return signatureOf( type, checker, visited ) }
-
-    visited.add( typeId );
+    if( typeId ){ visited.add( typeId ) }
 
     try
     {
@@ -651,7 +736,7 @@ function buildStructuralSignature( type: ts.Type, checker: ts.TypeChecker, visit
     finally
     {
         // Unwind, so a type appearing as two siblings is not mistaken for a cycle on the second visit.
-        visited.delete( typeId );
+        if( typeId ){ visited.delete( typeId ) }
     }
 }
 
@@ -739,6 +824,23 @@ function signatureOf( type: ts.Type, checker: ts.TypeChecker, visited: Set<numbe
         return `TemplateLiteral<${templateType.texts.join( ',' )}|${templateType.types.map( t => buildStructuralSignature( t, checker, visited )).join( ',' )}>`;
     }
 
+    if( checker.isTupleType( type ))
+    {
+        const target = ( type as ts.TupleTypeReference ).target || ( type as unknown as ts.TupleType );
+        const elementFlags = target?.elementFlags || [];
+        const typeArgs = ( type as ts.TupleTypeReference ).typeArguments || [];
+        const parts = typeArgs.map(( t, i ) =>
+        {
+            const flag = elementFlags[i] || ts.ElementFlags.Required;
+            const prefix = ( flag & ts.ElementFlags.Rest ) ? '...' : '';
+            const suffix = ( flag & ts.ElementFlags.Optional ) ? '?' : '';
+
+            return `${prefix}${buildStructuralSignature( t, checker, visited )}${suffix}`;
+        });
+
+        return `Tuple<${parts.join( ',' )}>`;
+    }
+
     if( checker.isArrayType( type )) 
     {
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
@@ -750,6 +852,8 @@ function signatureOf( type: ts.Type, checker: ts.TypeChecker, visited: Set<numbe
 
     if( typeSymbolName === 'Date' ) { return 'Date' }
 
+    if( typeSymbolName === 'URL' ) { return 'URL' }
+
     if( typeSymbolName === 'RegExp' ) { return 'RegExp' }
 
     if( typeSymbolName === 'Promise' ) 
@@ -759,14 +863,14 @@ function signatureOf( type: ts.Type, checker: ts.TypeChecker, visited: Set<numbe
         return `Promise<${buildStructuralSignature( valueType, checker, visited )}>`;
     }
 
-    if( typeSymbolName === 'Set' ) 
+    if( typeSymbolName === 'Set' || typeSymbolName === 'ReadonlySet' ) 
     {
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
 
         return `Set<${buildStructuralSignature( elementType, checker, visited )}>`;
     }
 
-    if( typeSymbolName === 'Map' ) 
+    if( typeSymbolName === 'Map' || typeSymbolName === 'ReadonlyMap' ) 
     {
         const keyType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
         const valueType = ( type as ts.TypeReference ).typeArguments?.[1] || checker.getAnyType();
@@ -790,8 +894,9 @@ function signatureOf( type: ts.Type, checker: ts.TypeChecker, visited: Set<numbe
     {
         const props = checker.getPropertiesOfType( type );
         const stringIndexInfo = checker.getIndexInfoOfType( type, ts.IndexKind.String );
+        const patternInfos = getTemplateIndexInfos( type, checker );
 
-        if( props.length === 0 ) 
+        if( props.length === 0 && patternInfos.length === 0 ) 
         {
             // Handle Record or empty object
             if( stringIndexInfo ) { return `Record<${buildStructuralSignature( stringIndexInfo.type, checker, visited )}>` }
@@ -803,11 +908,14 @@ function signatureOf( type: ts.Type, checker: ts.TypeChecker, visited: Set<numbe
 
             return `${prop.getName()}${isOptional ? '?' : ''}:${buildStructuralSignature( propType, checker, visited )}`;
         }).sort();
+        const patternSig = patternInfos.length > 0
+            ? patternInfos.map( p => `;[${p.pattern}]:${buildStructuralSignature( p.valueType, checker, visited )}` ).sort().join( '' )
+            : '';
         const indexSig = stringIndexInfo
             ? `;[string]:${buildStructuralSignature( stringIndexInfo.type, checker, visited )}`
             : '';
 
-        return `Object{${propSigs.join( ';' )}${indexSig}}`;
+        return `Object{${propSigs.join( ';' )}${patternSig}${indexSig}}`;
     }
 
     return 'any';
@@ -906,7 +1014,7 @@ function complexityOf( type: ts.Type, checker: ts.TypeChecker, walk: IComplexity
         const flags = type.getFlags();
         let complexity = 1;
 
-        const isUnion = ((( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion()) && ( type as any ).types ) ? true : false;
+        const isUnion = !( flags & ts.TypeFlags.Boolean ) && ((( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion()) && ( type as any ).types ) ? true : false;
         const isIntersection = ((( flags & ts.TypeFlags.Intersection ) !== 0 || type.isIntersection()) && ( type as any ).types ) ? true : false;
 
         if( isUnion ) 
@@ -941,12 +1049,14 @@ function complexityOf( type: ts.Type, checker: ts.TypeChecker, walk: IComplexity
         {
             const name = type.getSymbol()?.name;
 
-            if( name !== 'Date' && name !== 'Set' && name !== 'Map' && name !== 'RegExp' ) 
+            if( name !== 'Date' && name !== 'URL' && name !== 'Set' && name !== 'ReadonlySet' && name !== 'Map' && name !== 'ReadonlyMap' && name !== 'RegExp' ) 
             {
                 const props = checker.getPropertiesOfType( type );
 
                 for( const prop of props ) 
                 {
+                    if( isTagKey( prop.getName())){ continue }
+
                     const propType = getPropertyType( type, prop, checker );
                     complexity += complexityOf( propType, checker, walk );
                 }
@@ -986,7 +1096,7 @@ export function preScanType(
     }
     visited.add( typeId );
 
-    const isUnion = ((( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion()) && ( type as any ).types ) ? true : false;
+    const isUnion = !( flags & ts.TypeFlags.Boolean ) && ((( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion()) && ( type as any ).types ) ? true : false;
     const isIntersection = ((( flags & ts.TypeFlags.Intersection ) !== 0 || type.isIntersection()) && ( type as any ).types ) ? true : false;
 
     if( isUnion ) 
@@ -1021,7 +1131,19 @@ export function preScanType(
     {
         const name = type.getSymbol()?.name;
 
-        if( name !== 'Date' && name !== 'Set' && name !== 'Map' && name !== 'RegExp' ) 
+        if( name === 'Set' || name === 'ReadonlySet' )
+        {
+            const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
+            preScanType( elementType, checker, counts, circularHashes, visited );
+        }
+        else if( name === 'Map' || name === 'ReadonlyMap' )
+        {
+            const keyType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
+            const valueType = ( type as ts.TypeReference ).typeArguments?.[1] || checker.getAnyType();
+            preScanType( keyType, checker, counts, circularHashes, visited );
+            preScanType( valueType, checker, counts, circularHashes, visited );
+        }
+        else if( name !== 'Date' && name !== 'URL' && name !== 'RegExp' && name !== 'Promise' && ( !name || !BUFFER_LIKE.has( name ))) 
         {
             const hash = generateHash( type, checker );
             counts.set( hash, ( counts.get( hash ) || 0 ) + 1 );
@@ -1030,8 +1152,22 @@ export function preScanType(
 
             for( const prop of props ) 
             {
+                if( isTagKey( prop.getName())){ continue }
+
                 const propType = getPropertyType( type, prop, checker );
                 preScanType( propType, checker, counts, circularHashes, visited );
+            }
+
+            const stringIndexInfo = checker.getIndexInfoOfType( type, ts.IndexKind.String );
+
+            if( stringIndexInfo )
+            {
+                preScanType( stringIndexInfo.type, checker, counts, circularHashes, visited );
+            }
+
+            for( const pInfo of getTemplateIndexInfos( type, checker ))
+            {
+                preScanType( pInfo.valueType, checker, counts, circularHashes, visited );
             }
         }
     }
@@ -1039,7 +1175,117 @@ export function preScanType(
     visited.delete( typeId );
 }
 
-export function buildJsonSchema( type: ts.Type, checker: ts.TypeChecker ): JsonSchema
+export type JsonSchemaTarget = 'draft-07' | 'draft-2020-12' | 'openapi-3.0' | 'openapi-3.1';
+
+export interface JsonSchemaOptions
+{
+    target? : JsonSchemaTarget
+}
+
+function transformSchemaNodeForTarget( node: any, target: JsonSchemaTarget ): any
+{
+    if( node === null || typeof node !== 'object' ){ return node }
+
+    if( Array.isArray( node ))
+    {
+        return node.map( item => transformSchemaNodeForTarget( item, target ));
+    }
+
+    const out: Record<string, any> = {};
+
+    for( const [ k, v ] of Object.entries( node ))
+    {
+        out[k] = transformSchemaNodeForTarget( v, target );
+    }
+
+    if( target === 'draft-2020-12' || target === 'openapi-3.1' )
+    {
+        if( out.type === 'array' && Array.isArray( out.items ))
+        {
+            out.prefixItems = out.items;
+
+            if( out.additionalItems !== undefined )
+            {
+                out.items = out.additionalItems;
+                delete out.additionalItems;
+            }
+            else
+            {
+                out.items = false;
+            }
+        }
+    }
+    else if( target === 'openapi-3.0' )
+    {
+        if( typeof out.$ref === 'string' && out.$ref.startsWith( '#/$defs/' ))
+        {
+            out.$ref = `#/components/schemas/${out.$ref.slice( '#/$defs/'.length )}`;
+        }
+
+        if( out.const !== undefined )
+        {
+            out.enum = [ out.const ];
+            delete out.const;
+        }
+
+        if( Array.isArray( out.anyOf ) && out.anyOf.length === 2 )
+        {
+            const nullIdx = out.anyOf.findIndex(( arm: any ) => arm && typeof arm === 'object' && arm.type === 'null' && Object.keys( arm ).length === 1 );
+
+            if( nullIdx !== -1 )
+            {
+                const other = out.anyOf[1 - nullIdx];
+
+                if( other && typeof other === 'object' && !other.$ref )
+                {
+                    delete out.anyOf;
+                    Object.assign( out, other, { nullable : true });
+                }
+            }
+        }
+    }
+
+    return out;
+}
+
+function applyJsonSchemaTarget( root: any, target: JsonSchemaTarget | undefined ): JsonSchema
+{
+    if( !target || target === 'draft-07' ){ return root }
+
+    const transformed = transformSchemaNodeForTarget( root, target );
+
+    if( target === 'draft-2020-12' )
+    {
+        return {
+            $schema : 'https://json-schema.org/draft/2020-12/schema',
+            ...transformed
+        };
+    }
+
+    if( target === 'openapi-3.1' )
+    {
+        return {
+            $schema : 'https://spec.openapis.org/oas/3.1/dialect/base',
+            ...transformed
+        };
+    }
+
+    if( target === 'openapi-3.0' )
+    {
+        if( transformed.$defs )
+        {
+            const schemas = transformed.$defs;
+            delete transformed.$defs;
+            transformed.components = { schemas };
+        }
+
+        return transformed;
+    }
+
+    return transformed;
+}
+
+export function buildJsonSchema( type: ts.Type, checker: ts.TypeChecker, options?: JsonSchemaOptions ): JsonSchema
 {
     const defs: Record<string, any> = {};
     const visited = new Map<number, string>();
@@ -1048,6 +1294,7 @@ export function buildJsonSchema( type: ts.Type, checker: ts.TypeChecker ): JsonS
     preScanType( type, checker, counts, circularHashes, new Set<number>());
 
     const rootSchema = buildJsonSchemaInternal( type, checker, defs, visited, counts, circularHashes );
+    let result: JsonSchema;
 
     if( Object.keys( defs ).length > 0 ) 
     {
@@ -1058,21 +1305,25 @@ export function buildJsonSchema( type: ts.Type, checker: ts.TypeChecker ): JsonS
 
         if( defs[rootDefName]) 
         {
-            return {
+            result = {
                 $ref  : `#/$defs/${rootDefName}`,
                 $defs : defs
             };
         }
         else 
         {
-            return {
+            result = {
                 ...rootSchema,
                 $defs : defs
             };
         }
     }
+    else
+    {
+        result = rootSchema;
+    }
 
-    return rootSchema;
+    return applyJsonSchemaTarget( result, options?.target );
 }
 
 function buildJsonSchemaInternal(
@@ -1092,23 +1343,68 @@ function buildJsonSchemaInternal(
         return { $ref : `#/$defs/${visited.get( typeId )}` };
     }
 
-    const isUnion = ((( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion()) && ( type as any ).types ) ? true : false;
+    const isUnion = !( flags & ts.TypeFlags.Boolean ) && ((( flags & ts.TypeFlags.Union ) !== 0 || type.isUnion()) && ( type as any ).types ) ? true : false;
     const isIntersection = ((( flags & ts.TypeFlags.Intersection ) !== 0 || type.isIntersection()) && ( type as any ).types ) ? true : false;
 
     if( isUnion ) 
     {
+        const typeHash = circularHashes.size > 0 ? generateHash( type, checker ) : '';
+        const isCircularUnion = typeHash !== '' && circularHashes.has( typeHash );
+        const unionSymbol = type.aliasSymbol || type.getSymbol();
+        const unionDefName = `${unionSymbol ? unionSymbol.getName() : 'Union'}_${typeHash}`;
+
+        if( isCircularUnion )
+        {
+            if( defs[unionDefName])
+            {
+                return { $ref : `#/$defs/${unionDefName}` };
+            }
+
+            if( typeId ){ visited.set( typeId, unionDefName ) }
+        }
+
         const types = ( type as ts.UnionType ).types;
         const isBoolUnion = types.length === 2 &&
             types.every( t => ( t.getFlags() & ts.TypeFlags.BooleanLiteral ) !== 0 );
 
+        let unionSchema: any;
+
         if( isBoolUnion ) 
         {
-            return { type : 'boolean' };
+            unionSchema = { type : 'boolean' };
+        }
+        else
+        {
+            const boolLiterals = types.filter( t => ( t.getFlags() & ts.TypeFlags.BooleanLiteral ) !== 0 );
+
+            if( boolLiterals.length === 2 )
+            {
+                const nonBoolTypes = types.filter( t => ( t.getFlags() & ts.TypeFlags.BooleanLiteral ) === 0 );
+                unionSchema = {
+                    anyOf : [
+                        ...nonBoolTypes.map( t => buildJsonSchemaInternal( t, checker, defs, visited, counts, circularHashes )),
+                        { type : 'boolean' }
+                    ]
+                };
+            }
+            else
+            {
+                unionSchema = {
+                    anyOf : types.map( t => buildJsonSchemaInternal( t, checker, defs, visited, counts, circularHashes ))
+                };
+            }
         }
 
-        return {
-            anyOf : types.map( t => buildJsonSchemaInternal( t, checker, defs, visited, counts, circularHashes ))
-        };
+        if( isCircularUnion )
+        {
+            if( typeId ){ visited.delete( typeId ) }
+
+            defs[unionDefName] = unionSchema;
+
+            return { $ref : `#/$defs/${unionDefName}` };
+        }
+
+        return unionSchema;
     }
 
     if( isIntersection ) 
@@ -1136,7 +1432,19 @@ function buildJsonSchemaInternal(
                 continue;
             }
 
-            if( sFlags & ts.TypeFlags.String || sFlags & ts.TypeFlags.TemplateLiteral ) 
+            if( isBrandOnlyType( sub, checker ))
+            {
+                continue;
+            }
+
+            if( sFlags & ts.TypeFlags.TemplateLiteral )
+            {
+                baseSchema = {
+                    type    : 'string',
+                    pattern : buildTemplateLiteralRegex( sub as ts.TemplateLiteralType )
+                };
+            }
+            else if( sFlags & ts.TypeFlags.String ) 
             {
                 baseSchema = { type : 'string' };
             }
@@ -1156,11 +1464,15 @@ function buildJsonSchemaInternal(
             {
                 baseSchema = { 'x-typescript-type' : 'Date' };
             }
+            else if( sub.getSymbol()?.name === 'URL' )
+            {
+                baseSchema = { type : 'string', format : 'uri', 'x-typescript-type' : 'URL' };
+            }
             else if( sub.getSymbol()?.name === 'RegExp' ) 
             {
                 baseSchema = { 'x-typescript-type' : 'RegExp' };
             }
-            else if( sub.getSymbol()?.name === 'Set' ) 
+            else if( sub.getSymbol()?.name === 'Set' || sub.getSymbol()?.name === 'ReadonlySet' ) 
             {
                 const elementType = ( sub as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
                 baseSchema = {
@@ -1168,7 +1480,7 @@ function buildJsonSchemaInternal(
                     items               : buildJsonSchemaInternal( elementType, checker, defs, visited, counts, circularHashes )
                 };
             }
-            else if( sub.getSymbol()?.name === 'Map' ) 
+            else if( sub.getSymbol()?.name === 'Map' || sub.getSymbol()?.name === 'ReadonlyMap' ) 
             {
                 const keyType = ( sub as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
                 const valueType = ( sub as ts.TypeReference ).typeArguments?.[1] || checker.getAnyType();
@@ -1207,6 +1519,11 @@ function buildJsonSchemaInternal(
         return { 'x-typescript-type' : 'Date' };
     }
 
+    if( type.getSymbol()?.name === 'URL' )
+    {
+        return { type : 'string', format : 'uri', 'x-typescript-type' : 'URL' };
+    }
+
     if( type.getSymbol()?.name === 'RegExp' ) 
     {
         return { 'x-typescript-type' : 'RegExp' };
@@ -1226,7 +1543,7 @@ function buildJsonSchemaInternal(
         }
     }
 
-    if( type.getSymbol()?.name === 'Set' ) 
+    if( type.getSymbol()?.name === 'Set' || type.getSymbol()?.name === 'ReadonlySet' ) 
     {
         const elementType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
 
@@ -1236,7 +1553,7 @@ function buildJsonSchemaInternal(
         };
     }
 
-    if( type.getSymbol()?.name === 'Map' ) 
+    if( type.getSymbol()?.name === 'Map' || type.getSymbol()?.name === 'ReadonlyMap' ) 
     {
         const keyType = ( type as ts.TypeReference ).typeArguments?.[0] || checker.getAnyType();
         const valueType = ( type as ts.TypeReference ).typeArguments?.[1] || checker.getAnyType();
@@ -1256,6 +1573,19 @@ function buildJsonSchemaInternal(
     if( flags & ts.TypeFlags.Undefined || flags & ts.TypeFlags.Void ) 
     {
         return { 'x-typescript-type' : 'undefined' };
+    }
+
+    if( flags & ts.TypeFlags.Never )
+    {
+        return { not : {} };
+    }
+
+    if( flags & ts.TypeFlags.TemplateLiteral )
+    {
+        return {
+            type    : 'string',
+            pattern : buildTemplateLiteralRegex( type as ts.TemplateLiteralType )
+        };
     }
 
     if( flags & ts.TypeFlags.String ) 
@@ -1310,14 +1640,74 @@ function buildJsonSchemaInternal(
 
     if( checker.isTupleType( type )) 
     {
-        const elementTypes = ( type as ts.TypeReference ).typeArguments || [];
+        const typeHash = circularHashes.size > 0 ? generateHash( type, checker ) : '';
+        const isCircularTuple = typeHash !== '' && circularHashes.has( typeHash );
+        const tupleSymbol = type.aliasSymbol || type.getSymbol();
+        const tupleDefName = `${tupleSymbol ? tupleSymbol.getName() : 'Tuple'}_${typeHash}`;
 
-        return {
-            type     : 'array',
-            items    : elementTypes.map( t => buildJsonSchemaInternal( t, checker, defs, visited, counts, circularHashes )),
-            minItems : elementTypes.length,
-            maxItems : elementTypes.length
-        };
+        if( isCircularTuple )
+        {
+            if( defs[tupleDefName])
+            {
+                return { $ref : `#/$defs/${tupleDefName}` };
+            }
+
+            if( typeId ){ visited.set( typeId, tupleDefName ) }
+        }
+
+        const { typeArgs : elementTypes, elementFlags, hasRest, fixedCount, minItems } = inspectTupleType( type, checker );
+
+        let tupleSchema: any;
+
+        if( hasRest && elementTypes.length > 0 )
+        {
+            const fixedTypes = elementTypes.slice( 0, fixedCount );
+            const restType = elementTypes[elementTypes.length - 1];
+            tupleSchema = {
+                minItems,
+                type  : 'array',
+                items : fixedTypes.map(( t, i ) =>
+                    buildJsonSchemaInternal(
+                        ( elementFlags[i] & ts.ElementFlags.Optional ) ? stripUndefinedFromUnion( t ) : t,
+                        checker,
+                        defs,
+                        visited,
+                        counts,
+                        circularHashes
+                    )
+                ),
+                additionalItems : buildJsonSchemaInternal( restType, checker, defs, visited, counts, circularHashes )
+            };
+        }
+        else
+        {
+            tupleSchema = {
+                minItems,
+                maxItems : elementTypes.length,
+                type     : 'array',
+                items    : elementTypes.map(( t, i ) =>
+                    buildJsonSchemaInternal(
+                        ( elementFlags[i] & ts.ElementFlags.Optional ) ? stripUndefinedFromUnion( t ) : t,
+                        checker,
+                        defs,
+                        visited,
+                        counts,
+                        circularHashes
+                    )
+                )
+            };
+        }
+
+        if( isCircularTuple )
+        {
+            if( typeId ){ visited.delete( typeId ) }
+
+            defs[tupleDefName] = tupleSchema;
+
+            return { $ref : `#/$defs/${tupleDefName}` };
+        }
+
+        return tupleSchema;
     }
 
     if( flags & ts.TypeFlags.NonPrimitive )
@@ -1349,14 +1739,23 @@ function buildJsonSchemaInternal(
         const properties: Record<string, any> = {};
         const required: string[] = [];
         const props = checker.getPropertiesOfType( type );
+        let hasInterfaceTags = false;
 
         for( const prop of props )
         {
             const pName = prop.getName();
+
+            if( isTagKey( pName ))
+            {
+                hasInterfaceTags = true;
+                continue;
+            }
+
             const isOptional = ( prop.flags & ts.SymbolFlags.Optional ) !== 0;
             const propType = getPropertyType( type, prop, checker );
+            const effectivePropType = isOptional ? stripUndefinedFromUnion( propType ) : propType;
 
-            properties[pName] = buildJsonSchemaInternal( propType, checker, defs, visited, counts, circularHashes );
+            properties[pName] = buildJsonSchemaInternal( effectivePropType, checker, defs, visited, counts, circularHashes );
 
             if( !isOptional ) 
             {
@@ -1368,6 +1767,20 @@ function buildJsonSchemaInternal(
             type : 'object',
             properties
         };
+
+        const patternInfos = getTemplateIndexInfos( type, checker );
+
+        if( patternInfos.length > 0 )
+        {
+            const patternProperties: Record<string, any> = {};
+
+            for( const pInfo of patternInfos )
+            {
+                patternProperties[pInfo.pattern] = buildJsonSchemaInternal( pInfo.valueType, checker, defs, visited, counts, circularHashes );
+            }
+
+            schemaObj.patternProperties = patternProperties;
+        }
 
         if( stringIndexInfo ) 
         {
@@ -1381,6 +1794,19 @@ function buildJsonSchemaInternal(
         if( required.length > 0 ) 
         {
             schemaObj.required = required;
+        }
+
+        if( hasInterfaceTags )
+        {
+            applyConstraintsToJsonSchema(
+                schemaObj,
+                collectConstraintsFromProps( props, checker ),
+                checker,
+                defs,
+                visited,
+                counts,
+                circularHashes
+            );
         }
 
         if( typeId ) { visited.delete( typeId ) }

@@ -22,7 +22,7 @@ export function templateToAst( template: string ): ts.Expression
 
     if( ts.isExpressionStatement( expressionStatement ))
     {
-        const expr = stripPositions( expressionStatement.expression );
+        const expr = expressionStatement.expression;
         templateAstCache.set( template, expr );
 
         return stripPositions( expr );
@@ -39,7 +39,7 @@ export function templateToAst( template: string ): ts.Expression
 
     if( ts.isVariableStatement( variableStatement ))
     {
-        const expr = stripPositions( variableStatement.declarationList.declarations[0].initializer! );
+        const expr = variableStatement.declarationList.declarations[0].initializer!;
         templateAstCache.set( template, expr );
 
         return stripPositions( expr );
@@ -54,8 +54,44 @@ function stripPositions<T extends ts.Node>( node: T ): T
     const visitor = ( n: ts.Node ): ts.Node => 
     {
         const cloned = ts.visitEachChild( n, visitor, undefined );
-        const res = { ...cloned, pos : -1, end : -1 };
+        const res: any = {
+            ...cloned,
+            pos      : -1,
+            end      : -1,
+            flags    : ( cloned.flags | ts.NodeFlags.Synthesized ) & ~ts.NodeFlags.ContextFlags,
+            original : undefined,
+            emitNode : undefined,
+            parent   : undefined
+        };
         Object.setPrototypeOf( res, Object.getPrototypeOf( cloned ));
+
+        for( const key of Object.keys( res ))
+        {
+            if( key === 'parent' || key === 'original' || key === 'emitNode' ){ continue }
+
+            const val = res[key];
+
+            if( Array.isArray( val ) && typeof ( val as any ).pos === 'number' )
+            {
+                const arr = ts.factory.createNodeArray( val, ( val as any ).hasTrailingComma );
+                ts.setTextRange( arr, { pos : -1, end : -1 });
+                res[key] = arr;
+            }
+            else if( val && typeof val === 'object' && typeof val.kind === 'number' && typeof val.pos === 'number' )
+            {
+                const tok = {
+                    ...val,
+                    pos      : -1,
+                    end      : -1,
+                    flags    : ( val.flags | ts.NodeFlags.Synthesized ) & ~ts.NodeFlags.ContextFlags,
+                    original : undefined,
+                    emitNode : undefined,
+                    parent   : undefined
+                };
+                Object.setPrototypeOf( tok, Object.getPrototypeOf( val ));
+                res[key] = tok;
+            }
+        }
 
         return res as ts.Node;
     };
@@ -98,7 +134,7 @@ export function createPrimitiveCheck( type: string ): ts.Expression
 
 export function wrapOptionTransform( inner: ts.Expression, kind: string, tags: string[] = []): ts.Expression
 {
-    const tpl = '(v, path, ctx) => { v = __INNER__(v, path, ctx); if (ctx.success) v = validators.applyOptionTransform(v, path, ctx, __TAGS__, __KIND__); return v; }';
+    const tpl = '(v, path, ctx) => { v = __INNER__(v, path, ctx); if (ctx.transform && ctx.success) v = validators.applyOptionTransform(v, path, ctx, __TAGS__, __KIND__); return v; }';
 
     return injectNodes( templateToAst( tpl ), {
         '__INNER__' : inner,
@@ -110,6 +146,8 @@ export function wrapOptionTransform( inner: ts.Expression, kind: string, tags: s
 function constrainedCoercionKind( baseType: string ): string
 {
     if( baseType === 'date' ){ return 'Date' }
+
+    if( baseType === 'urlInstance' ){ return 'URL' }
 
     if( baseType === 'array' ){ return 'Array' }
 
@@ -264,7 +302,7 @@ export function createConstrainedPrimitiveCheck( baseType: string, constraints: 
         const _s = ctx.success;
         ctx.success = true;
         ${defaultInit}${transformInit}v = __BASE_CHECK__;
-        if (ctx.success) v = validators.applyOptionTransform(v, path, ctx, __TAGS__, __KIND__);
+        if (ctx.transform && ctx.success) v = validators.applyOptionTransform(v, path, ctx, __TAGS__, __KIND__);
         if (ctx.success && v !== undefined && v !== null) {
             ${constraintCode};
         }
@@ -336,7 +374,7 @@ export function createTemplateLiteralCheck( regexStr: string, expected: string )
 {
     const tpl = `(v, path, ctx) => validators.templateLiteral(v, path, ctx, validators.safeRegExp(${JSON.stringify( regexStr )}), ${JSON.stringify( expected )})`;
 
-    return stripPositions( templateToAst( tpl ));
+    return templateToAst( tpl );
 }
 
 export type NullableKind = 'optional' | 'nullable' | 'nullish';
@@ -416,7 +454,12 @@ export function createUnionCheck(
     });
 }
 
-export function createObjectCheck( props: any[], expected: string = 'object', indexValidator?: ts.Expression ): ts.Expression 
+export function createObjectCheck(
+    props          : any[],
+    expected       : string = 'object',
+    indexValidator?: ts.Expression,
+    patternChecks? : { pattern : string, validator : ts.Expression }[]
+): ts.Expression 
 {
     const propDefinitions = props.map(( p ) => 
     {
@@ -439,6 +482,58 @@ export function createObjectCheck( props: any[], expected: string = 'object', in
         undefined,
         [ts.factory.createArrayLiteralExpression( allowedKeys )]
     );
+
+    if( patternChecks && patternChecks.length > 0 )
+    {
+        const patternDefs = patternChecks.map( pc => ts.factory.createArrayLiteralExpression([
+            ts.factory.createCallExpression(
+                ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'validators' ), ts.factory.createIdentifier( 'safeRegExp' )),
+                undefined,
+                [ ts.factory.createStringLiteral( pc.pattern ) ]
+            ),
+            pc.validator
+        ]));
+
+        if( indexValidator )
+        {
+            const tpl = `
+            ((keys, props, patterns) => (v, path, ctx) => {
+                const obj = validators.object(v, path, ctx, undefined, __EXPECTED__);
+                if (obj === false) return v;
+                const data = validators.objectShell(obj, ctx, true);
+                validators.props(obj, data, path, ctx, props);
+                validators.patternProps(obj, data, path, ctx, keys, patterns, __INDEX__);
+                return data;
+            })(__KEYS__, __PROPS__, __PATTERNS__)
+            `;
+
+            return injectNodes( templateToAst( tpl ), {
+                '__KEYS__'     : allowedKeySet,
+                '__EXPECTED__' : ts.factory.createStringLiteral( expected ),
+                '__PROPS__'    : ts.factory.createArrayLiteralExpression( propDefinitions, true ),
+                '__PATTERNS__' : ts.factory.createArrayLiteralExpression( patternDefs, true ),
+                '__INDEX__'    : indexValidator
+            });
+        }
+
+        const tpl = `
+        ((keys, props, patterns) => (v, path, ctx) => {
+            const obj = validators.object(v, path, ctx, undefined, __EXPECTED__);
+            if (obj === false) return v;
+            const data = validators.objectShell(obj, ctx, true);
+            validators.props(obj, data, path, ctx, props);
+            validators.patternProps(obj, data, path, ctx, keys, patterns);
+            return data;
+        })(__KEYS__, __PROPS__, __PATTERNS__)
+        `;
+
+        return injectNodes( templateToAst( tpl ), {
+            '__KEYS__'     : allowedKeySet,
+            '__EXPECTED__' : ts.factory.createStringLiteral( expected ),
+            '__PROPS__'    : ts.factory.createArrayLiteralExpression( propDefinitions, true ),
+            '__PATTERNS__' : ts.factory.createArrayLiteralExpression( patternDefs, true )
+        });
+    }
 
     if( indexValidator )
     {
@@ -486,8 +581,28 @@ export function createRecordCheck( valueValidator: ts.Expression ): ts.Expressio
     return injectNodes( templateToAst( tpl ), { '__CHILD__' : valueValidator });
 }
 
-export function createTupleCheck( checks: ts.Expression[]): ts.Expression 
+export function createTupleCheck( checks: ts.Expression[], minItems?: number, restValidator?: ts.Expression ): ts.Expression 
 {
+    if( restValidator )
+    {
+        const min = minItems !== undefined ? minItems : checks.length;
+        const tpl = `((checks, rest) => (v, path, ctx) => validators.tuple(v, path, ctx, checks, ${min}, rest))(__CHECKS__, __REST__)`;
+
+        return injectNodes( templateToAst( tpl ), {
+            '__CHECKS__' : ts.factory.createArrayLiteralExpression( checks ),
+            '__REST__'   : restValidator
+        });
+    }
+
+    if( minItems !== undefined && minItems !== checks.length )
+    {
+        const tpl = `((checks) => (v, path, ctx) => validators.tuple(v, path, ctx, checks, ${minItems}))(__CHECKS__)`;
+
+        return injectNodes( templateToAst( tpl ), {
+            '__CHECKS__' : ts.factory.createArrayLiteralExpression( checks )
+        });
+    }
+
     const tpl = '((checks) => (v, path, ctx) => validators.tuple(v, path, ctx, checks))(__CHECKS__)';
 
     return injectNodes( templateToAst( tpl ), {
@@ -498,6 +613,11 @@ export function createTupleCheck( checks: ts.Expression[]): ts.Expression
 export function createDateCheck(): ts.Expression 
 {
     return ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'validators' ), ts.factory.createIdentifier( 'date' ));
+}
+
+export function createUrlCheck(): ts.Expression
+{
+    return ts.factory.createPropertyAccessExpression( ts.factory.createIdentifier( 'validators' ), ts.factory.createIdentifier( 'urlInstance' ));
 }
 
 export function createRegExpCheck(): ts.Expression 

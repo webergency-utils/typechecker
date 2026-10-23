@@ -92,7 +92,7 @@ describe( 'Serializer & Stringify', () =>
 
             it( 'throws for non-array input', () =>
             {
-                expect(() => serializeArray( 'nope' as any, v => v, 'items' )).toThrow( 'Serialization error at "items": Type<Array>' );
+                expect(() => serializeArray( 'nope' as any, ( v: any ) => String( v ), 'items' )).toThrow( 'Serialization error at "items": Type<Array>' );
             });
         });
 

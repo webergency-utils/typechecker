@@ -1,5 +1,5 @@
 import * as ts from 'typescript';
-import transformer from '../src/transformer';
+import transformer from '../src/transformer.js';
 
 const filePath = './tests/fixtures/sample.ts';
 

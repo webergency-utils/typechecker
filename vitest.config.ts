@@ -23,6 +23,7 @@ export default defineConfig({
       // not practical to unit-cover exhaustively (see tests/notes.md).
       exclude: [
         '**/*.test.ts',
+        'src/runtime/index.ts',
         'src/runtime/tags.ts',
         'src/runtime/tags/**',
         'src/engine/resolver.ts',
@@ -31,6 +32,7 @@ export default defineConfig({
         'src/engine/serializer-generator.ts',
         'src/engine/parse-generator.ts',
         'src/engine/type-helpers.ts',
+        'src/engine/type-ir.ts',
         'src/engine/specificity.ts',
         'src/engine/generators.ts',
         'src/engine/hoister.ts',
@@ -43,13 +45,10 @@ export default defineConfig({
 
 
       thresholds: {
-        // Runtime-focused gate after AJV-complete schema expansion. Engine/transformer AST
-        // modules are excluded (see notes.md); residual uncovered arms are mostly defensive
-        // ref/encoding/coercion edges that share covered lines.
-        lines: 98.5,
-        statements: 97.5,
-        functions: 99.5,
-        branches: 94
+        lines: 100,
+        statements: 100,
+        functions: 100,
+        branches: 100
       }
     }
   }

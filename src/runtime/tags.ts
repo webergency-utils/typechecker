@@ -90,15 +90,15 @@ type IsAny<T> = 0 extends 1 & T ? true : false;
  * from any properties that have a `tag.Default` applied.
  */
 export type ResolveDefaults<T> = T extends
-    | Date | RegExp | Promise<any> | Map<any, any> | Set<any>
+    | Date | globalThis.URL | RegExp | Promise<any> | ReadonlyMap<any, any> | ReadonlySet<any>
     | ArrayBuffer | SharedArrayBuffer | DataView | Buffer
     | Int8Array | Uint8Array | Uint8ClampedArray
     | Int16Array | Uint16Array | Int32Array | Uint32Array
     | Float32Array | Float64Array | BigInt64Array | BigUint64Array
     | symbol | string | number | boolean | bigint | null | undefined | Function
     ? T
-    : T extends Array<infer U>
-        ? Array<ResolveDefaults<U>>
+    : T extends readonly unknown[]
+        ? { [K in keyof T]: ResolveDefaults<T[K]> }
         : T extends object
             ?
             {

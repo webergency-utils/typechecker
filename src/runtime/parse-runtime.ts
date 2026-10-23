@@ -1,4 +1,4 @@
-import { validators, isMultipleOfNumber, hasUniqueItems, isPlainObject } from './validators.js';
+import { validators, isMultipleOfNumber, hasUniqueItems, isPlainObject, findExclusiveKeyArm } from './validators.js';
 import { getCachedPattern, testRegex } from './regex.js';
 import { resolvePath, hasPath } from './path.js';
 import type { CoercionKind } from './validators.js';
@@ -21,6 +21,43 @@ export class ParseError extends Error
         super( path ? `Parse error at "${path}": ${message}` : `Parse error: ${message}` );
         this.name = 'ParseError';
         this.path = path;
+    }
+}
+
+export interface SafeParseSuccess<T>
+{
+    success : true
+    data    : T
+    error?  : undefined
+}
+
+export interface SafeParseFailure
+{
+    success : false
+    data?   : undefined
+    error   : ParseError
+}
+
+export type SafeParseResult<T> = SafeParseSuccess<T> | SafeParseFailure;
+
+export function safeParse<T>(
+    parserFn : ( input: unknown, options?: any ) => T,
+    input    : unknown,
+    options? : any
+): SafeParseResult<T>
+{
+    try
+    {
+        return { success : true, data : parserFn( input, options ) };
+    }
+    catch( e )
+    {
+        if( e instanceof ParseError )
+        {
+            return { success : false, error : e };
+        }
+
+        throw e;
     }
 }
 
@@ -121,25 +158,6 @@ export function recordParseObjectStats( stripped: number, matched: number, ctx?:
         top.stripped += stripped;
         top.matched += matched;
     }
-}
-
-function findExclusiveKeyArm( v: any, exclusiveKeys: string[] | undefined ): number
-{
-    if( !exclusiveKeys || !isPlainObject( v )){ return -1 }
-
-    let matchedIdx = -1;
-
-    for( let i = 0; i < exclusiveKeys.length; i++ )
-    {
-        if( v[exclusiveKeys[i]] !== undefined )
-        {
-            if( matchedIdx !== -1 ){ return -1 }
-
-            matchedIdx = i;
-        }
-    }
-
-    return matchedIdx;
 }
 
 export function parseUnion(
@@ -276,6 +294,16 @@ export function parseUnion(
 }
 
 const intRE = /^[0-9]+$/;
+const MAX_QUERY_ARRAY_INDEX = 1000000;
+const MAX_QUERY_DEPTH = 32;
+const MAX_QUERY_KEYS = 10000;
+
+function isQueryArrayIndex( key: string ): boolean
+{
+    if( !intRE.test( key ) || key.length > 7 ){ return false }
+
+    return parseInt( key, 10 ) <= MAX_QUERY_ARRAY_INDEX;
+}
 
 function isUnsafeKey( key: string | number ): boolean
 {
@@ -290,8 +318,6 @@ function createPlainObject(): Record<string | number, any>
 /** Assign a dynamic key without prototype-polluting sinks (`obj[key] = …`). */
 function setOwn( obj: any, key: string | number, value: any ): void
 {
-    if( isUnsafeKey( key )){ return }
-
     Object.defineProperty( obj, key,
         {
             value,
@@ -320,11 +346,9 @@ function maxNumericKey( target: any ): number
 
     for( const k of Object.keys( target ))
     {
-        if( intRE.test( k ))
+        if( isQueryArrayIndex( k ))
         {
-            const num = parseInt( k, 10 );
-
-            if( num > max ){ max = num }
+            max = Math.max( max, parseInt( k, 10 ));
         }
     }
 
@@ -346,7 +370,8 @@ export function parseQueryString( querystring: string ): Record<string, any>
 
     const assign = ( key: string | number, value: any ) =>
     {
-        const keys = key.toString().replace( /\]\[/g, '[' ).replace( /]$/, '' ).split( '[' );
+        const rawKeys = key.toString().replace( /\]\[/g, '[' ).replace( /]$/, '' ).split( '[' );
+        const keys = rawKeys.length > MAX_QUERY_DEPTH ? rawKeys.slice( 0, MAX_QUERY_DEPTH ) : rawKeys;
         let obj = query, parent, parent_key;
 
         for( let i = 0; i < keys.length; ++i )
@@ -355,7 +380,7 @@ export function parseQueryString( querystring: string ): Record<string, any>
 
             if( isUnsafeKey( k )){ return }
 
-            if( k && intRE.test( k.toString())){ k = parseInt( k, 10 ) }
+            if( k && isQueryArrayIndex( k.toString())){ k = parseInt( k, 10 ) }
             else if( k === '' )
             {
                 k = Array.isArray( obj ) ? obj.length - 1 : maxNumericKey( obj );
@@ -381,7 +406,7 @@ export function parseQueryString( querystring: string ): Record<string, any>
             {
                 if( !obj[k])
                 {
-                    setOwn( obj, k, ( keys[i + 1] === '' || intRE.test( keys[i + 1])) ? [] : createPlainObject());
+                    setOwn( obj, k, ( keys[i + 1] === '' || isQueryArrayIndex( keys[i + 1])) ? [] : createPlainObject());
                 }
 
                 if( isUnsafeKey( keys[i + 1])){ return }
@@ -419,11 +444,13 @@ export function parseQueryString( querystring: string ): Record<string, any>
         }
     };
 
-    let value, pair, last_pair = 0;
+    let value, pair, last_pair = 0, paramCount = 0;
     const sep = '&', eq = '=';
 
     do
     {
+        if( ++paramCount > MAX_QUERY_KEYS ){ break }
+
         pair = querystring.indexOf( sep, last_pair );
 
         if( pair === -1 ){ pair = querystring.length }
@@ -581,6 +608,7 @@ export function parseMap<K, V>(
         ( Array.isArray( val ) && !allowSparseArray ) ||
         val instanceof Set ||
         val instanceof Date ||
+        val instanceof URL ||
         val instanceof RegExp
     )
     {
@@ -601,15 +629,30 @@ export function parseMap<K, V>(
 
 export function coerceBuffer( val: any, path: string ): Buffer
 {
-    if( typeof Buffer !== 'undefined' && Buffer.isBuffer( val )){ return val }
+    const hasBuffer = typeof Buffer !== 'undefined';
 
-    if( val instanceof Uint8Array ){ return Buffer.from( val ) }
+    if( hasBuffer && Buffer.isBuffer( val )){ return val }
 
-    if( val instanceof ArrayBuffer ){ return Buffer.from( new Uint8Array( val )) }
+    if( val instanceof Uint8Array )
+    {
+        return hasBuffer ? Buffer.from( val ) : ( new Uint8Array( val ) as unknown as Buffer );
+    }
+
+    if( val instanceof ArrayBuffer )
+    {
+        return hasBuffer ? Buffer.from( new Uint8Array( val )) : ( new Uint8Array( val ) as unknown as Buffer );
+    }
 
     if( typeof val === 'string' )
     {
-        return Buffer.from( val, 'base64' );
+        if( hasBuffer ){ return Buffer.from( val, 'base64' ) }
+
+        const bin = atob( val );
+        const out = new Uint8Array( bin.length );
+
+        for( let i = 0; i < bin.length; i++ ){ out[i] = bin.charCodeAt( i ) }
+
+        return out as unknown as Buffer;
     }
 
     throw new ParseError( path, 'Type<Buffer>' );
@@ -631,12 +674,29 @@ export function coerceBigInt( val: any, path: string ): bigint
         }
     }
 
-    if( typeof val === 'number' && Number.isFinite( val ) && Number.isInteger( val ))
+    if( typeof val === 'number' && Number.isSafeInteger( val ))
     {
         return BigInt( val );
     }
 
     throw new ParseError( path, 'Type<bigint>' );
+}
+
+export function coerceUrl( val: any, path: string ): URL
+{
+    if( val instanceof URL ){ return val }
+
+    if( typeof val === 'string' && val.trim() !== '' )
+    {
+        try
+        {
+            return new URL( val );
+        }
+        catch
+        { /* fall through */ }
+    }
+
+    throw new ParseError( path, 'Type<URL>' );
 }
 
 export type ParseConstraint =
@@ -830,7 +890,7 @@ export function applyParseConstraints(
 
             if( !ctx.success )
             {
-                throw new ParseError( path, ctx.errors[0]?.error || msg || `Format<${c.value}>` );
+                throw new ParseError( path, ctx.errors[0].error );
             }
         }
         else if( c.type === 'requires' )
@@ -934,7 +994,7 @@ export function reviveTree( value: any, reviver: JsonReviver ): any
 {
     try
     {
-        return walkRevive( value, reviver );
+        return runWithParseProbeContext( createParseProbeContext(), () => walkRevive( value, reviver ));
     }
     catch( e )
     {
@@ -955,9 +1015,14 @@ export function applyParseTransform(
     root      : any
 ): any
 {
+    if( transform == null || value === undefined || value === null ){ return value }
+
     try
     {
-        return applyNodeTransform( value, path, transform, kind, tags, root );
+        return runWithParseProbeContext(
+            createParseProbeContext(),
+            () => applyNodeTransform( value, path, transform, kind, tags, root )
+        );
     }
     catch( e )
     {
