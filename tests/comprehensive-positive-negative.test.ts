@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import * as path from 'path';
 import ts from 'typescript';
 import { emitAndImport, emitAndRequire } from './helpers/compile.js';
 import
@@ -1828,7 +1829,7 @@ describe( 'Comprehensive Positive & Negative Verification Suite', () =>
         it( 'executes real bundler createBundlerTransformer().transform() and IDE plugin getSemanticDiagnostics() for positive and negative cases', () =>
         {
             const bundler = createBundlerTransformer({ transpile : true });
-            const virtualFile = '/Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/__virtual_bundler_e2e__.ts';
+            const virtualFile = path.resolve( './src/__virtual_bundler_e2e__.ts' );
             const validMacroSource = `
                 import { is } from './index.js';
                 export const checkStr = ( x: unknown ) => is<string>( x );
@@ -1845,7 +1846,7 @@ describe( 'Comprehensive Positive & Negative Verification Suite', () =>
             expect( bundler.transform( 'export const x = 1;', '/app/src/plain.ts' )).toBeNull();
 
             // IDE Language Service plugin: positive (no error on valid literal) & negative (diagnostic 90001 on invalid literal)
-            const ideFile = '/Users/tomaskorenko/Projects/Github/webergency-utils/typechecker/src/__virtual_ide_e2e__.ts';
+            const ideFile = path.resolve( './src/__virtual_ide_e2e__.ts' );
             const ideSource = `
                 import type { Minimum } from './index.js';
                 type AdultAge = number & Minimum<18>;
