@@ -34,15 +34,11 @@ export default defineConfig({
     ],
     format    : [ 'cjs', 'esm' ],
     dts       : true,
+    minify    : false,
     sourcemap : false,
     clean     : true,
     shims     : true,
     splitting : false,
-    esbuildOptions( options )
-    {
-        options.minifyWhitespace = true;
-        options.minifySyntax = true;
-    },
     esbuildPlugins : [
         {
             name : 'dedupe-runtime-entrypoints',
