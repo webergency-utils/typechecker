@@ -1,6 +1,6 @@
 {
   "name": "@webergency-utils/typechecker",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "type": "module",
   "sideEffects": false,
   "description": "TypeScript compiler plugin for runtime validation",
@@ -198,6 +198,7 @@
   },
   "overrides": {
     "esbuild": "^0.28.1",
-    "nanoid": "^3.3.18"
+    "nanoid": "^3.3.18",
+    "minimatch": "^11.0.4"
   }
 }
