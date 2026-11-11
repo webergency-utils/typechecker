@@ -175,6 +175,39 @@ function normalizeString( str: string ): string
     return str.replace( /_+/g, '_' ).replace( /^_|_$/g, '' );
 }
 
+function isEndChar( code: number ): boolean
+{
+    return code === 95 || code === 45 || code === 46 || code === 36;
+}
+
+function extractEnds( str: string ): { leading : string, core : string, trailing : string }
+{
+    let start = 0;
+
+    while( start < str.length && isEndChar( str.charCodeAt( start )))
+    {
+        start++;
+    }
+
+    if( start === str.length )
+    {
+        return { leading : str, core : '', trailing : '' };
+    }
+
+    let end = str.length - 1;
+
+    while( end >= start && isEndChar( str.charCodeAt( end )))
+    {
+        end--;
+    }
+
+    return {
+        leading  : str.slice( 0, start ),
+        core     : str.slice( start, end + 1 ),
+        trailing : str.slice( end + 1 )
+    };
+}
+
 const casingCache = new Map<string, string>();
 
 export function formatCasing( str: string, casing: CasingFormat, options: ConvertCasingOptions = {}): string
@@ -188,17 +221,17 @@ export function formatCasing( str: string, casing: CasingFormat, options: Conver
     let leading = '';
     let trailing = '';
     let core: string;
+    const ends = extractEnds( str );
 
     if( preserveEnds )
     {
-        const match = /^([_\-.$]*)([\s\S]*?)([_\-.$]*)$/.exec( str )!;
-        leading = match[ 1 ];
-        core = match[ 2 ];
-        trailing = match[ 3 ];
+        leading = ends.leading;
+        core = ends.core;
+        trailing = ends.trailing;
     }
     else 
     {
-        core = str.replace( /^([_\-.$]*)/, '' ).replace( /([_\-.$]*)$/, '' );
+        core = ends.core;
     }
 
     const normalized = normalizeString( core );

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { convertPropertyCasing } from '../src/runtime/casing.js';
+import { convertPropertyCasing, formatCasing } from '../src/runtime/casing.js';
 
 describe( 'Casing Conversion Utilities', () => 
 {
@@ -191,6 +191,20 @@ describe( 'Casing Conversion Utilities', () =>
         const result = convertPropertyCasing( obj, 'camelCase', { preserveEnds : false });
         
         expect( result ).toEqual({ 'userId' : 1, 'firstName' : 2 });
+    });
+
+    it( 'should handle strings with only special characters', () =>
+    {
+        // Arrange
+        const specialStr = '___';
+
+        // Act
+        const preserved = formatCasing( specialStr, 'camelCase' );
+        const stripped = formatCasing( specialStr, 'camelCase', { preserveEnds : false });
+
+        // Assert
+        expect( preserved ).toBe( '___' );
+        expect( stripped ).toBe( '' );
     });
 
     it( 'should gracefully handle primitives and non-plain objects', () => 
