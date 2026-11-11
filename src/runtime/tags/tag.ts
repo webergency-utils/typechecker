@@ -30,6 +30,15 @@ export namespace tag
 {
     export type Default<V = any> = { readonly __default? : V };
 
+    /** Marks a property as server-generated: emitted by `stringify<T>()`, rejected/stripped on incoming `parse<T>()`, and marked `{ readOnly: true }` in `jsonSchema<T>()`. */
+    export type ReadOnly = { readonly __readonly? : true };
+
+    /** Marks a property as input-only: validated on incoming `parse<T>()`, omitted by `stringify<T>()`, and marked `{ writeOnly: true }` in `jsonSchema<T>()`. */
+    export type WriteOnly = { readonly __writeonly? : true };
+
+    /** Marks a property as sensitive: omitted by `stringify<T>()`, marked `{ writeOnly: true, "x-secret": true }` in `jsonSchema<T>()`, and redacted from validation error payloads. */
+    export type Secret = { readonly __secret? : true };
+
     export type Tag<Names extends string> = tag<Names>;
 }
 

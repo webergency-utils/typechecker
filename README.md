@@ -45,7 +45,7 @@ if (result.success) {
 
 This package is a TypeScript compiler plugin (transformer). You must compile with a compiler patcher such as `ts-patch` so the transformer can hook into `tsc`.
 
-**Peer dependency:** `typescript` `>=5.0.0` (required; provides the compiler API the transformer and language service plugin use).
+**Requirements:** Node.js `>=22.0.0` and peer dependency `typescript` `>=5.0.0` (provides the compiler API the transformer and language service plugin use).
 
 There are **no runtime `dependencies`**—only the peer `typescript` and your build tooling.
 
@@ -107,7 +107,7 @@ export default defineConfig({
 });
 ```
 
-Rollup (`typecheckerRollup`), Webpack (`typecheckerWebpack`), and esbuild (`typecheckerEsbuild`) adapters are exported from `@webergency-utils/typechecker/unplugin`:
+Rollup (`@webergency-utils/typechecker/rollup`), Webpack (`@webergency-utils/typechecker/webpack`), and esbuild (`@webergency-utils/typechecker/esbuild`) each expose a dedicated default export, and all adapters are also exported from `@webergency-utils/typechecker/unplugin`:
 
 ```typescript
 import {
@@ -137,10 +137,10 @@ graph TD
     G --> H[Emit optimized JavaScript files]
 ```
 
-1. **Build-Time Transformation**: The compiler transformer intercepts typed helper calls (`validate`, `is`, `assert`, `assertGuard`, `validator`, `jsonSchema`, `standardSchema`, `parse`, `parser`, `safeParse`, `stringify`, `serializer`, `safeSerialize`). Schema helpers (`validateSchema`, `isSchema`, `assertSchema`, `assertGuardSchema`, `compileSchema`, `getOrCompileSchema`) are plain runtime APIs and do not require transformation.
-2. **Type Extraction & Analysis**: It parses the target TS type structure via a cached `TypeNode` IR, extracting intersection constraints, formats, transforms, and defaults recursively.
-3. **File-local validators**: The transformer generates highly optimized JavaScript validator, parser, and serializer functions for each resolved type shape, names them with a structural hash (`__val_<hash>` / `__schema_<hash>` / `__parse_<hash>` / `__ser_<hash>`), and hoists them in the same file.
-4. **Call Replacement & Tree-Shaking**: Typed calls are rewritten to `@webergency-utils/typechecker/runtime` helpers (`validators.js` ~39 KB, `parse-runtime.js` ~14 KB, `serializer-runtime.js` ~8 KB) with no global registry lookup and zero duplicate runtime bundling across entrypoints. The runtime JSON Schema compiler lives in a dedicated subpath (`@webergency-utils/typechecker/runtime/schema-compiler`, ~32 KB) so applications using only AOT macros tree-shake `compileSchema` automatically.
+1. **Build-Time Transformation**: The compiler transformer intercepts typed helper calls (`validate`, `is`, `assert`, `assertGuard`, `validator`, `jsonSchema`, `standardSchema`, `parse`, `parser`, `safeParse`, `stringify`, `serializer`, `safeSerialize`, `clone`, `cloner`, `prune`, `pruner`, `random`, `randomGenerator`). Schema helpers (`validateSchema`, `isSchema`, `assertSchema`, `assertGuardSchema`, `compileSchema`, `getOrCompileSchema`) are plain runtime APIs and do not require transformation.
+2. **Type Extraction & Analysis**: It parses the target TS type structure via a cached `TypeNode` IR, extracting intersection constraints, formats, transforms, access modifiers (`ReadOnly`, `WriteOnly`, `Secret`), and defaults recursively.
+3. **File-local validators**: The transformer generates highly optimized JavaScript validator, parser, serializer, cloner, pruner, and arbitrary generator functions for each resolved type shape, names them with a structural hash (`__val_<hash>` / `__schema_<hash>` / `__parse_<hash>` / `__ser_<hash>` / `__clone_<hash>` / `__prune_<hash>` / `__rand_<hash>`), and hoists them in the same file.
+4. **Call Replacement & Tree-Shaking**: Typed calls are rewritten to `@webergency-utils/typechecker/runtime` helpers (`validators.js`, `parse-runtime.js`, `serializer-runtime.js`, `clone-runtime.js`, `random-runtime.js`) with no global registry lookup and zero duplicate runtime bundling across entrypoints. The runtime JSON Schema compiler lives in a dedicated subpath (`@webergency-utils/typechecker/runtime/schema-compiler`) so applications using only AOT macros tree-shake `compileSchema` automatically.
 
 ### External dependencies
 
@@ -170,15 +170,18 @@ const age: number & constraint.Minimum<18> = 5;
 - [`assertGuard`](src/index.ts): Asserts a value is `T`. Always mutates in place; `from` may coerce nested fields. Root replacement throws.
 - [`validator`](src/index.ts): AOT macro that compiles a reusable `CompiledValidator<ResolveDefaults<T>, T>` callable with `.validate()`, `.is()`, `.assert()`, `.assertGuard()`, and `['~standard']` (Standard Schema v1).
 - [`standardSchema`](src/index.ts): AOT macro that returns a Standard Schema v1 (`StandardSchemaV1<T, ResolveDefaults<T>>`) wrapper for `T`.
-- [`serializer`](src/index.ts): AOT macro that compiles a `(input: T) => string` serializer for JSON or query strings. `transform` / `replacer` are closed over at create time.
-- [`stringify`](src/index.ts): AOT macro that validates and serializes a value as type `T`. `transform` / `replacer` are per-call.
-- [`safeSerialize`](src/index.ts): AOT macro that validates and serializes a value without throwing, returning `SafeSerializeResult` (`{ success: true, data: string }` or `{ success: false, error: SerializationError }`).
-- [`parse`](src/index.ts): AOT macro that parses **wire text** (`from: 'json' | 'query' | 'string'`) into `ResolveDefaults<T>`. Input is always a `string`. Optional `reviver` and `transform`.
-- [`parser`](src/index.ts): AOT macro that compiles a reusable `(input: string) => ResolveDefaults<T>` parser function. `reviver` / `transform` are closed over at create time.
-- [`safeParse`](src/index.ts): AOT macro that parses and validates wire text without throwing, returning `SafeParseResult<ResolveDefaults<T>>` (`{ success: true, data }` or `{ success: false, error: ParseError }`).
+- [`serializer`](src/index.ts): AOT macro that compiles a reusable `CompiledSerializer<SerializeInput<T>>` callable with `.stringify()`, `.safe()`, and `.safeSerialize()` for JSON or query strings. Default `transform` / `replacer` are closed over at create time and can be overridden per call.
+- [`stringify`](src/index.ts): AOT macro that structurally checks and serializes a value of type `SerializeInput<T>` (omitting `tag.WriteOnly` and `tag.Secret` properties). `transform` / `replacer` are per-call.
+- [`safeSerialize`](src/index.ts): AOT macro that structurally checks and serializes a value without throwing, returning `SafeSerializeResult` (`{ success: true, data: string }` or `{ success: false, error: SerializationError }`).
+- [`parse`](src/index.ts): AOT macro that parses wire inputs (`from: 'json' | 'query' | 'string' | 'formData' | 'headers'`) into `ParseOutput<T>`. Optional `reviver`, `transform`, and compile-time `propertyCasing`.
+- [`parser`](src/index.ts): AOT macro that compiles a reusable `CompiledParser<ParseOutput<T>, Input>` callable with `.parse()`, `.safe()`, `.safeParse()`, and `['~standard']` (Standard Schema v1). Default `reviver` / `transform` are closed over at create time and can be overridden per call.
+- [`safeParse`](src/index.ts): AOT macro that parses and validates wire inputs without throwing, returning `SafeParseResult<ParseOutput<T>>` (`{ success: true, data }` or `{ success: false, error: ParseError }`).
+- [`clone`](src/index.ts) / [`cloner`](src/index.ts): AOT deep-cloner macros that allocate fresh containers/exotics for `T` while omitting undeclared excess object keys.
+- [`prune`](src/index.ts) / [`pruner`](src/index.ts): AOT in-place structural excess-key stripper macros for `T` (skipping subtrees that cannot hold excess object keys).
+- [`random`](src/index.ts) / [`randomGenerator`](src/index.ts): AOT arbitrary/mock value generator macros honoring type constraints, formats, regex patterns, and JSDoc bounds (deterministic when a numeric `seed` is passed).
 - [`TransformFn`](src/runtime/transform.ts) / [`TransformContext`](src/runtime/transform.ts): Typed per-node rewrite on `parse` / `stringify` / `assert` / `validate` (`ctx.type`, `ctx.path`, `ctx.tags`). Not used by `is` / `assertGuard`.
-- [`JsonReviver`](src/runtime/transform.ts) / [`JsonReplacer`](src/runtime/transform.ts): `JSON.parse` / `JSON.stringify` callbacks. Reviver also walks decoded query objects. Replacer is JSON stringify only.
-- [`tag`](src/runtime/tags/tag.ts): Named metadata (`tag<'html'>`) peeled into `ctx.tags` and JSON Schema `x-tags`. `tag.Default` fills missing properties.
+- [`JsonReviver`](src/runtime/transform.ts) / [`JsonReplacer`](src/runtime/transform.ts): `JSON.parse` / `JSON.stringify` callbacks. Reviver also walks decoded query, `FormData`, and header objects. Replacer is JSON stringify only.
+- [`tag`](src/runtime/tags/tag.ts): Named metadata (`tag<'html'>`) peeled into `ctx.tags` and JSON Schema `x-tags`; `tag.Default` fills missing properties; `tag.ReadOnly`, `tag.WriteOnly`, and `tag.Secret` control directional wire visibility and secret redaction.
 - [`jsonSchema`](src/index.ts): Generates and returns a JSON Schema representation matching a TypeScript type at compile time (supports `'draft-07'` default, `'draft-2020-12'`, `'openapi-3.0'`, and `'openapi-3.1'` targets, with `x-typescript-type` for `Date`/`URL`/`RegExp`/`Set`/`Map`/`bigint`/etc. and `x-tags` for `tag<'html'>`).
 - [`validateSchema`](src/index.ts) / [`isSchema`](src/index.ts) / [`assertSchema`](src/index.ts) / [`assertGuardSchema`](src/index.ts): Same entrypoints against a runtime JSON Schema value instead of a TypeScript generic.
 - [`compileSchema`](src/runtime/schema-compiler.ts) / [`getOrCompileSchema`](src/runtime/schema-compiler.ts): Compiles (or WeakMap-caches) a runtime JSON Schema into a `CompiledSchema<T>` validator function with Standard Schema v1 (`~standard`) support.
@@ -287,16 +290,18 @@ Creates a [Standard Schema v1](https://standardschema.dev) (`~standard`) object 
 Generates a JSON Schema object matching type `T` at compile time.
 
 - **Parameters**:
-  - `options` (optional): Target dialect string or `{ target?: JsonSchemaTarget }`:
+  - `options` (optional): Target dialect string or `{ target?: JsonSchemaTarget, propertyCasing?: CasingFormat }`:
     - `'draft-07'` (default): JSON Schema Draft-07 (`items` array + `additionalItems` for tuples, `$defs`).
     - `'draft-2020-12'`: JSON Schema Draft 2020-12 (`$schema`, `prefixItems` + `items` for tuples, `$defs`).
-    - `'openapi-3.0'`: OpenAPI 3.0 Schema Object (`nullable: true` instead of `[T, 'null']` / `anyOf` null unions, `#/components/schemas/...` `$ref`s).
+    - `'openapi-3.0'`: OpenAPI 3.0 Schema Object (`nullable: true` instead of `[T, 'null']` / `anyOf` null unions, `minimum` + `exclusiveMinimum: true`, `#/components/schemas/...` `$ref`s).
     - `'openapi-3.1'`: OpenAPI 3.1 dialect (`$schema: 'https://spec.openapis.org/oas/3.1/dialect/base'`, `prefixItems`).
-- **Returns**: `JsonSchema` (a JSON Schema object).
+    - `propertyCasing`: Optional compile-time `CasingFormat` mapping TypeScript property names to wire keys (`properties`, `required`, `requires`).
+- **Returns**: `JsonSchema` (a fresh JSON Schema object).
 - **Example**:
   ```typescript
   const draft07 = jsonSchema<User>();
   const draft2020 = jsonSchema<User>({ target: 'draft-2020-12' });
+  const snakeSchema = jsonSchema<User>({ propertyCasing: 'snake_case' });
   const openApi30 = jsonSchema<User>('openapi-3.0');
   ```
 
@@ -347,21 +352,24 @@ Compiles a runtime JSON Schema into a reusable `CompiledSchema<T>` validator fun
 
 These are AOT macros rewritten by the transformer into hoisted `__ser_*` / `__parse_*` functions that call `@webergency-utils/typechecker/runtime`.
 
-#### `serializer<T>(options?: ValidationMode | SerializerOptions): (input: T) => string`
+#### `serializer<T>(options?: ValidationMode | SerializerOptions): CompiledSerializer<T>`
 
-Compiles a reusable serializer for `T`.
+Compiles a reusable first-class serializer object for `T` (callable directly or via `.stringify()`, `.safe()`, and `.safeSerialize()`).
 
 - **Options**:
   - `mode`: `'strict' | 'relaxed' | 'strip'` (default `'strip'`) — extra property handling when no index signature is present.
   - `format` / `to`: `'json'` (default) or `'query'`.
   - `unionResolution`: `'specificity'` (default) or `'declaration-order'`.
-  - `transform`: `TransformFn | TransformFn[]` — typed per-leaf rewrite before encode (`ctx.type`, `ctx.path`, `ctx.tags`). Closed over at create time.
-  - `replacer`: JSON.stringify-style replacer (JSON format only). Runs after encode, so `Date`s are ISO strings — offset dates in `transform`, not here.
-- **Encodings**: `Date` → ISO-8601; `URL` → `href` string (URI-encoded in query); `RegExp` → `source` string; `Buffer`/`Uint8Array` → base64; `bigint` → decimal digits; tuples (including optional and rest elements); recursive types; tagged unions by discriminant; `Record`, string index signatures, and template-literal index signatures (`[key: `prefix_${string}`]: V`) serialize matching extra keys with the value type.
+  - `propertyCasing`: `CasingFormat` (optional) — zero-allocation AOT wire key casing (`'snake_case'`, `'kebab-case'`, `'PascalCase'`, etc.).
+  - `bigintAs`: `'string' | 'number'` (default `'string'`) — JSON `bigint` wire encoding (`"9007199254740993"` quoted decimal string by default, or raw unquoted JSON integer digits when `'number'`).
+  - `transform`: `TransformFn | TransformFn[]` — typed per-leaf rewrite before encode (`ctx.type`, `ctx.path`, `ctx.tags`). Closed over at create time and overridable per call.
+  - `replacer`: JSON.stringify-style replacer (JSON format only). Runs after encode while preserving >53-bit raw JSON integers via `JSON.rawJSON`.
+- **Validation Scope & Encodings**: Enforces fast runtime type and structural checks (finite JSON numbers, template-literal & `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` patterns, nominal `class` `instanceof`, unknown-key `mode`) without re-running `constraint.*` / `format.*` checks by default. Encodes `Date` → ISO-8601; `URL` → `href` string (URI-encoded in query); `RegExp` → `"/pattern/flags"` string; `Buffer`/`Uint8Array`/`TypedArray` → base64; `bigint` → quoted decimal string (or raw integer with `bigintAs: 'number'`); tuples (including optional, middle-rest, and trailing-rest elements); recursive types; tagged unions by discriminant; `Record`, string/numeric index signatures, and template-literal index signatures.
 - **Example**:
   ```typescript
-  const serializeUser = serializer<User>({ mode: 'strict' });
+  const serializeUser = serializer<User>({ mode: 'strict', propertyCasing: 'snake_case' });
   const json = serializeUser(user);
+  const safe = serializeUser.safe(user);
 
   const dump = serializer<User>({
     transform: (value, ctx) => (ctx.type === 'string' ? String(value) + '!' : value),
@@ -370,17 +378,17 @@ Compiles a reusable serializer for `T`.
 
 #### `stringify<T>(input: T, options?: ValidationMode | SerializerOptions): string`
 
-Same codegen as `serializer`, invoked immediately on `input`. `transform` / `replacer` are per-call.
+Same codegen as `serializer`, invoked immediately on `input`. Compile-time options (`mode`, `format`/`to`, `unionResolution`, `propertyCasing`, `bigintAs`) must be static literals or `const` bindings; `transform` / `replacer` are forwarded at runtime.
 
 - **Example**:
   ```typescript
-  const json = stringify<User>(user);
+  const json = stringify<User>(user, { propertyCasing: 'snake_case' });
   const qs = stringify<Search>(search, { format: 'query' });
   ```
 
 #### `safeSerialize<T>(input: T, options?: ValidationMode | SerializerOptions): SafeSerializeResult`
 
-Non-throwing validation + serialization into `{ success: true, data: string }` or `{ success: false, error: SerializationError }`.
+Non-throwing structural check + serialization into `{ success: true, data: string }` or `{ success: false, error: SerializationError }`.
 
 - **Example**:
   ```typescript
@@ -392,25 +400,28 @@ Non-throwing validation + serialization into `{ success: true, data: string }` o
   }
   ```
 
-#### `parse<T>(input: string, options?: ValidationMode | ParseOptions): ResolveDefaults<T>`
+#### `parse<T>(input: ParseInput, options?: ValidationMode | ParseOptions): ParseOutput<T>`
 
-Single-pass parse + validate into `T`. Every `parse` entry requires a **string**. Already-parsed JSON objects, query bags, and `URLSearchParams` are not accepted — use `assert` / `validate` for those.
+Single-pass parse + validate into `ParseOutput<T>` (resolving `tag.Default` and omitting `tag.ReadOnly` fields that lack a default). Text sources (`'json' | 'query' | 'string'`) take a `string`; `'formData'` takes `FormData` (or `FormDataLike`); `'headers'` takes `Headers`, header `[key, value]` tuples, or an `IncomingHttpHeaders` plain object.
 
 - **Options**:
   - `mode`: `'strict' | 'relaxed' | 'strip'` (default `'strip'`).
   - `from`:
-    - `'json'` (default) — JSON text only. Always `JSON.parse`; unquoted scalars (`'hello'`) are Invalid JSON (`'"hello"'` is a JSON string). Revives `Date`, `URL`, `RegExp`, `Buffer`, `Set`, `Map`, `bigint`, etc. after decode.
+    - `'json'` (default) — JSON text only. Always `JSON.parse`; unquoted scalars (`'hello'`) are Invalid JSON (`'"hello"'` is a JSON string). Revives `Date`, `URL`, `RegExp`, `Buffer`, `TypedArray`s, `Set`, `Map`, and lossless `bigint` (decimal strings, safe JSON integers, and raw unquoted >53-bit JSON integers via `context.source`).
     - `'query'` — query/form text that never starts with `?` (`url.search.slice(1)`, form body). Always `parseQueryString`; `'42'` is a flag-key `{ 42: true }`, not a number. Coerces numbers/booleans/dates/URLs. Scalars belong on `'string'`.
     - `'string'` — a single already-decoded scalar (path/header/cookie values). Same coercions as `'query'`, but **never** runs `JSON.parse` / `parseQueryString`. Reviver is ignored. Only basic scalar types (`string`, `number`, `boolean`, `bigint`, `Date`, `URL`, `RegExp`, literals, enums, and unions of these).
+    - `'formData'` — decodes `FormData` / `FormDataLike` with nested bracket keys (`user[name]`, `tags[]`), preserves native `File` and `Blob` instances (including `File[]`), and applies query-style scalar coercions (including `"on"` / `"off"` checkboxes).
+    - `'headers'` — decodes Fetch `Headers` (preserving individual `Set-Cookie` entries via `getSetCookie()`), `[key, value]` tuple arrays, and Node `IncomingHttpHeaders` case-insensitively, mapping camelCase TypeScript property names (`contentLength`, `xRequestId`) to `kebab-case` (`content-length`, `x-request-id`) or lowercase wire headers and splitting comma-separated header lists into arrays / `Set`s.
   - `unionResolution`: `'specificity'` (default) or `'declaration-order'`.
-  - `reviver`: same contract as `JSON.parse` (bottom-up, root `key === ''`, `undefined` deletes). Runs on decoded JSON values and decoded query objects. Ignored for `from: 'string'`.
+  - `propertyCasing`: `CasingFormat` (optional) — zero-allocation AOT wire key casing (`'snake_case'`, `'kebab-case'`, `'PascalCase'`, etc.) mapped directly into TypeScript property names.
+  - `reviver`: same contract as `JSON.parse` (bottom-up, root `key === ''`, `undefined` deletes). Runs on decoded JSON values and decoded query / `FormData` / header objects. Ignored for `from: 'string'`.
   - `transform`: `TransformFn | TransformFn[]` — typed rewrite after revival / `transform.*` tags (`ctx.type`, `ctx.path`, `ctx.tags` from `tag<'html'>`). `fn[]` pipes left to right. Throws become `ParseError` with `ctx.path`. Skip `undefined`/`null` so `tag.Default` still fills.
-- **Behavior**: Applies `tag.Default`, `transform.*`, and `constraint.*` / `format.*` (parity with `validate`), and supports recursive types, tuples with optional/rest elements, and template-literal index signatures. Plain absent optional properties remain omitted (`'prop' in res === false`). Rejects `NaN`; JSON numbers that survive `JSON.parse` may be `±Infinity`, but `JSON.stringify(Infinity)` is `null` so Infinity cannot round-trip through JSON text. Query/string numbers must be finite. Throws `ParseError`.
+- **Behavior**: Applies `tag.Default` (and JSDoc `@default`), `transform.*`, and `constraint.*` / `format.*` / JSDoc constraints (parity with `validate`), enforces `tag.ReadOnly` (rejecting in `'strict'`, stripping/ignoring in `'strip'`/`'relaxed'`), redacts `tag.Secret` values in `ParseError` messages, and supports recursive types, `File`/`Blob`, tuples with optional/middle-rest/trailing-rest elements, and template-literal index signatures. Plain absent optional properties remain omitted (`'prop' in res === false`). Rejects `NaN` and non-finite query/string numbers. Throws `ParseError`.
 - **Example**:
   ```typescript
   import { parse, stringify, type TransformContext } from '@webergency-utils/typechecker';
 
-  const user = parse<User>(req.body); // raw body string, not a parsed object
+  const user = parse<User>(req.body, { propertyCasing: 'snake_case' });
   const q = parse<Search>(req.url.search.slice(1), { from: 'query', mode: 'strict' });
   const id = parse<string>('jpUllytbmQ=', { from: 'string' }); // stays the string (no querystring parse)
   const n = parse<number>('42', { from: 'string' }); // → 42
@@ -426,14 +437,15 @@ Single-pass parse + validate into `T`. Every `parse` entry requires a **string**
   const out = stringify<Event>(event, { transform: shift(-ms) });
   ```
 
-#### `parser<T>(options?: ValidationMode | ParseOptions): (input: string) => ResolveDefaults<T>`
+#### `parser<T>(options?: ValidationMode | ParseOptions): CompiledParser<ResolveDefaults<T>>`
 
-Compiles a reusable parser function for `T`. Closes over `reviver` and `transform` at create time (mirroring `serializer<T>()`).
+Compiles a reusable first-class parser object for `T` (callable directly or via `.parse()`, `.safe()`, `.safeParse()`, and Standard Schema v1 `['~standard']`). Closes over default `reviver` and `transform` at create time and accepts per-call runtime overrides.
 
 - **Example**:
   ```typescript
-  const parseUser = parser<User>({ mode: 'strict' });
+  const parseUser = parser<User>({ mode: 'strict', propertyCasing: 'snake_case' });
   const user = parseUser(req.body);
+  const safe = parseUser.safe(req.body);
   ```
 
 #### `safeParse<T>(input: string, options?: ValidationMode | ParseOptions): SafeParseResult<ResolveDefaults<T>>`
@@ -454,6 +466,47 @@ Non-throwing single-pass parse + validation into `{ success: true, data: Resolve
 
 - `SerializationError` — path + message for serialize failures.
 - `ParseError` — path + message for parse failures.
+
+---
+
+### Clone, Prune & Arbitrary Generator Macros
+
+#### `clone<T>(input: T): T` / `cloner<T>(): CompiledCloner<T>`
+
+Compiles a shape-specialized deep cloner for type `T`. Allocates fresh objects, arrays, tuples, `Set`s, `Map`s, `Date`s, `URL`s, `RegExp`s (preserving `lastIndex`), `Buffer`s, `ArrayBuffer`s, `SharedArrayBuffer`s, `DataView`s, typed arrays, `Blob`s, `File`s, and nominal class instances while copying only declared/matching object keys (naturally dropping undeclared excess keys). `any` / `unknown` branches fall back to cycle-safe `cloneAny`.
+
+```typescript
+import { clone, cloner } from '@webergency-utils/typechecker';
+
+const copyUser = cloner<User>();
+const fresh = copyUser(existingUser);
+const oneShot = clone<User>(existingUser);
+```
+
+#### `prune<T>(input: T): T` / `pruner<T>(): CompiledPruner<T>`
+
+Compiles an in-place structural unknown-key stripper for type `T` (`delete obj[k]`), returning `input`. Subtrees whose static types cannot contain excess object properties (`string[]`, primitives, `Date`, etc.) compile to zero-work no-ops.
+
+```typescript
+import { prune, pruner } from '@webergency-utils/typechecker';
+
+const stripUser = pruner<User>();
+stripUser(payloadWithExtras);
+```
+
+#### `random<T>(seed?: number): ResolveDefaults<T>` / `randomGenerator<T>(defaultSeed?: number): CompiledRandomGenerator<ResolveDefaults<T>>`
+
+Compiles an AOT arbitrary/mock value generator for type `T` that honors numeric/bigint bounds & `MultipleOf`, string `MinLength`/`MaxLength`, all `format.*` tags, `constraint.Pattern` regex sampling, template literals, `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize`, `transform.*`, array `MinItems`/`MaxItems`/`UniqueItems`/`Contains`, object `MinProperties`/`MaxProperties`/`Requires`/`PropertyNames`, JSDoc constraints, enums, built-in exotics (`Date`, `URL`, `RegExp`, `Buffer`, typed arrays, `File`, `Blob`), unions, intersections, and depth-bounded recursive types.
+
+- Passing `seed` uses a deterministic `Mulberry32` PRNG (`random<User>(42)` always returns the exact same fixture; `randomGenerator<User>(42)` yields a deterministic stream of distinct fixtures and accepts per-call seed overrides).
+
+```typescript
+import { random, randomGenerator } from '@webergency-utils/typechecker';
+
+const sample = random<User>(2026);
+const nextUser = randomGenerator<User>(1337);
+const batch = [nextUser(), nextUser(), nextUser()];
+```
 
 ---
 
@@ -579,27 +632,30 @@ Extends `ValidationOptions` for `assert` / `assertSchema`.
 
 #### `interface ParseOptions`
 
-Compile-time `mode` / `from` / `unionResolution` stay object literals (distinct `__parse_*` hoists). `reviver` / `transform` are runtime and forwarded into the hoisted parser.
+Compile-time `mode` / `from` / `unionResolution` / `propertyCasing` must be static literals or `const` bindings (distinct `__parse_*` hoists). `reviver` / `transform` are runtime and forwarded into the hoisted parser.
 
 | Property | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `mode` | `ValidationMode` | `'strip'` | Unknown-key policy. |
 | `from` | `ParseSource` (`'json' \| 'query' \| 'string'`) | `'json'` | Wire decoder. See `parse`. |
 | `unionResolution` | `UnionResolutionMode` (`'specificity' \| 'declaration-order'`) | `'specificity'` | Compile-time union arm evaluation order. |
+| `propertyCasing` | `CasingFormat` | `undefined` | Zero-allocation AOT wire key casing mapped onto TypeScript property names. |
 | `reviver` | `JsonReviver` | `undefined` | After `JSON.parse` / `parseQueryString`. Ignored for `'string'`. |
 | `transform` | `TransformFn \| TransformFn[]` | `undefined` | Typed rewrite after revival / `transform.*` tags. |
 
 #### `interface SerializerOptions`
 
-Compile-time `mode` / `format` / `unionResolution` stay object literals. `transform` / `replacer` are runtime. `serializer<T>(options)` closes over them; `stringify` and `safeSerialize` take them per call.
+Compile-time `mode` / `format` / `unionResolution` / `propertyCasing` / `bigintAs` must be static literals or `const` bindings. `transform` / `replacer` are runtime. `serializer<T>(options)` closes over defaults and accepts per-call overrides; `stringify` and `safeSerialize` take them per call.
 
 | Property | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `mode` | `SerializationMode` | `'strip'` | Extra-property handling when no index signature is present. |
 | `format` / `to` | `SerializeFormat` (`'json' \| 'query'`) | `'json'` | Output encoding. |
 | `unionResolution` | `UnionResolutionMode` (`'specificity' \| 'declaration-order'`) | `'specificity'` | Compile-time union arm evaluation order. |
+| `propertyCasing` | `CasingFormat` | `undefined` | Zero-allocation AOT wire key casing emitted from TypeScript property names. |
+| `bigintAs` | `'string' \| 'number'` | `'string'` | JSON `bigint` encoding (`'string'` emits `"9007199254740993"`, `'number'` emits raw integer digits). |
 | `transform` | `TransformFn \| TransformFn[]` | `undefined` | Per-leaf rewrite **before** encode (`Date`s are still `Date`s). |
-| `replacer` | `JsonReplacer` | `undefined` | JSON only. Runs after encode (`JSON.stringify(JSON.parse(out), replacer)`), so `Date`s are ISO strings. |
+| `replacer` | `JsonReplacer` | `undefined` | JSON only. Runs after encode while preserving >53-bit raw JSON integers. |
 
 #### `interface CompiledValidator<T, Input>`
 
@@ -609,12 +665,17 @@ Returned by `validator<T>(options?)` and `createValidator(validator, options?)`.
 - `.validate(input: unknown, options?: ValidationMode | ValidationOptions): IValidation<T>`
 - `.is(input: unknown, options?: ValidationMode | GuardOptions): input is T`
 - `.assert(input: unknown, options?: ValidationMode | AssertOptions): T`
-- `.assertGuard(input: unknown, options?: ValidationMode | AssertGuardOptions): void`
+- `.assertGuard(input: unknown, options?: ValidationMode | AssertGuardOptions): asserts input is T`
+
+#### `interface CompiledParser<T>` / `interface CompiledSerializer<T>`
+
+- `CompiledParser<T>` (returned by `parser<T>(options?)` and `createParser`): extends `StandardSchemaV1<string, T>` (`['~standard']`) and exposes `(input, overrideOptions?) => T`, `.parse(input, overrideOptions?)`, `.safe(input, overrideOptions?)`, and `.safeParse(input, overrideOptions?)`.
+- `CompiledSerializer<T>` (returned by `serializer<T>(options?)` and `createSerializer`): exposes `(input, overrideOptions?) => string`, `.stringify(input, overrideOptions?)`, `.safe(input, overrideOptions?)`, and `.safeSerialize(input, overrideOptions?)`.
 
 #### `type JsonSchemaTarget` / `interface JsonSchemaOptions`
 
 - `JsonSchemaTarget`: `'draft-07' | 'draft-2020-12' | 'openapi-3.0' | 'openapi-3.1'`
-- `JsonSchemaOptions`: `{ target?: JsonSchemaTarget }`
+- `JsonSchemaOptions`: `{ target?: JsonSchemaTarget, propertyCasing?: CasingFormat }`
 
 #### `interface TypecheckerBundlerOptions`
 
@@ -787,8 +848,8 @@ Standard formats for string primitives.
 - `format.UUID`: UUID (v1-v8, plus the nil UUID).
 - `format.URL`: HTTP/HTTPS/FTP URLs.
 - `format.IPv4` / `format.IPv6`: IP addresses.
-- `format.Date`: `YYYY-MM-DD` validated via `new Date(...)` (calendar overflow like `2024-02-31` is allowed). With `from: 'query'`, the runtime value becomes a `Date` (the TypeScript type remains `string & format.Date`).
-- `format.DateTime`: date-time validated via `new Date(...)`. With `from: 'query'`, returns a `Date`; otherwise keeps the string.
+- `format.Date`: Strict `YYYY-MM-DD` calendar date (rejects calendar overflow like `2024-02-31`) while preserving `typeof === 'string'` across `from: 'json' | 'query' | 'string'`. Use `Date` when you want a `Date` instance.
+- `format.DateTime`: Strict ISO-8601 date-time with timezone offset (`Z` or `±HH:MM`) while preserving `typeof === 'string'` across `from: 'json' | 'query' | 'string'`. Use `Date` when you want a `Date` instance.
 - `format.ObjectId`: MongoDB 24-character hex ObjectId.
 - `format.Duration`: ISO-8601 duration.
 - `format.Time`: Time string `HH:MM:SS` in real ranges (`00-23`, `00-59`, `00-59`) with an optional fraction and a required timezone (`Z` or `±HH:MM`), e.g. `19:55:00Z`.
@@ -821,7 +882,10 @@ Sanitizes and converts input values during validation.
 
 #### `tag` Namespace
 
-- `tag.Default<Value>`: Injects `Value` when a property is undefined. Removes the optional modifier (`?`) when resolved with `ResolveDefaults<T>`.
+- `tag.Default<Value>`: Injects `Value` when a property is undefined. Removes the optional modifier (`?`) when resolved with `ResolveDefaults<T>` / `ParseOutput<T>`.
+- `tag.ReadOnly`: Marks a server-owned / computed property (e.g. `id`, `createdAt`, `role`; JSDoc `@readonly` / `@readOnly`). Rejected on external input in `strict` mode (`ReadOnly<key>`), stripped/ignored in `strip`/`relaxed` mode, omitted from `ParseOutput<T>` unless paired with `tag.Default`, validated normally for in-memory `validate`/`is`/`assert` (`from === undefined`), and emitted as `readOnly: true` in `jsonSchema<T>()`.
+- `tag.WriteOnly`: Marks an input-only property (e.g. `password`, `confirmPassword`; JSDoc `@writeonly` / `@writeOnly`). Accepted and validated during `parse` / `validate`, optional in `SerializeInput<T>`, **never** emitted by `stringify<T>()` / `serializer<T>()` (JSON or query), and emitted as `writeOnly: true` in `jsonSchema<T>()`.
+- `tag.Secret`: Combines `tag.WriteOnly` serialization omission with error redaction (JSDoc `@secret`): masks `err.value = '[REDACTED]'` and scrubs raw/trimmed secret substrings from `ParseError` and `IValidationError` messages (including nested union `issues`), and emits `writeOnly: true` + `'x-secret': true` in `jsonSchema<T>()`.
 - `tag<'html'>` / `tag<'html' | 'basic'>` (and `tag<'html'> & tag<'basic'>`): named metadata on an optional `__tags` bag. Peeled at compile time; no handler class or global registry. Runtime behaviour is the `transform` option (`ctx.tags`, sorted). `jsonSchema<T>()` emits `x-tags`. `__tags` is reserved like `__default`.
 
 ```typescript
@@ -838,6 +902,38 @@ parse<Article>(json, {
     return value;
   },
 });
+```
+
+#### JSDoc Constraints & OpenAPI Metadata
+
+Properties, interfaces, and type aliases can declare validation constraints and OpenAPI documentation directly in standard JSDoc comments — enforced across `validate`/`is`/`assert`, `parse`, `jsonSchema`, and IDE static diagnostics. Explicit `constraint.*` / `format.*` / `tag.Default` intersection tags take precedence when both are present.
+
+- **Metadata**: summary comment → `description`, `@title`, `@example` (JSON or raw string; collected into `examples`), `@deprecated`, `@default`.
+- **Constraints**: `@minimum`, `@maximum`, `@exclusiveMinimum`, `@exclusiveMaximum`, `@multipleOf`, `@minLength`, `@maxLength`, `@pattern`, `@format`, `@minItems`, `@maxItems`, `@uniqueItems`, `@minProperties`, `@maxProperties`, `@minContains`, `@maxContains`.
+
+```typescript
+/**
+ * @title CreateProductInput
+ */
+interface CreateProductInput {
+  /**
+   * Product SKU
+   * @minLength 3
+   * @pattern ^[A-Z0-9-]+$
+   * @example "SKU-100"
+   */
+  sku: string;
+
+  /**
+   * Unit price in USD
+   * @exclusiveMinimum 0
+   * @multipleOf 0.01
+   */
+  price: number;
+
+  /** @default "USD" */
+  currency?: string;
+}
 ```
 
 ---

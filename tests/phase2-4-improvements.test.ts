@@ -67,10 +67,17 @@ describe( 'Phase 2-4 Engine, Parity, and API Improvements', () =>
             expect( failRes.error.path ).toBe( 'age' );
         }
 
-        expect(() => runtimeSafeParse(() =>
+        const boomRes = runtimeSafeParse(() =>
         {
             throw new TypeError( 'boom' );
-        }, 'bad' )).toThrow( TypeError );
+        }, 'bad' );
+        expect( boomRes.success ).toBe( false );
+
+        if( !boomRes.success )
+        {
+            expect( boomRes.error ).toBeInstanceOf( ParseError );
+            expect( boomRes.error.message ).toBe( 'Parse error: boom' );
+        }
     });
 
     it( 'validates optional and rest elements in validators.tuple across immutable and mutate modes', () =>
@@ -120,7 +127,7 @@ describe( 'Phase 2-4 Engine, Parity, and API Improvements', () =>
 
     it( 'serializes RegExp and all ArrayBufferView typed arrays via serializeRegExp and serializeBuffer', () =>
     {
-        expect( serializeRegExp( /^abc$/gi, 're' )).toBe( '"^abc$"' );
+        expect( serializeRegExp( /^abc$/gi, 're' )).toBe( '"/^abc$/gi"' );
         expect(() => serializeRegExp( 'not-re' as unknown as RegExp, 're' )).toThrow( SerializationError );
 
         const int32 = new Int32Array([ 1, 2 ]);
@@ -392,7 +399,7 @@ describe( 'Phase 2-4 Engine, Parity, and API Improvements', () =>
             tags    : [ 'a' ],
             meta    : { k : 2 },
             tuple   : [ 's', 1, true ],
-            pattern : 'abc'
+            pattern : '/abc/g'
         });
 
         const qStr = mod.serializeQuery({

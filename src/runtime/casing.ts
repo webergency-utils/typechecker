@@ -13,24 +13,52 @@ export interface ConvertCasingOptions
     preserveEnds? : boolean
 }
 
-type SplitCamel<S extends string> = 
-    S extends `${infer L}${infer R}`
-        ? L extends Uppercase<L>
-            ? L extends Lowercase<L> 
-                ? `${L}${SplitCamel<R>}`
-                : `_${Lowercase<L>}${SplitCamel<R>}`
-            : `${L}${SplitCamel<R>}`
+type AsciiLowerAlphaNum =
+    | 'a' | 'b' | 'c' | 'd' | 'e' | 'f' | 'g' | 'h' | 'i' | 'j' | 'k' | 'l' | 'm'
+    | 'n' | 'o' | 'p' | 'q' | 'r' | 's' | 't' | 'u' | 'v' | 'w' | 'x' | 'y' | 'z'
+    | '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9';
+
+type AsciiDigitOrUnderscore = '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '_';
+
+type IsAsciiUpperAlpha<C extends string> =
+    C extends Uppercase<C>
+        ? ( C extends Lowercase<C> ? false : true )
+        : false;
+
+type IsAllUpperSnakeRest<S extends string> =
+    S extends ''
+        ? true
+        : S extends `${infer C}${infer R}`
+            ? IsAsciiUpperAlpha<C> extends true
+                ? IsAllUpperSnakeRest<R>
+                : C extends AsciiDigitOrUnderscore
+                    ? IsAllUpperSnakeRest<R>
+                    : false
+            : false;
+
+type IsAllUpperSnake<S extends string> =
+    S extends '' ? false : IsAllUpperSnakeRest<S>;
+
+type ReplaceSeparators<S extends string> =
+    S extends `${infer L}-${infer R}` ? `${L}_${ReplaceSeparators<R>}` :
+        S extends `${infer L}.${infer R}` ? `${L}_${ReplaceSeparators<R>}` :
+            S;
+
+type SplitLowerToUpper<S extends string, PrevLower extends boolean = false> =
+    S extends `${infer C}${infer R}`
+        ? IsAsciiUpperAlpha<C> extends true
+            ? PrevLower extends true
+                ? `_${Lowercase<C>}${SplitLowerToUpper<R, false>}`
+                : `${Lowercase<C>}${SplitLowerToUpper<R, false>}`
+            : C extends AsciiLowerAlphaNum
+                ? `${C}${SplitLowerToUpper<R, true>}`
+                : `${Lowercase<C>}${SplitLowerToUpper<R, false>}`
         : S;
 
-type NormalizeCamelKebabDot<S extends string> = 
-    S extends `${infer L}-${infer R}` ? `${NormalizeCamelKebabDot<L>}_${NormalizeCamelKebabDot<R>}` :
-        S extends `${infer L}.${infer R}` ? `${NormalizeCamelKebabDot<L>}_${NormalizeCamelKebabDot<R>}` :
-            SplitCamel<S> extends `_${infer T}` ? T : SplitCamel<S>;
-
-type NormalizeString<S extends string> = 
-    S extends Uppercase<S> 
-        ? Lowercase<S> 
-        : NormalizeCamelKebabDot<S>;
+type NormalizeString<S extends string> =
+    IsAllUpperSnake<S> extends true
+        ? Lowercase<S>
+        : SplitLowerToUpper<ReplaceSeparators<S>>;
 
 type CleanUnderscores<S extends string> = 
     S extends `${infer L}__${infer R}` 
@@ -149,7 +177,7 @@ function normalizeString( str: string ): string
 
 const casingCache = new Map<string, string>();
 
-function formatCasing( str: string, casing: CasingFormat, options: ConvertCasingOptions = {}): string
+export function formatCasing( str: string, casing: CasingFormat, options: ConvertCasingOptions = {}): string
 {
     const preserveEnds = options.preserveEnds !== false;
     const cacheKey = `${casing}:${preserveEnds ? 1 : 0}:${str}`;
@@ -203,20 +231,44 @@ function formatCasing( str: string, casing: CasingFormat, options: ConvertCasing
     return out;
 }
 
-export function convertPropertyCasing<T, C extends CasingFormat>
+export function convertPropertyCasing<
+    T,
+    C extends CasingFormat,
+    O extends ConvertCasingOptions = Record<never, never>
+>
 (
     obj: T,
     casing: C,
-    options?: ConvertCasingOptions
-): ConvertPropertyCasing<T, C>
+    options?: O
+): ConvertPropertyCasing<T, C, O>
 {
     if( !obj || typeof obj !== 'object' ){ return obj as any }
 
-    if( obj instanceof Date || obj instanceof URL || obj instanceof RegExp || obj instanceof Map || obj instanceof Set || typeof obj === 'function' ){ return obj as any }
+    if(
+        obj instanceof Date ||
+        obj instanceof URL ||
+        obj instanceof RegExp ||
+        obj instanceof Map ||
+        obj instanceof Set ||
+        obj instanceof Promise ||
+        obj instanceof Blob ||
+        obj instanceof FormData ||
+        obj instanceof Headers
+    )
+    {
+        return obj as any;
+    }
 
     if( typeof Buffer !== 'undefined' && typeof Buffer.isBuffer === 'function' && Buffer.isBuffer( obj )){ return obj as any }
 
-    if( ArrayBuffer.isView( obj ) || obj instanceof ArrayBuffer ){ return obj as any }
+    if(
+        ArrayBuffer.isView( obj ) ||
+        obj instanceof ArrayBuffer ||
+        ( typeof SharedArrayBuffer !== 'undefined' && obj instanceof SharedArrayBuffer )
+    )
+    {
+        return obj as any;
+    }
 
     if( Array.isArray( obj ))
     {

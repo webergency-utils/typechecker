@@ -1105,7 +1105,7 @@ describe( 'Branch coverage edges', () =>
 
             const allOfClosedNoProps = compileSchema({
                 allOf : [
-                    { type : 'object' }
+                    { type : 'object', additionalProperties : false }
                 ]
             });
             expect( validate( allOfClosedNoProps, { extra : 1 }, 'strip' ).data ).toEqual({});

@@ -1,7 +1,18 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import ts from 'typescript';
 import { hasUniqueItems, isMultipleOfNumber } from '../runtime/validators.js';
 import { TagName } from './tagKeys.js';
-import { collectConstraintsFromProps, getTypeProps, peelTaggedIntersection } from './type-helpers.js';
+import {
+    collectConstraintsFromProps,
+    extractPropertyJsDocInfo,
+    extractTypeJsDocInfo,
+    getTypeProps,
+    mergeConstraintsWithJsDoc,
+    peelTaggedIntersection,
+    wrapTypeNodeWithJsDoc,
+    type ParsedConstraint
+} from './type-helpers.js';
 
 export interface IStaticConstraint
 {
@@ -22,6 +33,8 @@ const STATIC_MACRO_FUNCTIONS: ReadonlySet<string> = new Set([
     'is', 'assert', 'assertGuard', 'validate', 'stringify', 'safeSerialize', 'parse', 'safeParse'
 ]);
 
+const RELATIVE_TYPECHECKER_INDEX_RE = /^(?:\.\.?\/)+(?:(?:src|dist)\/)?index(?:\.(?:js|cjs|mjs|ts|mts|cts))?$/;
+
 const MAX_STATIC_DEPTH = 8;
 
 function unwrapNonNullishType( type: ts.Type ): ts.Type
@@ -38,27 +51,56 @@ function unwrapNonNullishType( type: ts.Type ): ts.Type
     return type;
 }
 
-/**
- * Extract Minimum / Length / Items-style constraints from a (possibly intersected) type.
- */
-export function extractStaticConstraints( type: ts.Type, checker: ts.TypeChecker ): IStaticConstraint[]
+function collectAllParsedConstraints(
+    type       : ts.Type,
+    checker    : ts.TypeChecker,
+    extraJsDoc?: ParsedConstraint[]
+): ParsedConstraint[]
 {
     const target = unwrapNonNullishType( type );
-    const constraints: IStaticConstraint[] = [];
+    const raw: ParsedConstraint[] = [];
     const types = typeof target.isIntersection === 'function' && target.isIntersection() ? target.types : [target];
 
     for( const sub of types )
     {
-        for( const c of collectConstraintsFromProps( getTypeProps( sub, checker ), checker ))
-        {
-            if( !STATICALLY_CHECKED.has( c.type )){ continue }
+        raw.push( ...collectConstraintsFromProps( getTypeProps( sub, checker ), checker ));
+    }
 
-            const value = c.type === 'uniqueItems' ? true : c.value;
+    let merged = mergeConstraintsWithJsDoc( raw, extractTypeJsDocInfo( type, checker ).constraints );
 
-            if( value === undefined ){ continue }
+    if( target !== type )
+    {
+        merged = mergeConstraintsWithJsDoc( merged, extractTypeJsDocInfo( target, checker ).constraints );
+    }
 
-            constraints.push({ type : c.type, value, message : c.message });
-        }
+    if( extraJsDoc && extraJsDoc.length > 0 )
+    {
+        merged = mergeConstraintsWithJsDoc( merged, extraJsDoc );
+    }
+
+    return merged;
+}
+
+/**
+ * Extract Minimum / Length / Items-style constraints from a (possibly intersected) type.
+ */
+export function extractStaticConstraints(
+    type       : ts.Type,
+    checker    : ts.TypeChecker,
+    extraJsDoc?: ParsedConstraint[]
+): IStaticConstraint[]
+{
+    const constraints: IStaticConstraint[] = [];
+
+    for( const c of collectAllParsedConstraints( type, checker, extraJsDoc ))
+    {
+        if( !STATICALLY_CHECKED.has( c.type )){ continue }
+
+        const value = c.type === 'uniqueItems' ? true : c.value;
+
+        if( value === undefined ){ continue }
+
+        constraints.push({ type : c.type, value, message : c.message });
     }
 
     return constraints;
@@ -84,6 +126,62 @@ type ConstantValue =
     | { kind : 'array', value : any[] }
     | { kind : 'object', keyCount : number };
 
+function applyStaticTransforms(
+    constant          : ConstantValue,
+    parsedConstraints : ParsedConstraint[]
+): { value : ConstantValue | undefined, skip : boolean }
+{
+    if( parsedConstraints.some( c => c.type === 'transform_custom' ))
+    {
+        return { value : undefined, skip : true };
+    }
+
+    let current: ConstantValue = constant;
+
+    for( const c of parsedConstraints )
+    {
+        if( c.type === 'transform_trim' && current.kind === 'string' )
+        {
+            current = { kind : 'string', value : current.value.trim() };
+        }
+        else if( c.type === 'transform_lowercase' && current.kind === 'string' )
+        {
+            current = { kind : 'string', value : current.value.toLowerCase() };
+        }
+        else if( c.type === 'transform_uppercase' && current.kind === 'string' )
+        {
+            current = { kind : 'string', value : current.value.toUpperCase() };
+        }
+        else if( c.type === 'transform_capitalize' && current.kind === 'string' )
+        {
+            current = {
+                kind  : 'string',
+                value : current.value.length > 0
+                    ? current.value[0].toUpperCase() + current.value.slice( 1 )
+                    : ''
+            };
+        }
+        else if( c.type === 'transform_tonumber' && current.kind === 'string' )
+        {
+            const trimmed = current.value.trim();
+
+            if( trimmed === '' ){ return { value : undefined, skip : true } }
+
+            const num = Number( trimmed );
+
+            if( Number.isNaN( num )){ return { value : undefined, skip : true } }
+
+            current = { kind : 'number', value : num };
+        }
+        else if( c.type === 'transform_toboolean' && current.kind === 'string' )
+        {
+            return { value : undefined, skip : true };
+        }
+    }
+
+    return { value : current, skip : false };
+}
+
 export function unwrapExpression( expr: ts.Expression ): ts.Expression
 {
     while(
@@ -99,10 +197,58 @@ export function unwrapExpression( expr: ts.Expression ): ts.Expression
     return expr;
 }
 
-export function isTypecheckerImport( moduleName: string ): boolean
+export function isTypecheckerImport(
+    moduleName  : string,
+    sourceFile? : ts.SourceFile,
+    checker?    : ts.TypeChecker,
+    importDecl? : ts.ImportDeclaration
+): boolean
 {
-    return moduleName === '@webergency-utils/typechecker' ||
-        /(?:^|\/)(?:src\/|dist\/)?index(?:\.(?:js|cjs|mjs|ts))?$/.test( moduleName );
+    if( moduleName === '@webergency-utils/typechecker' || moduleName.startsWith( '@webergency-utils/typechecker/' ))
+    {
+        return true;
+    }
+
+    if( !RELATIVE_TYPECHECKER_INDEX_RE.test( moduleName )){ return false }
+
+    if( importDecl && checker )
+    {
+        try
+        {
+            const modSym = checker.getSymbolAtLocation( importDecl.moduleSpecifier );
+
+            if( modSym )
+            {
+                const exports = checker.getExportsOfModule( modSym );
+
+                return exports.some( s => s.name === 'jsonSchema' ) &&
+                    exports.some( s => s.name === 'standardSchema' );
+            }
+        }
+        catch
+        { /* unresolved module specifier */ }
+    }
+
+    if( sourceFile )
+    {
+        const dir = path.dirname( path.resolve( sourceFile.fileName ));
+        const targetBase = path.resolve( dir, moduleName ).replace( /\.(?:js|cjs|mjs|ts|mts|cts)$/, '' );
+
+        if(
+            fs.existsSync( `${targetBase}.ts` ) ||
+            fs.existsSync( `${targetBase}.js` ) ||
+            fs.existsSync( `${targetBase}.d.ts` )
+        )
+        {
+            const targetDir = path.dirname( targetBase );
+
+            return fs.existsSync( path.join( targetDir, 'runtime', 'validators.ts' )) ||
+                fs.existsSync( path.join( targetDir, 'runtime', 'validators.js' )) ||
+                fs.existsSync( path.join( targetDir, 'runtime', 'validators.d.ts' ));
+        }
+    }
+
+    return true;
 }
 
 function tryGetConstantObject( obj: ts.ObjectLiteralExpression ): Record<string, any> | undefined
@@ -375,26 +521,45 @@ function checkExpressionAgainstType(
     checker     : ts.TypeChecker,
     diagnostics : ts.Diagnostic[],
     anchorNode? : ts.Node,
-    depth       : number = 0
+    depth       : number = 0,
+    extraJsDoc? : ParsedConstraint[]
 )
 {
     if( depth > MAX_STATIC_DEPTH ){ return }
 
+    const parsedConstraints = collectAllParsedConstraints( type, checker, extraJsDoc );
+    const constraints: IStaticConstraint[] = [];
+
+    for( const c of parsedConstraints )
+    {
+        if( !STATICALLY_CHECKED.has( c.type )){ continue }
+
+        const value = c.type === 'uniqueItems' ? true : c.value;
+
+        if( value === undefined ){ continue }
+
+        constraints.push({ type : c.type, value, message : c.message });
+    }
+
     type = unwrapNonNullishType( type );
 
-    const constraints = extractStaticConstraints( type, checker );
     const unwrapped = unwrapExpression( expr );
 
     if( constraints.length > 0 )
     {
-        const constant = tryGetConstantValue( expr );
+        const rawConstant = tryGetConstantValue( expr );
         const target = anchorNode ?? unwrapped;
 
-        if( constant )
+        if( rawConstant )
         {
-            for( const msg of evaluateStaticConstraints( constant, constraints ))
+            const transformed = applyStaticTransforms( rawConstant, parsedConstraints );
+
+            if( !transformed.skip && transformed.value )
             {
-                diagnostics.push( createDiagnostic( target, msg ));
+                for( const msg of evaluateStaticConstraints( transformed.value, constraints ))
+                {
+                    diagnostics.push( createDiagnostic( target, msg ));
+                }
             }
         }
         else if( ts.isArrayLiteralExpression( unwrapped ) && !unwrapped.elements.some( ts.isSpreadElement ))
@@ -419,6 +584,205 @@ function checkExpressionAgainstType(
     {
         checkArrayLiteral( unwrapped, type, checker, diagnostics, anchorNode, depth );
     }
+}
+
+function runtimeValueToConstant( val: unknown ): ConstantValue | undefined
+{
+    if( typeof val === 'number' ){ return { kind : 'number', value : val } }
+
+    if( typeof val === 'string' ){ return { kind : 'string', value : val } }
+
+    if( Array.isArray( val )){ return { kind : 'array', value : val } }
+
+    if( typeof val === 'object' && val !== null )
+    {
+        return { kind : 'object', keyCount : Object.keys( val ).length };
+    }
+
+    return undefined;
+}
+
+function checkRuntimeConstantAgainstType(
+    val         : unknown,
+    type        : ts.Type,
+    checker     : ts.TypeChecker,
+    diagnostics : ts.Diagnostic[],
+    anchorNode  : ts.Node,
+    depth       : number = 0,
+    extraJsDoc? : ParsedConstraint[]
+)
+{
+    if( depth > MAX_STATIC_DEPTH || val === null || val === undefined ){ return }
+
+    const parsedConstraints = collectAllParsedConstraints( type, checker, extraJsDoc );
+    const constraints: IStaticConstraint[] = [];
+
+    for( const c of parsedConstraints )
+    {
+        if( !STATICALLY_CHECKED.has( c.type )){ continue }
+
+        const value = c.type === 'uniqueItems' ? true : c.value;
+
+        if( value === undefined ){ continue }
+
+        constraints.push({ type : c.type, value, message : c.message });
+    }
+
+    type = unwrapNonNullishType( type );
+
+    if( constraints.length > 0 )
+    {
+        const rawConstant = runtimeValueToConstant( val );
+
+        if( rawConstant )
+        {
+            const transformed = applyStaticTransforms( rawConstant, parsedConstraints );
+
+            if( !transformed.skip && transformed.value )
+            {
+                for( const msg of evaluateStaticConstraints( transformed.value, constraints ))
+                {
+                    diagnostics.push( createDiagnostic( anchorNode, msg ));
+                }
+            }
+        }
+    }
+
+    if( Array.isArray( val ))
+    {
+        const peeled = peelTaggedIntersection( type, checker );
+        let baseType = peeled ? peeled.base : type;
+
+        if( typeof baseType.isIntersection === 'function' && baseType.isIntersection())
+        {
+            const arrayArm = baseType.types.find( t => checker.isTupleType( t ) || checker.isArrayType( t ));
+
+            if( arrayArm ){ baseType = arrayArm }
+        }
+
+        if( checker.isTupleType( baseType ))
+        {
+            const typeArgs = checker.getTypeArguments( baseType as ts.TypeReference );
+
+            for( let i = 0; i < val.length; i++ )
+            {
+                const slotType = typeArgs[i] ?? checker.getIndexTypeOfType( baseType, ts.IndexKind.Number );
+
+                if( slotType )
+                {
+                    checkRuntimeConstantAgainstType( val[i], slotType, checker, diagnostics, anchorNode, depth + 1 );
+                }
+            }
+        }
+        else if( checker.isArrayType( baseType ))
+        {
+            const elemType = checker.getTypeArguments( baseType as ts.TypeReference )[0]
+                ?? checker.getIndexTypeOfType( baseType, ts.IndexKind.Number );
+
+            if( elemType )
+            {
+                for( const item of val )
+                {
+                    checkRuntimeConstantAgainstType( item, elemType, checker, diagnostics, anchorNode, depth + 1 );
+                }
+            }
+        }
+    }
+    else if( typeof val === 'object' )
+    {
+        for( const [propName, propVal] of Object.entries( val as Record<string, unknown> ))
+        {
+            const symbol = checker.getPropertyOfType( type, propName );
+
+            if( !symbol ){ continue }
+
+            const propType = getSymbolType( checker, symbol );
+
+            if( !propType ){ continue }
+
+            const propJsDoc = extractPropertyJsDocInfo( symbol, checker ).constraints;
+            checkRuntimeConstantAgainstType( propVal, propType, checker, diagnostics, anchorNode, depth + 1, propJsDoc );
+        }
+    }
+}
+
+function resolveStaticParseSource(
+    optsArg : ts.Expression | undefined,
+    checker : ts.TypeChecker
+): 'json' | 'query' | 'string' | 'dynamic'
+{
+    if( !optsArg ){ return 'json' }
+
+    const unwrapped = unwrapExpression( optsArg );
+
+    if( ts.isIdentifier( unwrapped ) && unwrapped.text === 'undefined' ){ return 'json' }
+
+    if( ts.isStringLiteral( unwrapped )){ return 'json' }
+
+    let objLit: ts.ObjectLiteralExpression | undefined;
+
+    if( ts.isObjectLiteralExpression( unwrapped ))
+    {
+        objLit = unwrapped;
+    }
+    else if( ts.isIdentifier( unwrapped ))
+    {
+        const sym = checker.getSymbolAtLocation( unwrapped );
+        const decl = sym?.valueDeclaration || sym?.declarations?.[0];
+
+        if(
+            decl &&
+            ts.isVariableDeclaration( decl ) &&
+            decl.initializer &&
+            decl.parent &&
+            ts.isVariableDeclarationList( decl.parent ) &&
+            ( decl.parent.flags & ts.NodeFlags.Const ) !== 0
+        )
+        {
+            const init = unwrapExpression( decl.initializer );
+
+            if( ts.isStringLiteral( init )){ return 'json' }
+
+            if( ts.isObjectLiteralExpression( init )){ objLit = init }
+        }
+    }
+
+    if( !objLit ){ return 'dynamic' }
+
+    let resolvedFrom: 'json' | 'query' | 'string' = 'json';
+    let hasUnknownSpread = false;
+
+    for( const prop of objLit.properties )
+    {
+        if( ts.isSpreadAssignment( prop ))
+        {
+            hasUnknownSpread = true;
+            continue;
+        }
+
+        const propName = prop.name && ( ts.isIdentifier( prop.name ) || ts.isStringLiteral( prop.name ))
+            ? prop.name.text
+            : undefined;
+
+        if( propName !== 'from' ){ continue }
+
+        hasUnknownSpread = false;
+
+        if( ts.isPropertyAssignment( prop ))
+        {
+            const init = unwrapExpression( prop.initializer );
+
+            if( ts.isStringLiteral( init ) && ( init.text === 'json' || init.text === 'query' || init.text === 'string' ))
+            {
+                resolvedFrom = init.text;
+                continue;
+            }
+        }
+
+        return 'dynamic';
+    }
+
+    return hasUnknownSpread ? 'dynamic' : resolvedFrom;
 }
 
 function checkArrayLiteral(
@@ -500,7 +864,8 @@ function checkObjectLiteral(
 
             if( !propType ){ continue }
 
-            checkExpressionAgainstType( prop.initializer, propType, checker, diagnostics, anchorNode, depth + 1 );
+            const propJsDoc = extractPropertyJsDocInfo( symbol, checker ).constraints;
+            checkExpressionAgainstType( prop.initializer, propType, checker, diagnostics, anchorNode, depth + 1, propJsDoc );
         }
         else if( ts.isShorthandPropertyAssignment( prop ))
         {
@@ -522,13 +887,15 @@ function checkObjectLiteral(
 
             if(( decl.parent.flags & ts.NodeFlags.Const ) === 0 ){ continue }
 
+            const propJsDoc = extractPropertyJsDocInfo( symbol, checker ).constraints;
             checkExpressionAgainstType(
                 decl.initializer,
                 propType,
                 checker,
                 diagnostics,
                 anchorNode ?? prop,
-                depth + 1
+                depth + 1,
+                propJsDoc
             );
         }
     }
@@ -559,10 +926,17 @@ function resolveReturnCheckType( fn: ts.FunctionLikeDeclaration, checker: ts.Typ
 
     if( isAsync && typeof ( checker as any ).getAwaitedType === 'function' )
     {
-        return ( checker as any ).getAwaitedType( rawType ) ?? rawType;
+        const awaited = ( checker as any ).getAwaitedType( rawType ) ?? rawType;
+
+        if( ts.isTypeReferenceNode( fn.type! ) && fn.type!.typeArguments?.[0])
+        {
+            return wrapTypeNodeWithJsDoc( fn.type!.typeArguments[0], awaited, checker );
+        }
+
+        return awaited;
     }
 
-    return rawType;
+    return wrapTypeNodeWithJsDoc( fn.type!, rawType, checker );
 }
 
 /**
@@ -574,8 +948,8 @@ export function collectStaticConstraintDiagnostics(
 ): ts.Diagnostic[]
 {
     const rawDiagnostics: ts.Diagnostic[] = [];
-    const helperBindings = new Map<string, string>();
-    const helperNamespaces = new Set<string>();
+    const helperBindings = new Map<string, { importedName : string, decl : ts.ImportSpecifier }>();
+    const helperNamespaces = new Map<string, ts.NamespaceImport>();
 
     for( const statement of sourceFile.statements )
     {
@@ -585,7 +959,7 @@ export function collectStaticConstraintDiagnostics(
             ? statement.moduleSpecifier.text
             : '';
 
-        if( !isTypecheckerImport( moduleName )){ continue }
+        if( !isTypecheckerImport( moduleName, sourceFile, checker, statement )){ continue }
 
         const bindings = statement.importClause?.namedBindings;
 
@@ -597,13 +971,13 @@ export function collectStaticConstraintDiagnostics(
 
                 if( STATIC_MACRO_FUNCTIONS.has( importedName ))
                 {
-                    helperBindings.set( element.name.text, importedName );
+                    helperBindings.set( element.name.text, { importedName, decl : element });
                 }
             }
         }
         else if( bindings && ts.isNamespaceImport( bindings ))
         {
-            helperNamespaces.add( bindings.name.text );
+            helperNamespaces.set( bindings.name.text, bindings );
         }
     }
 
@@ -615,12 +989,12 @@ export function collectStaticConstraintDiagnostics(
             node.initializer
         )
         {
-            const type = checker.getTypeFromTypeNode( node.type );
+            const type = wrapTypeNodeWithJsDoc( node.type, checker.getTypeFromTypeNode( node.type ), checker );
             checkExpressionAgainstType( node.initializer, type, checker, rawDiagnostics );
         }
         else if( ts.isAsExpression( node ) || ts.isSatisfiesExpression( node ))
         {
-            const type = checker.getTypeFromTypeNode( node.type );
+            const type = wrapTypeNodeWithJsDoc( node.type, checker.getTypeFromTypeNode( node.type ), checker );
             checkExpressionAgainstType( node.expression, type, checker, rawDiagnostics );
         }
         else if( ts.isReturnStatement( node ) && node.expression )
@@ -644,21 +1018,73 @@ export function collectStaticConstraintDiagnostics(
 
             if( ts.isIdentifier( node.expression ))
             {
-                fnName = helperBindings.get( node.expression.text );
+                const entry = helperBindings.get( node.expression.text );
+
+                if( entry )
+                {
+                    const sym = checker.getSymbolAtLocation( node.expression );
+
+                    if( !sym?.declarations?.length || sym.declarations.includes( entry.decl ))
+                    {
+                        fnName = entry.importedName;
+                    }
+                }
             }
             else if(
                 ts.isPropertyAccessExpression( node.expression ) &&
-                ts.isIdentifier( node.expression.expression ) &&
-                helperNamespaces.has( node.expression.expression.text )
+                ts.isIdentifier( node.expression.expression )
             )
             {
-                fnName = node.expression.name.text;
+                const nsDecl = helperNamespaces.get( node.expression.expression.text );
+
+                if( nsDecl )
+                {
+                    const sym = checker.getSymbolAtLocation( node.expression.expression );
+
+                    if( !sym?.declarations?.length || sym.declarations.includes( nsDecl ))
+                    {
+                        fnName = node.expression.name.text;
+                    }
+                }
             }
 
             if( fnName && STATIC_MACRO_FUNCTIONS.has( fnName ))
             {
-                const type = checker.getTypeFromTypeNode( node.typeArguments[0]);
-                checkExpressionAgainstType( node.arguments[0], type, checker, rawDiagnostics );
+                const typeNode = node.typeArguments[0];
+                const type = wrapTypeNodeWithJsDoc( typeNode, checker.getTypeFromTypeNode( typeNode ), checker );
+
+                if( fnName === 'parse' || fnName === 'safeParse' )
+                {
+                    const src = resolveStaticParseSource( node.arguments[1], checker );
+
+                    if( src === 'string' )
+                    {
+                        checkExpressionAgainstType( node.arguments[0], type, checker, rawDiagnostics );
+                    }
+                    else if( src === 'json' )
+                    {
+                        const rawConst = tryGetConstantValue( node.arguments[0]);
+
+                        if( rawConst?.kind === 'string' )
+                        {
+                            const targetNode = unwrapExpression( node.arguments[0]);
+
+                            try
+                            {
+                                const parsed = JSON.parse( rawConst.value );
+                                checkRuntimeConstantAgainstType( parsed, type, checker, rawDiagnostics, targetNode, 0 );
+                            }
+                            catch
+                            {
+                                rawDiagnostics.push( createDiagnostic( targetNode, `Invalid JSON literal passed to ${fnName}` ));
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    checkExpressionAgainstType( node.arguments[0], type, checker, rawDiagnostics );
+                }
             }
         }
 

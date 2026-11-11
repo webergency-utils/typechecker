@@ -107,7 +107,12 @@ describe( 'resolver coverage', () =>
         expect( stringSchema ).toMatchObject({ type : 'string', minLength : 2, maxLength : 5, pattern : '^x', format : 'email' });
         expect( numberSchema ).toMatchObject({ type : 'number', minimum : 1, maximum : 9, multipleOf : 2 });
         expect( collectionSchema ).toMatchObject({ 'x-typescript-type' : 'Set', minItems : 1, maxItems : 3, uniqueItems : true });
-        expect( intersectionSchema.allOf ).toHaveLength( 2 );
+        expect( intersectionSchema ).toMatchObject({
+            type                 : 'object',
+            properties           : { left : { type : 'string' }, right : { type : 'number' } },
+            required             : [ 'left', 'right' ],
+            additionalProperties : false
+        });
         expect( rootSchema.$defs ).toBeDefined();
         expect( generateHash( rootType, checker )).toMatch( /^[a-f0-9]{16}$/ );
     });

@@ -1,4 +1,5 @@
 import { defineConfig } from 'tsup';
+import * as fs from 'fs';
 import * as path from 'path';
 
 const RUNTIME_MODULES = new Set([
@@ -6,6 +7,8 @@ const RUNTIME_MODULES = new Set([
     'schema-compiler',
     'parse-runtime',
     'serializer-runtime',
+    'clone-runtime',
+    'random-runtime',
     'transform',
     'casing',
     'path',
@@ -13,7 +16,8 @@ const RUNTIME_MODULES = new Set([
 ]);
 
 const ROOT_MODULES = new Set([
-    'transformer'
+    'transformer',
+    'unplugin'
 ]);
 
 export default defineConfig({
@@ -22,11 +26,17 @@ export default defineConfig({
         'src/plugin.ts',
         'src/transformer.ts',
         'src/unplugin.ts',
+        'src/rollup.ts',
+        'src/esbuild.ts',
+        'src/webpack.ts',
+        'src/webpack-loader.ts',
         'src/runtime/index.ts',
         'src/runtime/validators.ts',
         'src/runtime/schema-compiler.ts',
         'src/runtime/parse-runtime.ts',
         'src/runtime/serializer-runtime.ts',
+        'src/runtime/clone-runtime.ts',
+        'src/runtime/random-runtime.ts',
         'src/runtime/transform.ts',
         'src/runtime/casing.ts',
         'src/runtime/path.ts',
@@ -69,5 +79,31 @@ export default defineConfig({
                 });
             }
         }
-    ]
+    ],
+    async onSuccess()
+    {
+        const patch = '\nif (typeof module !== "undefined" && module.exports && typeof module.exports.default === "function") { module.exports = Object.assign(module.exports.default, module.exports); }\n';
+
+        for( const relPath of [
+            'dist/plugin.cjs',
+            'dist/unplugin.cjs',
+            'dist/rollup.cjs',
+            'dist/esbuild.cjs',
+            'dist/webpack.cjs',
+            'dist/webpack-loader.cjs'
+        ])
+        {
+            const cjsFile = path.resolve( relPath );
+
+            if( fs.existsSync( cjsFile ))
+            {
+                const content = fs.readFileSync( cjsFile, 'utf8' );
+
+                if( !content.includes( 'Object.assign(module.exports.default' ))
+                {
+                    fs.writeFileSync( cjsFile, content + patch, 'utf8' );
+                }
+            }
+        }
+    }
 });

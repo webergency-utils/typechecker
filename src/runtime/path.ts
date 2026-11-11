@@ -95,7 +95,7 @@ export function resolvePath( currentPath: string, targetPath: string ): string
 {
     if( targetPath.startsWith( '/' ))
     {
-        return targetPath.substring( 1 );
+        return targetPath.substring( 1 ).replace( /\//g, '.' );
     }
 
     if( !targetPath.startsWith( '.' ))
@@ -158,8 +158,21 @@ export function getValueAtPath( obj: any, path: string ): any
 
         if( isIndexSegment( part ))
         {
-            const idx = parseInt( part.slice( 1, -1 ), 10 );
-            current = current[idx];
+            const inner = part.slice( 1, -1 );
+
+            if( current instanceof Map )
+            {
+                current = current.has( inner ) ? current.get( inner ) : current.get( Number( inner ));
+            }
+            else
+            {
+                const idx = parseInt( inner, 10 );
+                current = current[idx];
+            }
+        }
+        else if( current instanceof Map )
+        {
+            current = current.get( part );
         }
         else
         {

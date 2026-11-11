@@ -13,6 +13,7 @@ import
 export { resolvePath, getValueAtPath, hasPath };
 import { createSafeRegex, isRegexSafe, testRegex } from './regex.js';
 import { applyNodeTransform, type TransformFn } from './transform.js';
+import { formatCasing, type CasingFormat } from './casing.js';
 
 /** Controls unknown object keys only — not coercion. Use `from` for conversion. */
 export type ValidationMode = 'strict' | 'relaxed' | 'strip';
@@ -63,7 +64,7 @@ export interface PathContext {
 
 export type FromCoercionContext = PathContext & { kind : CoercionKind };
 
-type FromOption = 'json' | 'query' | 'string' | (( val: any, ctx: FromCoercionContext ) => any );
+export type FromOption = 'json' | 'query' | 'string' | 'formData' | 'headers' | (( val: any, ctx: FromCoercionContext ) => any );
 
 export interface ValidationContext {
     success          : boolean
@@ -142,7 +143,7 @@ export type JsonSchemaTypescriptType =
     | 'Int8Array' | 'Int16Array' | 'Int32Array'
     | 'Float32Array' | 'Float64Array'
     | 'BigInt64Array' | 'BigUint64Array'
-    | 'ArrayBuffer' | 'SharedArrayBuffer' | 'DataView' | 'Buffer'
+    | 'ArrayBuffer' | 'SharedArrayBuffer' | 'DataView' | 'Buffer' | 'File' | 'Blob'
     | ( string & {});
 
 /**
@@ -154,7 +155,8 @@ export type JsonSchemaTarget = 'draft-07' | 'draft-2020-12' | 'openapi-3.0' | 'o
 
 export interface JsonSchemaOptions
 {
-    target? : JsonSchemaTarget
+    target?         : JsonSchemaTarget
+    propertyCasing? : CasingFormat
 }
 
 export type JsonSchema = JsonSchemaObject;
@@ -163,6 +165,14 @@ export interface JsonSchemaObject
 {
     $schema?               : string
     $id?                   : string
+    title?                 : string
+    description?           : string
+    default?               : unknown
+    examples?              : unknown[]
+    deprecated?            : boolean
+    readOnly?              : boolean
+    writeOnly?             : boolean
+    'x-secret'?            : boolean
     $defs?                 : Record<string, JsonSchema | boolean | undefined>
     definitions?           : Record<string, JsonSchema | boolean>
     components?            : { schemas? : Record<string, JsonSchema | boolean | undefined> }
@@ -240,7 +250,19 @@ export function isPlainObject( v: any ): boolean
 {
     if( v === null || typeof v !== 'object' || Array.isArray( v )) { return false }
 
-    if( v instanceof Date || v instanceof URL || v instanceof RegExp || v instanceof Map || v instanceof Set ) { return false }
+    if(
+        v instanceof Date ||
+        v instanceof URL ||
+        v instanceof RegExp ||
+        v instanceof Map ||
+        v instanceof Set ||
+        v instanceof Blob ||
+        v instanceof FormData ||
+        v instanceof Headers
+    )
+    {
+        return false;
+    }
 
     if( typeof Buffer !== 'undefined' && typeof Buffer.isBuffer === 'function' && Buffer.isBuffer( v )) { return false }
 
@@ -257,7 +279,9 @@ export function findExclusiveKeyArm( v: any, exclusiveKeys: string[] | undefined
 
     for( let i = 0; i < exclusiveKeys.length; i++ )
     {
-        if( v[exclusiveKeys[i]] !== undefined )
+        const key = exclusiveKeys[i];
+
+        if( Object.hasOwn( v, key ) && v[key] !== undefined )
         {
             if( matchedIdx !== -1 ){ return -1 }
 
@@ -350,15 +374,59 @@ export function commitContainer( target: any, source: any ): boolean
     return false;
 }
 
+function decimalFractionDigits( n: number ): number
+{
+    const s = n.toString().toLowerCase();
+    const expIdx = s.indexOf( 'e' );
+
+    if( expIdx !== -1 )
+    {
+        const exp = parseInt( s.slice( expIdx + 1 ), 10 );
+        const mantissa = s.slice( 0, expIdx );
+        const dot = mantissa.indexOf( '.' );
+        const mantissaFrac = dot === -1 ? 0 : mantissa.length - dot - 1;
+
+        return Math.max( 0, mantissaFrac - exp );
+    }
+
+    return s.length - s.indexOf( '.' ) - 1;
+}
+
 export function isMultipleOfNumber( v: number, n: number ): boolean 
 {
-    if( n === 0 || !Number.isFinite( n )) { return false }
+    if( n === 0 || !Number.isFinite( n ) || !Number.isFinite( v )) { return false }
 
-    if( !Number.isFinite( v )) { return true }
+    if( v === 0 ) { return true }
 
-    const q = v / n;
+    const absN = Math.abs( n );
+    const absV = Math.abs( v );
 
-    return Math.abs( q - Math.round( q )) <= 1e-8 * Math.max( 1, Math.abs( q ));
+    if( Number.isInteger( absN ))
+    {
+        return absV % absN === 0;
+    }
+
+    const frac = decimalFractionDigits( absN );
+
+    if( frac <= 12 )
+    {
+        const scale = 10 ** frac;
+        const scaledN = Math.round( absN * scale );
+        const scaledV = absV * scale;
+
+        if( scaledV <= 9007199254740991 )
+        {
+            const roundedV = Math.round( scaledV );
+
+            return Math.abs( scaledV - roundedV ) <= 16 * Number.EPSILON * Math.max( 1, scaledV ) &&
+                roundedV % scaledN === 0;
+        }
+    }
+
+    const rem = absV % absN;
+    const tol = 16 * Number.EPSILON * absV;
+
+    return rem <= tol || Math.abs( rem - absN ) <= tol;
 }
 
 export function shouldMutate( ctx: ValidationContext ): boolean 
@@ -366,15 +434,319 @@ export function shouldMutate( ctx: ValidationContext ): boolean
     return ctx.mutate === true;
 }
 
-/** Query-style coercions — shared by `from: 'query'` and `from: 'string'`. */
+/** Query-style coercions — shared by `from: 'query'`, `'string'`, `'formData'`, and `'headers'`. */
 function wantsQuery( ctx: ValidationContext ): boolean
 {
-    return ctx.from === 'query' || ctx.from === 'string';
+    return ctx.from === 'query' || ctx.from === 'string' || ctx.from === 'formData' || ctx.from === 'headers';
 }
 
 function wantsJsonRevive( ctx: ValidationContext ): boolean
 {
-    return ctx.from === 'json' || ctx.from === 'query' || ctx.from === 'string';
+    return ctx.from === 'json' || wantsQuery( ctx );
+}
+
+const BRACKET_INT_RE = /^[0-9]+$/;
+const MAX_BRACKET_ARRAY_INDEX = 1000;
+const MAX_BRACKET_DEPTH = 32;
+export const MAX_BRACKET_KEYS = 10000;
+
+function isBracketArrayIndex( key: string ): boolean
+{
+    if( !BRACKET_INT_RE.test( key ) || key.length > 4 ){ return false }
+
+    return parseInt( key, 10 ) <= MAX_BRACKET_ARRAY_INDEX;
+}
+
+function isUnsafeBracketKey( key: string | number ): boolean
+{
+    return key === '__proto__' || key === 'prototype' || key === 'constructor';
+}
+
+function maxNumericBracketKey( target: any ): number
+{
+    let max = -1;
+
+    for( const k of Object.keys( target ))
+    {
+        if( isBracketArrayIndex( k ))
+        {
+            max = Math.max( max, parseInt( k, 10 ));
+        }
+    }
+
+    return max;
+}
+
+export function assignBracketPair( query: Record<string | number, any>, key: string | number, value: any ): void
+{
+    const rawKeys = key.toString().replace( /\]\[/g, '[' ).replace( /]$/, '' ).split( '[' );
+    const keys = rawKeys.length > MAX_BRACKET_DEPTH ? rawKeys.slice( 0, MAX_BRACKET_DEPTH ) : rawKeys;
+    let obj: any = query;
+    let parent: any;
+    let parentKey: string | number | undefined;
+
+    for( let i = 0; i < keys.length; ++i )
+    {
+        let k: string | number = keys[i];
+
+        if( isUnsafeBracketKey( k )){ return }
+
+        if( k && isBracketArrayIndex( k.toString())){ k = parseInt( k, 10 ) }
+        else if( k === '' )
+        {
+            k = Array.isArray( obj ) ? obj.length - 1 : maxNumericBracketKey( obj );
+
+            if( k === -1 || i === keys.length - 1 || Object.prototype.hasOwnProperty.call( obj[k] || Object.create( null ), keys[i + 1]))
+            {
+                k += 1;
+            }
+        }
+
+        if( typeof k === 'string' && Array.isArray( obj ))
+        {
+            obj = obj.reduce(( o: any, v: any, idx: number ) =>
+            {
+                setOwnProperty( o, idx, v );
+
+                return o;
+            }, Object.create( null ));
+            setOwnProperty( parent, parentKey!, obj );
+        }
+
+        if( i < keys.length - 1 )
+        {
+            if( !isPlainObject( obj[k]) && !Array.isArray( obj[k]))
+            {
+                setOwnProperty( obj, k, ( keys[i + 1] === '' || isBracketArrayIndex( keys[i + 1])) ? [] : Object.create( null ));
+            }
+
+            if( isUnsafeBracketKey( keys[i + 1])){ return }
+
+            parent = obj;
+            parentKey = k;
+            obj = obj[k];
+        }
+        else
+        {
+            if( obj[k] !== undefined )
+            {
+                if( Array.isArray( obj[k]))
+                {
+                    obj[k].push( value );
+                }
+                else if( isPlainObject( obj[k]))
+                {
+                    const nested = obj[k];
+                    const nextIndex = maxNumericBracketKey( nested ) + 1;
+                    setOwnProperty( nested, nextIndex, value );
+                }
+                else
+                {
+                    setOwnProperty( obj, k, [ obj[k], value ]);
+                }
+            }
+            else
+            {
+                setOwnProperty( obj, k, value );
+            }
+        }
+    }
+}
+
+export function extractFormDataObject( input: any ): Record<string, any> | undefined
+{
+    if( input === null || typeof input !== 'object' || typeof input.entries !== 'function' || typeof input.getAll !== 'function' )
+    {
+        return undefined;
+    }
+
+    const out: Record<string, any> = Object.create( null );
+    let count = 0;
+
+    for( const [ key, val ] of input.entries())
+    {
+        if( ++count > MAX_BRACKET_KEYS ){ break }
+
+        assignBracketPair( out, key, val );
+    }
+
+    return out;
+}
+
+export function toHeaderKebabKey( key: string ): string
+{
+    return formatCasing( key, 'kebab-case' );
+}
+
+export function splitHeaderList( val: string ): string[]
+{
+    const trimmed = val.trim();
+
+    return trimmed === '' ? [] : trimmed.split( ',' ).map( part => part.trim());
+}
+
+const normalizedHeaderObjects = new WeakSet<object>();
+const headerAllowedKeysCache = new WeakMap<object, Set<string>>();
+
+function appendHeaderEntry( out: Record<string, any>, rawKey: string, val: any ): void
+{
+    if( val === undefined ){ return }
+
+    const lower = rawKey.toLowerCase();
+
+    if( lower === '__proto__' || lower === 'constructor' || lower === 'prototype' ){ return }
+
+    if( Object.hasOwn( out, lower ))
+    {
+        const prev = out[lower];
+        const merged = Array.isArray( prev ) ? prev : [ prev ];
+
+        if( Array.isArray( val ))
+        {
+            merged.push( ...val );
+        }
+        else
+        {
+            merged.push( val );
+        }
+
+        out[lower] = merged;
+    }
+    else
+    {
+        out[lower] = Array.isArray( val ) ? val.slice() : val;
+    }
+}
+
+export function extractHeadersObject( input: any ): Record<string, any> | undefined
+{
+    if( input === null || typeof input !== 'object' ){ return undefined }
+
+    if( normalizedHeaderObjects.has( input )){ return input }
+
+    if( Array.isArray( input ))
+    {
+        const out: Record<string, any> = Object.create( null );
+
+        for( const item of input )
+        {
+            if( !Array.isArray( item ) || item.length !== 2 || typeof item[0] !== 'string' )
+            {
+                return undefined;
+            }
+
+            appendHeaderEntry( out, item[0], item[1]);
+        }
+
+        normalizedHeaderObjects.add( out );
+
+        return out;
+    }
+
+    if(
+        input instanceof Headers ||
+        (
+            typeof input.entries === 'function' &&
+            typeof input.getAll !== 'function' &&
+            !ArrayBuffer.isView( input ) &&
+            !( input instanceof Map ) &&
+            !( input instanceof Set )
+        )
+    )
+    {
+        const out: Record<string, any> = Object.create( null );
+        const setCookies = typeof input.getSetCookie === 'function' ? input.getSetCookie() : [];
+
+        for( const [ key, val ] of input.entries())
+        {
+            if( typeof key !== 'string' ){ return undefined }
+
+            if( setCookies.length > 0 && key.toLowerCase() === 'set-cookie' ){ continue }
+
+            appendHeaderEntry( out, key, val );
+        }
+
+        for( const cookie of setCookies )
+        {
+            appendHeaderEntry( out, 'set-cookie', cookie );
+        }
+
+        normalizedHeaderObjects.add( out );
+
+        return out;
+    }
+
+    if( isPlainObject( input ))
+    {
+        const out: Record<string, any> = Object.create( null );
+
+        for( const key of Object.keys( input ))
+        {
+            appendHeaderEntry( out, key, input[key]);
+        }
+
+        normalizedHeaderObjects.add( out );
+
+        return out;
+    }
+
+    return undefined;
+}
+
+function expandHeaderAllowedKeys( keys: string[] | Set<string> ): Set<string>
+{
+    const cached = headerAllowedKeysCache.get( keys );
+
+    if( cached ){ return cached }
+
+    const expanded = new Set<string>();
+
+    for( const k of keys )
+    {
+        expanded.add( k );
+        expanded.add( k.toLowerCase());
+        expanded.add( toHeaderKebabKey( k ));
+    }
+
+    headerAllowedKeysCache.set( keys, expanded );
+
+    return expanded;
+}
+
+function resolveObjectPropEntry( v: any, key: string, fromHeaders: boolean ): [ boolean, any, string ]
+{
+    if( fromHeaders )
+    {
+        const kebab = toHeaderKebabKey( key );
+
+        if( Object.hasOwn( v, kebab )){ return [ true, v[kebab], kebab ] }
+
+        const lower = key.toLowerCase();
+
+        if( Object.hasOwn( v, lower )){ return [ true, v[lower], lower ] }
+    }
+
+    const hasKey = Object.hasOwn( v, key );
+
+    return [ hasKey, hasKey ? v[key] : undefined, key ];
+}
+
+function redactErrorEntry( err: IValidationError, rawSecret: any ): void
+{
+    err.value = '[REDACTED]';
+
+    if( typeof rawSecret === 'string' && rawSecret.length > 0 && err.error.includes( rawSecret ))
+    {
+        err.error = err.error.split( rawSecret ).join( '[REDACTED]' );
+    }
+
+    if( err.issues )
+    {
+        for( const sub of err.issues )
+        {
+            redactErrorEntry( sub, rawSecret );
+        }
+    }
 }
 
 function pathContext( path: string, ctx: ValidationContext ): PathContext
@@ -736,7 +1108,7 @@ function parseFormatDateTime( value: string ): Date | undefined
 
 export function deepEqual( left: any, right: any, seen: WeakMap<object, WeakSet<object>> = new WeakMap()): boolean
 {
-    if( left === right ){ return true }
+    if( Object.is( left, right )){ return true }
 
     if( left === null || right === null || typeof left !== 'object' || typeof right !== 'object' )
     {
@@ -764,7 +1136,7 @@ export function deepEqual( left: any, right: any, seen: WeakMap<object, WeakSet<
 
     if( left instanceof Date || right instanceof Date )
     {
-        return left instanceof Date && right instanceof Date && left.getTime() === right.getTime();
+        return left instanceof Date && right instanceof Date && Object.is( left.getTime(), right.getTime());
     }
 
     if( left instanceof URL || right instanceof URL )
@@ -780,6 +1152,56 @@ export function deepEqual( left: any, right: any, seen: WeakMap<object, WeakSet<
             left.flags === right.flags;
     }
 
+    if( left instanceof ArrayBuffer || right instanceof ArrayBuffer )
+    {
+        if( !( left instanceof ArrayBuffer ) || !( right instanceof ArrayBuffer ) || left.byteLength !== right.byteLength )
+        {
+            return false;
+        }
+
+        const a = new Uint8Array( left );
+        const b = new Uint8Array( right );
+
+        for( let i = 0; i < a.length; i++ )
+        {
+            if( a[i] !== b[i]){ return false }
+        }
+
+        return true;
+    }
+
+    if( ArrayBuffer.isView( left ) || ArrayBuffer.isView( right ))
+    {
+        if(
+            !ArrayBuffer.isView( left ) ||
+            !ArrayBuffer.isView( right ) ||
+            left.constructor !== right.constructor ||
+            left.byteLength !== right.byteLength
+        )
+        {
+            return false;
+        }
+
+        const a = new Uint8Array( left.buffer, left.byteOffset, left.byteLength );
+        const b = new Uint8Array( right.buffer, right.byteOffset, right.byteLength );
+
+        for( let i = 0; i < a.length; i++ )
+        {
+            if( a[i] !== b[i]){ return false }
+        }
+
+        return true;
+    }
+
+    if( left instanceof Error || right instanceof Error )
+    {
+        return left instanceof Error &&
+            right instanceof Error &&
+            left.constructor === right.constructor &&
+            left.name === right.name &&
+            left.message === right.message;
+    }
+
     if( left instanceof Set || right instanceof Set )
     {
         if( !( left instanceof Set ) || !( right instanceof Set ) || left.size !== right.size ){ return false }
@@ -788,7 +1210,7 @@ export function deepEqual( left: any, right: any, seen: WeakMap<object, WeakSet<
 
         for( const value of left )
         {
-            const index = unmatched.findIndex( candidate => deepEqual( value, candidate ));
+            const index = unmatched.findIndex( candidate => deepEqual( value, candidate, seen ));
 
             if( index === -1 ){ return false }
 
@@ -807,7 +1229,7 @@ export function deepEqual( left: any, right: any, seen: WeakMap<object, WeakSet<
         for( const [ key, value ] of left )
         {
             const index = unmatched.findIndex(([ candidateKey, candidateValue ]) =>
-                deepEqual( key, candidateKey ) && deepEqual( value, candidateValue )
+                deepEqual( key, candidateKey, seen ) && deepEqual( value, candidateValue, seen )
             );
 
             if( index === -1 ){ return false }
@@ -816,6 +1238,16 @@ export function deepEqual( left: any, right: any, seen: WeakMap<object, WeakSet<
         }
 
         return true;
+    }
+
+    const leftProto = Object.getPrototypeOf( left );
+    const rightProto = Object.getPrototypeOf( right );
+    const leftPlain = leftProto === Object.prototype || leftProto === null;
+    const rightPlain = rightProto === Object.prototype || rightProto === null;
+
+    if( leftPlain !== rightPlain || ( !leftPlain && leftProto !== rightProto ))
+    {
+        return false;
     }
 
     const leftKeys = Object.keys( left ).sort();
@@ -939,18 +1371,26 @@ function uniqueContentHash( value: any, seen?: WeakSet<object> ): number | undef
     {
         const cycleSet = seen ?? new WeakSet<object>();
         cycleSet.add( value );
-        let h = mixHash( 0x80000000, value.length );
 
-        for( let i = 0; i < value.length; i++ )
+        try
         {
-            const child = uniqueContentHash( value[i], cycleSet );
+            let h = mixHash( 0x80000000, value.length );
 
-            if( child === undefined ){ return undefined }
+            for( let i = 0; i < value.length; i++ )
+            {
+                const child = uniqueContentHash( value[i], cycleSet );
 
-            h = mixHash( h, child );
+                if( child === undefined ){ return undefined }
+
+                h = mixHash( h, child );
+            }
+
+            return h >>> 0;
         }
-
-        return h >>> 0;
+        finally
+        {
+            cycleSet.delete( value );
+        }
     }
 
     const proto = Object.getPrototypeOf( value );
@@ -978,28 +1418,37 @@ function uniqueContentHash( value: any, seen?: WeakSet<object> ): number | undef
     }
 
     let cycleSet = seen;
+    let addedSelf = false;
     let h = mixHash( 0x90000000, keyCount );
 
-    for( let i = 0; i < keyCount; i++ )
+    try
     {
-        const key = keys[i];
-        const childValue = value[key];
-        h = mixStringHash( h, key );
-
-        if( childValue !== null && typeof childValue === 'object' )
+        for( let i = 0; i < keyCount; i++ )
         {
-            cycleSet ??= new WeakSet<object>();
-            cycleSet.add( value );
+            const key = keys[i];
+            const childValue = value[key];
+            h = mixStringHash( h, key );
+
+            if( !addedSelf && childValue !== null && typeof childValue === 'object' )
+            {
+                cycleSet ??= new WeakSet<object>();
+                cycleSet.add( value );
+                addedSelf = true;
+            }
+
+            const child = uniqueContentHash( childValue, cycleSet );
+
+            if( child === undefined ){ return undefined }
+
+            h = mixHash( h, child );
         }
 
-        const child = uniqueContentHash( childValue, cycleSet );
-
-        if( child === undefined ){ return undefined }
-
-        h = mixHash( h, child );
+        return h >>> 0;
     }
-
-    return h >>> 0;
+    finally
+    {
+        if( addedSelf && cycleSet ){ cycleSet.delete( value ) }
+    }
 }
 
 export function hasUniqueItems( v: any[]): boolean
@@ -1356,7 +1805,7 @@ export const validators = {
         {
             if( typeof v === 'string' ) 
             {
-                const match = v.match( /^\/(.*)\/([gimuy]*)$/ );
+                const match = v.match( /^\/(.*)\/([dgimsuvy]*)$/ );
 
                 if( match ) 
                 {
@@ -1493,7 +1942,11 @@ export const validators = {
     {
         if( !Array.isArray( v )) 
         {
-            if( wantsQuery( ctx ) && v !== undefined && v !== null ) 
+            if( ctx.from === 'headers' && typeof v === 'string' )
+            {
+                v = splitHeaderList( v );
+            }
+            else if( wantsQuery( ctx ) && v !== undefined && v !== null ) 
             {
                 v = [v];
             }
@@ -1539,13 +1992,45 @@ export const validators = {
         return data;
     },
 
-    props : ( v: any, data: any, path: string, ctx: ValidationContext, props: [string, boolean, Function, boolean?][]) => 
+    props : ( v: any, data: any, path: string, ctx: ValidationContext, props: [string, boolean, Function, boolean?, boolean?][]) => 
     {
         const inPlace = data === v;
+        const fromHeaders = ctx.from === 'headers';
+        const checkReadOnly = ctx.from !== undefined;
 
-        for( const [key, isOptional, validator, hasDefault] of props ) 
+        for( const [ key, isOptional, validator, hasDefault, isReadOnly ] of props ) 
         {
-            const val = v[key];
+            const [ hasKey, val, matchedKey ] = resolveObjectPropEntry( v, key, fromHeaders );
+            const child = childPath( path, key );
+
+            if( isReadOnly && checkReadOnly )
+            {
+                if( hasKey && val !== undefined )
+                {
+                    if( ctx.mode === 'strict' )
+                    {
+                        report( ctx, child, `ReadOnly<${key}>`, val );
+                        continue;
+                    }
+
+                    if( ctx.mode === 'strip' && ctx.unionProbe )
+                    {
+                        ctx.unionProbe.stripped++;
+                        ctx.unionProbe.matched--;
+                    }
+                }
+
+                if( Object.hasOwn( data, matchedKey )){ delete data[matchedKey] }
+
+                if( hasDefault )
+                {
+                    const defVal = validator( undefined, child, ctx );
+
+                    if( ctx.success ){ setOwnProperty( data, key, defVal ) }
+                }
+
+                continue;
+            }
 
             // An absent optional property stays absent. Running its `T | undefined` validator would cost
             // a union attempt and then write the key back as an explicit `undefined`. A Defaulted
@@ -1553,9 +2038,21 @@ export const validators = {
             // must stick (there is no silent rollback here).
             if( isOptional && val === undefined && !hasDefault ){ continue }
 
-            const result = validator( val, childPath( path, key ), ctx );
+            const prevErrors = ctx.errors.length;
+            const result = validator( val, child, ctx );
 
-            if( ctx.success && ( !inPlace || !Object.is( val, result ) || ( val === undefined && !Object.hasOwn( v, key ))))
+            if( !isOptional && !hasKey && !hasDefault && result === undefined && ctx.errors.length === prevErrors )
+            {
+                report( ctx, child, `Required<${key}>`, undefined );
+                continue;
+            }
+
+            if( inPlace && matchedKey !== key && hasKey )
+            {
+                delete data[matchedKey];
+            }
+
+            if( ctx.success && ( !inPlace || matchedKey !== key || !Object.is( val, result ) || ( val === undefined && !hasKey )))
             {
                 setOwnProperty( data, key, result );
             }
@@ -1593,11 +2090,12 @@ export const validators = {
 
         if( !mutate && !probe ) { return data }
 
+        const effectiveKeys = ctx.from === 'headers' ? expandHeaderAllowedKeys( allowedKeys ) : allowedKeys;
         const src = ( probe && probeSource.get( data )) || data;
 
         for( const k of Object.keys( src )) 
         {
-            if( keySetHas( allowedKeys, k ))
+            if( keySetHas( effectiveKeys, k ))
             {
                 if( probe && src[k] !== undefined ){ probe.matched++ }
             }
@@ -1616,6 +2114,7 @@ export const validators = {
     {
         if( !isPlainObject( v )){ return }
 
+        const effectiveKeys = ctx.from === 'headers' ? expandHeaderAllowedKeys( knownKeys ) : knownKeys;
         const inPlace = data === v;
         const probe = ctx.mode === 'strip' ? ctx.unionProbe : undefined;
         let matched = 0;
@@ -1626,7 +2125,7 @@ export const validators = {
 
             if( probe && val !== undefined ){ matched++ }
 
-            if( keySetHas( knownKeys, key )){ continue }
+            if( keySetHas( effectiveKeys, key )){ continue }
 
             const next = childValidator( val, childPath( path, key ), ctx );
 
@@ -1651,6 +2150,7 @@ export const validators = {
     {
         if( !isPlainObject( v )){ return }
 
+        const effectiveKeys = ctx.from === 'headers' ? expandHeaderAllowedKeys( knownKeys ) : knownKeys;
         const inPlace = data === v;
         const probe = ctx.mode === 'strip' ? ctx.unionProbe : undefined;
         let matched = 0;
@@ -1659,7 +2159,7 @@ export const validators = {
         {
             const val = v[key];
 
-            if( keySetHas( knownKeys, key ))
+            if( keySetHas( effectiveKeys, key ))
             {
                 if( probe && val !== undefined ){ matched++ }
 
@@ -1727,6 +2227,29 @@ export const validators = {
 
     object : ( v: any, path: string, ctx: ValidationContext, allowedKeys?: string[] | Set<string>, expected: string = 'Type<Object>' ) => 
     {
+        if( ctx.from === 'formData' )
+        {
+            const extracted = extractFormDataObject( v );
+
+            if( extracted )
+            {
+                v = extracted;
+
+                if( path === '' ){ ctx.root = v }
+            }
+        }
+        else if( ctx.from === 'headers' )
+        {
+            const extracted = extractHeadersObject( v );
+
+            if( extracted )
+            {
+                v = extracted;
+
+                if( path === '' ){ ctx.root = v }
+            }
+        }
+
         if( !isPlainObject( v )) 
         {
             if( typeof ctx.from === 'function' )
@@ -1751,9 +2274,11 @@ export const validators = {
 
         if( ctx.mode === 'strict' && allowedKeys ) 
         {
+            const effectiveKeys = ctx.from === 'headers' ? expandHeaderAllowedKeys( allowedKeys ) : allowedKeys;
+
             for( const k of Object.keys( v )) 
             {
-                if( !keySetHas( allowedKeys, k )) 
+                if( !keySetHas( effectiveKeys, k )) 
                 {
                     report( ctx, path, `PropertyNotAllowed<${k}>`, v[k]);
                 }
@@ -1859,7 +2384,6 @@ export const validators = {
     {
         let regex: RegExp | undefined;
         let isValid = true;
-        let result: any = v;
 
         switch ( format ) 
         {
@@ -1870,25 +2394,12 @@ export const validators = {
             case 'url': regex = /^(?:https?|ftp):\/\/[^\s/$.?#].[^\s]*$/i; break;
             case 'ipv4': regex = /^(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/; break;
             case 'ipv6': regex = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$/; break;
-            case 'date': 
-            {
-                const parsed = parseFormatDate( v );
-
-                if( !parsed ){ isValid = false }
-                else if( wantsQuery( ctx )){ result = parsed }
-                break;
-            }
-            case 'date-time': 
-            {
-                const parsed = parseFormatDateTime( v );
-
-                if( !parsed ){ isValid = false }
-                else if( wantsQuery( ctx )){ result = parsed }
-                break;
-            }
+            case 'date': isValid = Boolean( parseFormatDate( v )); break;
+            case 'date-time': isValid = Boolean( parseFormatDateTime( v )); break;
 
             case 'byte': regex = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/; break;
-            case 'password': break; // Anything is a password
+            case 'password':
+            case 'binary': break;
             case 'regex': try { createSafeRegex( v ) }
             catch{ isValid = false }; break;
             case 'hostname': isValid = isHostname( v ); break;
@@ -1908,7 +2419,7 @@ export const validators = {
 
         if( !isValid ) { report( ctx, path, `Format<${format}>`, v, message ) }
 
-        return result;
+        return v;
     },
 
     minItems : ( v: any, path: string, ctx: ValidationContext, min: number, message?: string ) => 
@@ -2098,7 +2609,7 @@ export const validators = {
      */
     taggedUnion : ( v: any, path: string, ctx: ValidationContext, key: string, byTag: Map<any, Function>, expected: string = 'Type<Union>' ) =>
     {
-        if( isPlainObject( v ))
+        if( isPlainObject( v ) && Object.hasOwn( v, key ))
         {
             const check = byTag.get( v[key]);
 
@@ -2129,6 +2640,8 @@ export const validators = {
             from            : undefined,
             mutate          : false,
             root            : ctx.root,
+            transform       : ctx.transform,
+            dynamicAnchors  : ctx.dynamicAnchors,
             unionResolution : ctx.unionResolution
         };
 
@@ -2323,10 +2836,12 @@ export const validators = {
         return v;
     },
 
-    tuple : ( v: any, path: string, ctx: ValidationContext, checks: Function[], minItems?: number, restValidator?: Function ) => 
+    tuple : ( v: any, path: string, ctx: ValidationContext, checks: Function[], minItems?: number, restValidator?: Function, suffixChecks?: Function[]) => 
     {
-        const minLen = minItems !== undefined ? minItems : checks.length;
-        const maxLen = restValidator ? Infinity : checks.length;
+        const suffixLen = suffixChecks ? suffixChecks.length : 0;
+        const minPrefix = minItems !== undefined ? minItems : checks.length;
+        const minLen = minPrefix + suffixLen;
+        const maxLen = restValidator ? Infinity : checks.length + suffixLen;
         const lengthValid = ( arr: any[]): boolean => arr.length >= minLen && arr.length <= maxLen;
 
         if( !Array.isArray( v ) || !lengthValid( v )) 
@@ -2354,13 +2869,14 @@ export const validators = {
             }
         }
 
-        const fixedCount = Math.min( v.length, checks.length );
+        const restEnd = v.length - suffixLen;
+        const fixedCount = Math.min( restEnd, checks.length );
 
         if( shouldMutate( ctx ))
         {
             for( let i = 0; i < fixedCount; i++ )
             {
-                if( i >= minLen && v[i] === undefined ){ continue }
+                if( i >= minPrefix && v[i] === undefined ){ continue }
 
                 const next = checks[i]( v[i], indexPath( path, i ), ctx );
 
@@ -2369,11 +2885,22 @@ export const validators = {
 
             if( restValidator )
             {
-                for( let i = fixedCount; i < v.length; i++ )
+                for( let i = fixedCount; i < restEnd; i++ )
                 {
                     const next = restValidator( v[i], indexPath( path, i ), ctx );
 
                     if( !Object.is( v[i], next )){ v[i] = next }
+                }
+            }
+
+            if( suffixChecks )
+            {
+                for( let j = 0; j < suffixLen; j++ )
+                {
+                    const idx = restEnd + j;
+                    const next = suffixChecks[j]( v[idx], indexPath( path, idx ), ctx );
+
+                    if( !Object.is( v[idx], next )){ v[idx] = next }
                 }
             }
 
@@ -2384,7 +2911,7 @@ export const validators = {
 
         for( let i = 0; i < fixedCount; i++ )
         {
-            if( i >= minLen && v[i] === undefined )
+            if( i >= minPrefix && v[i] === undefined )
             {
                 data[i] = undefined;
                 continue;
@@ -2395,9 +2922,18 @@ export const validators = {
 
         if( restValidator )
         {
-            for( let i = fixedCount; i < v.length; i++ )
+            for( let i = fixedCount; i < restEnd; i++ )
             {
                 data[i] = restValidator( v[i], indexPath( path, i ), ctx );
+            }
+        }
+
+        if( suffixChecks )
+        {
+            for( let j = 0; j < suffixLen; j++ )
+            {
+                const idx = restEnd + j;
+                data[idx] = suffixChecks[j]( v[idx], indexPath( path, idx ), ctx );
             }
         }
 
@@ -2470,8 +3006,64 @@ export const validators = {
         return v;
     },
 
+    secret : ( v: any, path: string, ctx: ValidationContext, inner: Function ) =>
+    {
+        const startIdx = ctx.errors.length;
+        let res: any;
+
+        try
+        {
+            res = inner( v, path, ctx );
+        }
+        catch( e )
+        {
+            let safeMsg = e instanceof Error ? e.message : String( e );
+
+            if( typeof v === 'string' && v.length > 0 )
+            {
+                if( safeMsg.includes( v )){ safeMsg = safeMsg.split( v ).join( '[REDACTED]' ) }
+
+                const trimmed = v.trim();
+
+                if( trimmed.length > 0 && safeMsg.includes( trimmed ))
+                {
+                    safeMsg = safeMsg.split( trimmed ).join( '[REDACTED]' );
+                }
+            }
+
+            report( ctx, path, safeMsg, '[REDACTED]' );
+
+            return v;
+        }
+
+        for( let i = startIdx; i < ctx.errors.length; i++ )
+        {
+            redactErrorEntry( ctx.errors[i], v );
+
+            if( res !== v )
+            {
+                redactErrorEntry( ctx.errors[i], res );
+            }
+        }
+
+        return res;
+    },
+
     record : ( v: any, path: string, ctx: ValidationContext, childValidator: Function ) => 
     {
+        if( ctx.from === 'formData' )
+        {
+            const extracted = extractFormDataObject( v );
+
+            if( extracted ){ v = extracted }
+        }
+        else if( ctx.from === 'headers' )
+        {
+            const extracted = extractHeadersObject( v );
+
+            if( extracted ){ v = extracted }
+        }
+
         if( !isPlainObject( v )) 
         {
             if( typeof ctx.from === 'function' )
@@ -2524,6 +3116,10 @@ export const validators = {
             if( wantsJsonRevive( ctx ) && Array.isArray( v )) 
             {
                 v = new Set( v );
+            }
+            else if( ctx.from === 'headers' && typeof v === 'string' )
+            {
+                v = new Set( splitHeaderList( v ));
             }
             else if( wantsQuery( ctx ))
             {

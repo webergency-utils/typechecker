@@ -49,27 +49,11 @@ function mergeAnnotations( target: SchemaAnnotationFrame, source: SchemaAnnotati
     if( source.itemsAll ){ target.itemsAll = true }
 }
 
-function pushDynamicAnchor( ctx: ValidationContext, name: string, schema: JsonSchema | boolean ): void
-{
-    if( !ctx.dynamicAnchors ){ ctx.dynamicAnchors = [] }
-
-    const top = ctx.dynamicAnchors[ctx.dynamicAnchors.length - 1];
-
-    if( top )
-    {
-        top.set( name, schema );
-    }
-    else
-    {
-        ctx.dynamicAnchors.push( new Map([[ name, schema ]]));
-    }
-}
-
 function resolveDynamicAnchor( ctx: ValidationContext, name: string ): JsonSchema | boolean | undefined
 {
     if( !ctx.dynamicAnchors ){ return undefined }
 
-    for( let i = ctx.dynamicAnchors.length - 1; i >= 0; i-- )
+    for( let i = 0; i < ctx.dynamicAnchors.length; i++ )
     {
         const found = ctx.dynamicAnchors[i].get( name );
 
@@ -79,20 +63,43 @@ function resolveDynamicAnchor( ctx: ValidationContext, name: string ): JsonSchem
     return undefined;
 }
 
-function decodeContentEncoding( value: string, encoding: string ): Buffer | string | undefined
+const STRICT_BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const STRICT_BASE64URL_RE = /^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2}(?:==)?|[A-Za-z0-9_-]{3}=?)?$/;
+
+function decodeContentEncoding( value: string, encoding: string ): string | undefined
 {
     const normalized = encoding.toLowerCase();
 
     if( normalized === 'base64' || normalized === 'base64url' )
     {
-        const standard = normalized === 'base64url'
+        const isUrl = normalized === 'base64url';
+
+        if( !( isUrl ? STRICT_BASE64URL_RE : STRICT_BASE64_RE ).test( value ))
+        {
+            return undefined;
+        }
+
+        const standard = isUrl
             ? value.replace( /-/g, '+' ).replace( /_/g, '/' )
             : value;
-        const buf = Buffer.from( standard, 'base64' );
+        const padded = standard.length % 4 === 0
+            ? standard
+            : standard + '='.repeat( 4 - ( standard.length % 4 ));
 
-        if( buf.length === 0 && value.length > 0 ){ return undefined }
+        if( typeof Buffer !== 'undefined' )
+        {
+            return Buffer.from( padded, 'base64' ).toString( 'utf8' );
+        }
 
-        return buf;
+        const bin = atob( padded );
+        const bytes = new Uint8Array( bin.length );
+
+        for( let i = 0; i < bin.length; i++ )
+        {
+            bytes[i] = bin.charCodeAt( i );
+        }
+
+        return new TextDecoder().decode( bytes );
     }
 
     if( normalized === '7bit' || normalized === '8bit' || normalized === 'binary' || normalized === 'quoted-printable' )
@@ -110,7 +117,7 @@ function decodeJsonPointerToken( token: string ): string
 
 const SCHEMA_META_KEYS = new Set([
     '$schema', '$id', '$defs', 'definitions', 'components',
-    '$anchor', '$dynamicAnchor', '$recursiveAnchor'
+    '$anchor', '$dynamicAnchor', '$recursiveAnchor', 'readOnly', 'writeOnly', 'x-secret'
 ]);
 
 const SCHEMA_COMBINATOR_KEYS = new Set([
@@ -257,39 +264,11 @@ function dynamicAnchorName( schema: JsonSchemaObject ): string | undefined
 }
 
 /**
- * Schemas produced by {@link openAllOfMemberRoot}: unknown keys must be allowed for sibling-member
- * merging, but must NOT be annotation-evaluated (so parent `unevaluatedProperties` can see them).
+ * Schemas opened for `allOf` / `dependentSchemas` / `dependencies`: unknown keys must be allowed
+ * for sibling-member merging, but must NOT be annotation-evaluated (so parent `unevaluatedProperties`
+ * can see them).
  */
 const allofOpenedRoots = new WeakSet<object>();
-
-/**
- * Typeless object schemas inferred during compile: JSON Schema allows undeclared keys by default
- * without applying the `additionalProperties` applicator (so they stay unevaluated).
- */
-const typelessInferredObjects = new WeakSet<object>();
-
-/**
- * allOf members that close unknown keys must not reject sibling keys contributed by other members.
- * Open only the member's own root object; nested `additionalProperties` stay intact and see the
- * caller's real `mode`.
- */
-function openAllOfMemberRoot( schema: JsonSchema | boolean ): JsonSchema | boolean
-{
-    if( typeof schema !== 'object' || schema === null || schema.type !== 'object' )
-    {
-        return schema;
-    }
-
-    if( 'additionalProperties' in schema && schema.additionalProperties !== false )
-    {
-        return schema;
-    }
-
-    const opened = { ...schema, additionalProperties : true as const };
-    allofOpenedRoots.add( opened );
-
-    return opened;
-}
 
 const compiledSchemas = new WeakMap<object, CompiledSchema<any>>();
 
@@ -317,8 +296,48 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
     const rootSchema = schema;
     const compiledDefs = new Map<string, SchemaValidator>();
     const dynamicTargetCache = new Map<JsonSchema | boolean, SchemaValidator>();
+    const activeDynamicPaths = new Map<JsonSchema | boolean, Set<string>>();
     const anchors = new Map<string, JsonSchema | boolean>();
     const hasUnevaluated = collectSchemaAnchors( rootSchema, anchors );
+
+    function openAllOfMemberRoot( member: JsonSchema | boolean ): JsonSchema | boolean
+    {
+        let current = member;
+        const visitedRefs = new Set<string>();
+
+        while(
+            typeof current === 'object' &&
+            current !== null &&
+            typeof current.$ref === 'string' &&
+            !schemaHasSignificantSibling( current ) &&
+            !current.allOf &&
+            !current.anyOf &&
+            !current.oneOf &&
+            !current.$dynamicRef &&
+            !current.$recursiveRef
+        )
+        {
+            if( visitedRefs.has( current.$ref )){ return member }
+
+            visitedRefs.add( current.$ref );
+            current = resolveSchemaRef( rootSchema, current.$ref, anchors );
+        }
+
+        if(
+            typeof current !== 'object' ||
+            current === null ||
+            current.type !== 'object' ||
+            current.additionalProperties !== false
+        )
+        {
+            return member;
+        }
+
+        const opened = { ...current, additionalProperties : true as const };
+        allofOpenedRoots.add( opened );
+
+        return opened;
+    }
 
     function trackAnnotations( ctx: ValidationContext ): boolean
     {
@@ -441,9 +460,27 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
 
         return ( v, path, ctx ) =>
         {
-            pushDynamicAnchor( ctx, name, subSchema );
+            ctx.dynamicAnchors ??= [];
+            ctx.dynamicAnchors.push( new Map([[ name, subSchema ]]));
+            let pathSet = activeDynamicPaths.get( subSchema );
 
-            return check( v, path, ctx );
+            if( !pathSet )
+            {
+                pathSet = new Set();
+                activeDynamicPaths.set( subSchema, pathSet );
+            }
+
+            pathSet.add( path );
+
+            try
+            {
+                return check( v, path, ctx );
+            }
+            finally
+            {
+                pathSet.delete( path );
+                ctx.dynamicAnchors.pop();
+            }
         };
     }
 
@@ -509,10 +546,10 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
                 };
                 ifCheck( v, path, probe );
 
-                commitProbeAnnotations( ctx, probe.annotations );
-
                 if( probe.success )
                 {
+                    commitProbeAnnotations( ctx, probe.annotations );
+
                     if( thenCheck ){ out = runInPlace( thenCheck, v, path, ctx ) }
                 }
                 else if( elseCheck )
@@ -633,11 +670,18 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
 
         return ( v, path, ctx ) =>
         {
-            const target = resolveDynamicAnchor( ctx, name ) ?? anchors.get( name );
+            const target = resolveDynamicAnchor( ctx, name ) ??
+                anchors.get( name ) ??
+                ( name === '' ? rootSchema : undefined );
 
             if( target === undefined )
             {
                 throw new Error( `Schema reference not found: ${refPath}` );
+            }
+
+            if( activeDynamicPaths.get( target )?.has( path ))
+            {
+                return v;
             }
 
             let compiledTarget = dynamicTargetCache.get( target );
@@ -655,6 +699,8 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
     function peelCombinators( subSchema: JsonSchemaObject ): SchemaValidator
     {
         const rest: JsonSchemaObject = { ...subSchema };
+        delete rest.$dynamicAnchor;
+        delete rest.$recursiveAnchor;
         const members: ( JsonSchema | boolean )[] = [];
 
         if( rest.$ref )
@@ -741,27 +787,27 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
             throw new Error( 'Invalid JSON Schema: subschemas must be objects or booleans' );
         }
 
+        const core = buildObjectSchema( subSchema, opts );
+
+        return subSchema['x-secret'] === true
+            ? ( v, path, ctx ) => validators.secret( v, path, ctx, core )
+            : core;
+    }
+
+    function buildObjectSchema( subSchema: JsonSchemaObject, opts?: { skipPeel? : boolean }): SchemaValidator
+    {
+
         if( Array.isArray( subSchema.type ))
         {
-            const types = subSchema.type;
-
-            for( const t of types )
+            for( const t of subSchema.type )
             {
                 if( ![ 'string', 'number', 'integer', 'boolean', 'null', 'array', 'object' ].includes( t ))
                 {
                     throw new Error( `Unsupported JSON Schema type: ${t}` );
                 }
             }
-
-            const { type : _type, ...rest } = subSchema;
-
-            return maybeWrapDynamicAnchor( build({
-                ...rest,
-                anyOf : types.map( t => ({ ...rest, type : t }))
-            }), subSchema );
         }
-
-        if( typeof subSchema.type === 'string' &&
+        else if( typeof subSchema.type === 'string' &&
             !['string', 'number', 'integer', 'boolean', 'null', 'array', 'object'].includes( subSchema.type ))
         {
             throw new Error( `Unsupported JSON Schema type: ${subSchema.type}` );
@@ -770,6 +816,16 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
         if( !opts?.skipPeel && schemaHasCombinator( subSchema ) && schemaHasSignificantSibling( subSchema ))
         {
             return maybeWrapDynamicAnchor( peelCombinators( subSchema ), subSchema );
+        }
+
+        if( Array.isArray( subSchema.type ))
+        {
+            const types = subSchema.type;
+            const { type : _type, $dynamicAnchor : _da, $recursiveAnchor : _ra, ...rest } = subSchema;
+
+            return maybeWrapDynamicAnchor( build({
+                anyOf : types.map( t => ({ ...rest, type : t }))
+            }), subSchema );
         }
 
         if( subSchema.$ref )
@@ -804,6 +860,22 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
 
         if( subSchema['x-typescript-type'] === 'bigint' )
         {
+            if( subSchema.const !== undefined )
+            {
+                const expectedBig = BigInt( String( subSchema.const ));
+                const restSchema: JsonSchemaObject = { ...subSchema };
+                delete restSchema.const;
+
+                return finalize(( v, path, ctx ) =>
+                {
+                    const bv = validators.bigint( v, path, ctx );
+
+                    if( typeof bv === 'bigint' ){ return validators.literal( bv, path, ctx, expectedBig ) }
+
+                    return bv;
+                }, restSchema );
+            }
+
             return finalize(( v, path, ctx ) => validators.bigint( v, path, ctx ), subSchema );
         }
 
@@ -841,7 +913,7 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
         }
 
         if( typeof subSchema['x-typescript-type'] === 'string' &&
-            ['Uint8Array', 'Uint8ClampedArray', 'Uint16Array', 'Uint32Array', 'Int8Array', 'Int16Array', 'Int32Array', 'Float32Array', 'Float64Array', 'BigInt64Array', 'BigUint64Array', 'ArrayBuffer', 'SharedArrayBuffer', 'DataView', 'Buffer'].includes( subSchema['x-typescript-type']))
+            ['Uint8Array', 'Uint8ClampedArray', 'Uint16Array', 'Uint32Array', 'Int8Array', 'Int16Array', 'Int32Array', 'Float32Array', 'Float64Array', 'BigInt64Array', 'BigUint64Array', 'ArrayBuffer', 'SharedArrayBuffer', 'DataView', 'Buffer', 'File', 'Blob'].includes( subSchema['x-typescript-type']))
         {
             const typeName = subSchema['x-typescript-type'];
 
@@ -883,10 +955,9 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
 
                 return new Set<string>( Object.keys( s.properties || {}));
             });
-            const allOriginallyClosedObjects = subSchema.allOf.length > 0 &&
-                subSchema.allOf.every(( s ) =>
-                    typeof s === 'object' && s !== null && s.type === 'object' &&
-                    !( 'additionalProperties' in s && s.additionalProperties !== false )
+            const allOriginallyClosedObjects = openedMembers.length > 0 &&
+                openedMembers.every(( s ) =>
+                    typeof s === 'object' && s !== null && allofOpenedRoots.has( s )
                 );
             // Parent `unevaluatedProperties` owns unknown-key policy. Otherwise closed allOf
             // still rejects undeclared extras via combinedKeys after members succeed.
@@ -894,7 +965,7 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
                 !allOriginallyClosedObjects;
             const combinedKeys = allowsAdditional
                 ? undefined
-                : new Set<string>( subSchema.allOf.flatMap(( s ) =>
+                : new Set<string>( openedMembers.flatMap(( s ) =>
                     Object.keys(( s as JsonSchemaObject ).properties || {})
                 ));
 
@@ -1112,7 +1183,7 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
                 if( typeof v === 'string' &&
                     ( contentEncoding !== undefined || contentMediaType !== undefined || contentSchemaCheck ))
                 {
-                    let decoded: Buffer | string = v;
+                    let decoded = v;
 
                     if( contentEncoding !== undefined )
                     {
@@ -1134,8 +1205,7 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
 
                         try
                         {
-                            const text = typeof decoded === 'string' ? decoded : decoded.toString( 'utf8' );
-                            parsed = JSON.parse( text );
+                            parsed = JSON.parse( decoded );
                         }
                         catch
                         {
@@ -1151,8 +1221,7 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
                     }
                     else if( contentSchemaCheck )
                     {
-                        const text = typeof decoded === 'string' ? decoded : decoded.toString( 'utf8' );
-                        runNested( contentSchemaCheck, text, path, ctx );
+                        runNested( contentSchemaCheck, decoded, path, ctx );
                     }
                 }
 
@@ -1329,8 +1398,12 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
         if( subSchema.type === 'array' )
         {
             const draft7Tuple = !!( !subSchema.prefixItems && Array.isArray( subSchema.items ));
+            const oas30Tuple = !draft7Tuple &&
+                !( 'prefixItems' in subSchema ) &&
+                Array.isArray(( subSchema as any )['x-tuple-items']);
             const prefixSchemas = subSchema.prefixItems
-                ?? ( draft7Tuple ? subSchema.items as ( JsonSchema | boolean )[] : undefined );
+                ?? ( draft7Tuple ? subSchema.items as ( JsonSchema | boolean )[] : undefined )
+                ?? ( oas30Tuple ? ( subSchema as any )['x-tuple-items'] as ( JsonSchema | boolean )[] : undefined );
             const prefixChecks = prefixSchemas ? prefixSchemas.map(( s ) => build( s )) : undefined;
 
             // Draft-07 tuple uses `additionalItems` (default true). Draft 2020-12 uses `items`
@@ -1341,6 +1414,12 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
             if( draft7Tuple )
             {
                 restSchema = 'additionalItems' in subSchema ? subSchema.additionalItems : true;
+            }
+            else if( oas30Tuple )
+            {
+                restSchema = 'x-additional-items' in subSchema
+                    ? ( subSchema as any )['x-additional-items']
+                    : true;
             }
             else if( 'prefixItems' in subSchema )
             {
@@ -1520,15 +1599,16 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
         {
             const properties = subSchema.properties || {};
             const required = subSchema.required || [];
-            const propVals: [string, boolean, SchemaValidator][] = Object.entries( properties ).map(([ key, s ]) =>
+            const propVals: [string, boolean, SchemaValidator, boolean?, boolean?][] = Object.entries( properties ).map(([ key, s ]) =>
             {
                 const isOptional = !required.includes( key );
+                const isReadOnly = typeof s === 'object' && s !== null && s.readOnly === true;
                 const inner = build( s );
                 const check: SchemaValidator = hasUnevaluated
                     ? ( val, p, c ) => runNested( inner, val, p, c )
                     : inner;
 
-                return [ key, isOptional, check ];
+                return [ key, isOptional, check, false, isReadOnly ];
             });
 
             for( const key of required )
@@ -1559,12 +1639,10 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
                 ? build( subSchema.propertyNames )
                 : undefined;
             const hasUnevaluatedProps = 'unevaluatedProperties' in subSchema;
-            // Omit `additionalProperties` when only `unevaluatedProperties` is present (or when the
-            // object was inferred from a typeless schema) so unknown keys stay unevaluated.
-            // Explicit `type: 'object'` still defaults to closed otherwise.
+            // Standard JSON Schema allows undeclared keys unless `additionalProperties` is explicitly set.
             const additional = 'additionalProperties' in subSchema
                 ? subSchema.additionalProperties
-                : ( hasUnevaluatedProps || typelessInferredObjects.has( subSchema ) ? undefined : false );
+                : undefined;
             const additionalCheck = additional && typeof additional === 'object' ? build( additional ) : undefined;
             // Synthetic allOf opens allow extras without evaluating them for unevaluated*.
             const allowWithoutEvaluating = additional === true && allofOpenedRoots.has( subSchema );
@@ -1605,7 +1683,12 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
 
                 if( obj === false ){ return v }
 
-                const data = validators.objectShell( obj, ctx, closedShape );
+                const shouldStripOpen = ctx.mode === 'strip' &&
+                    additional === undefined &&
+                    !hasUnevaluatedProps &&
+                    !ctx.annotations &&
+                    ( propertyKeys.length > 0 || patternEntries.length > 0 );
+                const data = validators.objectShell( obj, ctx, closedShape || shouldStripOpen );
 
                 if( propertyNamesCheck )
                 {
@@ -1705,11 +1788,18 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
                     }
                     else
                     {
-                        // `additionalProperties` absent (typically with `unevaluatedProperties`): keep
-                        // values on the shell but leave them unevaluated.
+                        // `additionalProperties` absent: strip undeclared keys when explicitly running
+                        // in `strip` mode on a shaped object; otherwise keep them (open JSON Schema default).
                         for( const key of forAdditional )
                         {
-                            setOwnProperty( data, key, obj[key]);
+                            if( shouldStripOpen )
+                            {
+                                delete data[key];
+                            }
+                            else
+                            {
+                                setOwnProperty( data, key, obj[key]);
+                            }
                         }
                     }
                 }
@@ -1841,17 +1931,7 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
                 ? build( pickKeywords( 'array', arrayKeywords ))
                 : undefined;
             const objectCheck = hasObjectKeywords
-                ? build((() =>
-                {
-                    const inferred = pickKeywords( 'object', objectKeywords );
-
-                    if( !( 'additionalProperties' in subSchema ))
-                    {
-                        typelessInferredObjects.add( inferred );
-                    }
-
-                    return inferred;
-                })())
+                ? build( pickKeywords( 'object', objectKeywords ))
                 : undefined;
 
             return maybeWrapDynamicAnchor( finalize(( v, path, ctx ) =>

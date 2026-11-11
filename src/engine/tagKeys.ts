@@ -41,6 +41,9 @@ export const TAG_KEYS: ReadonlySet<string> = new Set([
     ...VALUE_TAG_NAMES.map( name => `${tagKey( name )}_message` ),
     ...TRANSFORM_TAG_KEYS,
     '__default',
+    '__readonly',
+    '__writeonly',
+    '__secret',
     '__message',
     '__tags'
 ]);

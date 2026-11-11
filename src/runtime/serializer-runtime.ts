@@ -1,10 +1,18 @@
 import
 {
     applyNodeTransform,
+    type JsonReplacer,
     type TransformFn
 }
     from './transform.js';
-import { isPlainObject, findExclusiveKeyArm, type CoercionKind } from './validators.js';
+import {
+    isPlainObject,
+    findExclusiveKeyArm,
+    type CoercionKind,
+    type ValidationMode,
+    type UnionResolution
+} from './validators.js';
+import type { CasingFormat } from './casing.js';
 
 export class SerializationError extends Error
 {
@@ -48,7 +56,10 @@ export function safeSerialize(
             return { success : false, error : e };
         }
 
-        throw e;
+        return {
+            success : false,
+            error   : new SerializationError( '', e instanceof Error ? e.message : String( e ))
+        };
     }
 }
 
@@ -73,12 +84,23 @@ export function serializeString( val: string, path = '' ): string
     return JSON.stringify( val );
 }
 
-/** Opaque `any` / `unknown` JSON fragment. `undefined` becomes `null` so it embeds safely in object parts. */
-export function serializeAny( val: any ): string
+/** Opaque `any` / `unknown` JSON fragment. Non-JSON values become `null` so they embed safely in object/array parts. */
+export function serializeAny( val: any, path = '' ): string
 {
-    if( val === undefined ){ return 'null' }
+    if( val === undefined || typeof val === 'function' || typeof val === 'symbol' ){ return 'null' }
 
-    return JSON.stringify( val );
+    if( typeof val === 'number' && !Number.isFinite( val )){ return 'null' }
+
+    try
+    {
+        const out = JSON.stringify( val );
+
+        return out === undefined ? 'null' : out;
+    }
+    catch( e )
+    {
+        throw new SerializationError( path, e instanceof Error ? e.message : String( e ));
+    }
 }
 
 export function checkPlainObject( val: any, path = '' ): void
@@ -108,7 +130,7 @@ function leafQueryValue( expr: any ): string
  */
 export function appendQueryAny( params: string[], val: any, prefix: string ): void
 {
-    if( val === undefined ){ return }
+    if( val === undefined || typeof val === 'function' || typeof val === 'symbol' ){ return }
 
     if( val === null || typeof val !== 'object' || val instanceof Date || val instanceof URL )
     {
@@ -129,13 +151,15 @@ export function appendQueryAny( params: string[], val: any, prefix: string ): vo
 
     let wrote = false;
 
-    for( const k in val )
+    for( const k of Object.keys( val ))
     {
-        if( val[k] === undefined ){ continue }
+        const entry = val[k];
+
+        if( entry === undefined || typeof entry === 'function' || typeof entry === 'symbol' ){ continue }
 
         wrote = true;
         const child = prefix === '' ? k : prefix + '[' + k + ']';
-        appendQueryAny( params, val[k], child );
+        appendQueryAny( params, entry, child );
     }
 
     // Empty object still needs a presence marker when nested under a key.
@@ -211,7 +235,7 @@ export function serializeRegExp( val: RegExp, path = '' ): string
         throw new SerializationError( path, 'Type<RegExp>' );
     }
 
-    return JSON.stringify( val.source );
+    return JSON.stringify( String( val ));
 }
 
 export function serializeBuffer( val: Uint8Array | ArrayBuffer | ArrayBufferView | SharedArrayBuffer, path = '' ): string
@@ -647,4 +671,162 @@ export function applySerializeTransform(
 
         throw new SerializationError( path, e instanceof Error ? e.message : String( e ));
     }
+}
+
+export type BigIntWireFormat = 'string' | 'number';
+
+export interface RuntimeSerializeOptions
+{
+    replacer?  : JsonReplacer
+    transform? : TransformFn | TransformFn[]
+}
+
+export interface CompiledSerializer<T>
+{
+    ( input: T, options?: RuntimeSerializeOptions ) : string
+    stringify     : ( input: T, options?: RuntimeSerializeOptions ) => string
+    safe          : ( input: unknown, options?: RuntimeSerializeOptions ) => SafeSerializeResult
+    safeSerialize : ( input: unknown, options?: RuntimeSerializeOptions ) => SafeSerializeResult
+}
+
+const REPLACER_INT_RE = /^-?\d+$/;
+
+export function applyJsonReplacer( json: string, replacer?: JsonReplacer ): string
+{
+    if( !replacer ){ return json }
+
+    const rawSources = new WeakMap<object, Record<string, string>>();
+    let rootRawSource: string | undefined;
+
+    const parsed = JSON.parse( json, function( this: any, key: string, val: any, ctx?: { source? : string })
+    {
+        if(
+            typeof val === 'number' &&
+            !Number.isSafeInteger( val ) &&
+            typeof ctx?.source === 'string' &&
+            REPLACER_INT_RE.test( ctx.source )
+        )
+        {
+            if( key === '' )
+            {
+                rootRawSource = ctx.source;
+            }
+            else
+            {
+                let map = rawSources.get( this );
+
+                if( !map )
+                {
+                    map = Object.create( null ) as Record<string, string>;
+                    rawSources.set( this, map );
+                }
+
+                map[key] = ctx.source;
+            }
+        }
+
+        return val;
+    } as any );
+
+    const rawJSON = ( JSON as any ).rawJSON as (( text: string ) => unknown ) | undefined;
+    const out = JSON.stringify( parsed, function( this: any, key: string, val: any )
+    {
+        const next = replacer.call( this, key, val );
+
+        if( next === val && typeof val === 'number' && !Number.isSafeInteger( val ) && typeof rawJSON === 'function' )
+        {
+            const src = key === '' ? rootRawSource : rawSources.get( this )?.[key];
+
+            if( src !== undefined ){ return rawJSON( src ) }
+        }
+
+        return next;
+    });
+
+    if( out === undefined )
+    {
+        throw new SerializationError( '', 'Replacer returned undefined at root' );
+    }
+
+    return out;
+}
+
+export function checkSerializeOptions(
+    opts             : any,
+    expectedMode     : ValidationMode,
+    expectedFormat   : 'json' | 'query',
+    expectedUnionRes : UnionResolution,
+    expectedCasing?  : CasingFormat,
+    expectedBigintAs : BigIntWireFormat = 'string'
+): any
+{
+    if( opts == null ){ return opts }
+
+    if( typeof opts === 'string' )
+    {
+        if( opts !== expectedMode )
+        {
+            throw new SerializationError( '', `Dynamic option "mode" ("${opts}") does not match compiled mode "${expectedMode}"` );
+        }
+
+        return undefined;
+    }
+
+    if( typeof opts === 'object' )
+    {
+        if( opts.mode !== undefined && opts.mode !== expectedMode )
+        {
+            throw new SerializationError( '', `Dynamic option "mode" ("${opts.mode}") does not match compiled mode "${expectedMode}"` );
+        }
+
+        const fmt = opts.format ?? opts.to;
+
+        if( fmt !== undefined && fmt !== expectedFormat )
+        {
+            throw new SerializationError( '', `Dynamic option "format" ("${fmt}") does not match compiled format "${expectedFormat}"` );
+        }
+
+        if( opts.unionResolution !== undefined && opts.unionResolution !== expectedUnionRes )
+        {
+            throw new SerializationError( '', `Dynamic option "unionResolution" ("${opts.unionResolution}") does not match compiled strategy "${expectedUnionRes}"` );
+        }
+
+        if( opts.propertyCasing !== undefined && opts.propertyCasing !== expectedCasing )
+        {
+            throw new SerializationError( '', `Dynamic option "propertyCasing" ("${opts.propertyCasing}") does not match compiled casing "${expectedCasing ?? 'none'}"` );
+        }
+
+        if( opts.bigintAs !== undefined && opts.bigintAs !== expectedBigintAs )
+        {
+            throw new SerializationError( '', `Dynamic option "bigintAs" ("${opts.bigintAs}") does not match compiled bigintAs "${expectedBigintAs}"` );
+        }
+    }
+
+    return opts;
+}
+
+function mergeRuntimeSerializeOptions( defaults?: any, override?: RuntimeSerializeOptions ): any
+{
+    if( override === undefined ){ return defaults }
+
+    if( defaults === undefined || typeof defaults === 'string' ){ return override }
+
+    return { ...defaults, ...override };
+}
+
+export function createSerializer<T>(
+    serFn          : ( input: any, options?: any ) => string,
+    defaultOptions?: any
+): CompiledSerializer<T>
+{
+    const fn = (( input: T, overrideOptions?: RuntimeSerializeOptions ): string =>
+        serFn( input, mergeRuntimeSerializeOptions( defaultOptions, overrideOptions ))
+    ) as CompiledSerializer<T>;
+
+    fn.stringify = fn;
+    fn.safe = ( input: unknown, overrideOptions?: RuntimeSerializeOptions ): SafeSerializeResult =>
+        safeSerialize( serFn, input, mergeRuntimeSerializeOptions( defaultOptions, overrideOptions ));
+    fn.safeSerialize = fn.safe;
+
+    return fn;
 }

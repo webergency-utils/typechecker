@@ -31,6 +31,8 @@ export default defineConfig({
         // residual branches are compiler-type edges (same rationale as resolver.ts).
         'src/engine/serializer-generator.ts',
         'src/engine/parse-generator.ts',
+        'src/engine/clone-prune-generator.ts',
+        'src/engine/random-generator.ts',
         'src/engine/type-helpers.ts',
         'src/engine/type-ir.ts',
         'src/engine/specificity.ts',

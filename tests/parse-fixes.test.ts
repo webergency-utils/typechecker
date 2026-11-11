@@ -46,9 +46,22 @@ describe( 'Parse Fixes & Regressions', () =>
         expect( 'bio' in queryWithOpt ).toBe( false );
     });
 
-    it( 'parses query strings with large numeric index sets without call stack overflow', () =>
+    it( 'parses query strings with large numeric index sets without call stack overflow or sparse DoS amplification', () =>
     {
-        // Construct query string with 150,000 array indices
+        const denseParts: string[] = [];
+
+        for( let i = 0; i <= 500; i++ )
+        {
+            denseParts.push( `dense[${i}]=${i}` );
+        }
+        denseParts.push( 'dense[]=after' );
+
+        const denseRes: any = parseQueryString( denseParts.join( '&' ));
+        expect( Array.isArray( denseRes.dense )).toBe( true );
+        expect( denseRes.dense[0]).toBe( '0' );
+        expect( denseRes.dense[501]).toBe( 'after' );
+
+        // Indices beyond MAX_QUERY_ARRAY_INDEX (1000) downgrade to a plain object instead of allocating sparse holes
         const parts: string[] = [];
         const count = 150000;
 
@@ -61,7 +74,7 @@ describe( 'Parse Fixes & Regressions', () =>
         const qs = parts.join( '&' );
         const result: any = parseQueryString( qs );
 
-        expect( Array.isArray( result.arr )).toBe( true );
+        expect( Array.isArray( result.arr )).toBe( false );
         expect( result.arr[0]).toBe( '0' );
         expect( result.arr[count]).toBe( 'last' );
     });

@@ -13,6 +13,7 @@ import
     inspectTupleType,
     isNativeEnumType,
     mapStructuralProps,
+    numberIndexType,
     stringIndexType,
     typeSymbolName
 }
@@ -45,6 +46,8 @@ export type TypeIrKind =
     | 'set'
     | 'map'
     | 'promise'
+    | 'file'
+    | 'blob'
     | 'buffer'
     | 'function'
     | 'object';
@@ -63,6 +66,7 @@ export interface TypeIrNode
     readonly valueType?            : ts.Type
     getProps                       : () => MergedPropInfo[]
     getStringIndexType             : () => ts.Type | undefined
+    getNumberIndexType             : () => ts.Type | undefined
     getTemplateIndexInfos          : () => TemplateIndexInfo[]
     getTuple                       : () => TupleInspection
     getNullableUnionClassification : () => NullableUnionClassification
@@ -72,7 +76,7 @@ const irCacheByChecker = new WeakMap<object, WeakMap<object, TypeIrNode>>();
 
 function classifyTypeIr( type: ts.Type, checker: ts.TypeChecker ): Omit<
     TypeIrNode,
-    'getProps' | 'getStringIndexType' | 'getTemplateIndexInfos' | 'getTuple' | 'getNullableUnionClassification'
+    'getProps' | 'getStringIndexType' | 'getNumberIndexType' | 'getTemplateIndexInfos' | 'getTuple' | 'getNullableUnionClassification'
 >
 {
     const flags = typeof type.getFlags === 'function' ? type.getFlags() : 0;
@@ -138,7 +142,7 @@ function classifyTypeIr( type: ts.Type, checker: ts.TypeChecker ): Omit<
         };
     }
 
-    if( flags & ts.TypeFlags.String ){ return { type, kind : 'string', flags, symbolName } }
+    if( flags & ( ts.TypeFlags.String | ts.TypeFlags.StringMapping )){ return { type, kind : 'string', flags, symbolName } }
 
     if( flags & ts.TypeFlags.Number ){ return { type, kind : 'number', flags, symbolName } }
 
@@ -179,6 +183,10 @@ function classifyTypeIr( type: ts.Type, checker: ts.TypeChecker ): Omit<
 
     if( symbolName === 'Promise' ){ return { type, kind : 'promise', flags, symbolName } }
 
+    if( symbolName === 'File' ){ return { type, kind : 'file', flags, symbolName } }
+
+    if( symbolName === 'Blob' ){ return { type, kind : 'blob', flags, symbolName } }
+
     if( symbolName === 'Set' || symbolName === 'ReadonlySet' )
     {
         const typeArgs = ( type as ts.TypeReference ).typeArguments
@@ -204,9 +212,8 @@ function classifyTypeIr( type: ts.Type, checker: ts.TypeChecker ): Omit<
 
     if(
         symbolName === 'Function' ||
-        ( typeof type.getCallSignatures === 'function' &&
-            type.getCallSignatures().length > 0 &&
-            ( typeof type.getConstructSignatures !== 'function' || type.getConstructSignatures().length === 0 ))
+        ( typeof type.getCallSignatures === 'function' && type.getCallSignatures().length > 0 ) ||
+        ( typeof type.getConstructSignatures === 'function' && type.getConstructSignatures().length > 0 )
     )
     {
         return { type, kind : 'function', flags, symbolName };
@@ -240,6 +247,8 @@ export function resolveTypeIr( type: ts.Type, checker: ts.TypeChecker ): TypeIrN
     let cachedProps: MergedPropInfo[] | undefined;
     let cachedStringIndex: ts.Type | undefined;
     let hasCachedStringIndex = false;
+    let cachedNumberIndex: ts.Type | undefined;
+    let hasCachedNumberIndex = false;
     let cachedTemplateIndex: TemplateIndexInfo[] | undefined;
     let cachedTuple: TupleInspection | undefined;
     let cachedNullableUnion: NullableUnionClassification | undefined;
@@ -262,6 +271,16 @@ export function resolveTypeIr( type: ts.Type, checker: ts.TypeChecker ): TypeIrN
             }
 
             return cachedStringIndex;
+        },
+        getNumberIndexType()
+        {
+            if( !hasCachedNumberIndex )
+            {
+                cachedNumberIndex = numberIndexType( type, checker );
+                hasCachedNumberIndex = true;
+            }
+
+            return cachedNumberIndex;
         },
         getTemplateIndexInfos()
         {

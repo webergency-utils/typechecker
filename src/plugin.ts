@@ -10,7 +10,8 @@ function init( modules: { typescript : typeof ts })
 
         for( const key of Object.keys( ls ))
         {
-            ( proxy as any )[key] = ( ls as any )[key];
+            const member = ( ls as any )[key];
+            ( proxy as any )[key] = typeof member === 'function' ? member.bind( ls ) : member;
         }
 
         proxy.getSemanticDiagnostics = ( fileName: string ): ts.Diagnostic[] =>

@@ -1,6 +1,6 @@
 {
   "name": "@webergency-utils/typechecker",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "type": "module",
   "sideEffects": false,
   "description": "TypeScript compiler plugin for runtime validation",
@@ -68,6 +68,26 @@
       "require": {
         "types": "./dist/runtime/serializer-runtime.d.cts",
         "default": "./dist/runtime/serializer-runtime.cjs"
+      }
+    },
+    "./runtime/clone": {
+      "import": {
+        "types": "./dist/runtime/clone-runtime.d.ts",
+        "default": "./dist/runtime/clone-runtime.js"
+      },
+      "require": {
+        "types": "./dist/runtime/clone-runtime.d.cts",
+        "default": "./dist/runtime/clone-runtime.cjs"
+      }
+    },
+    "./runtime/random": {
+      "import": {
+        "types": "./dist/runtime/random-runtime.d.ts",
+        "default": "./dist/runtime/random-runtime.js"
+      },
+      "require": {
+        "types": "./dist/runtime/random-runtime.d.cts",
+        "default": "./dist/runtime/random-runtime.cjs"
       }
     },
     "./runtime/casing": {
@@ -149,13 +169,57 @@
         "types": "./dist/unplugin.d.cts",
         "default": "./dist/unplugin.cjs"
       }
+    },
+    "./rollup": {
+      "import": {
+        "types": "./dist/rollup.d.ts",
+        "default": "./dist/rollup.js"
+      },
+      "require": {
+        "types": "./dist/rollup.d.cts",
+        "default": "./dist/rollup.cjs"
+      }
+    },
+    "./esbuild": {
+      "import": {
+        "types": "./dist/esbuild.d.ts",
+        "default": "./dist/esbuild.js"
+      },
+      "require": {
+        "types": "./dist/esbuild.d.cts",
+        "default": "./dist/esbuild.cjs"
+      }
+    },
+    "./webpack": {
+      "import": {
+        "types": "./dist/webpack.d.ts",
+        "default": "./dist/webpack.js"
+      },
+      "require": {
+        "types": "./dist/webpack.d.cts",
+        "default": "./dist/webpack.cjs"
+      }
+    },
+    "./webpack-loader": {
+      "import": {
+        "types": "./dist/webpack-loader.d.ts",
+        "default": "./dist/webpack-loader.js"
+      },
+      "require": {
+        "types": "./dist/webpack-loader.d.cts",
+        "default": "./dist/webpack-loader.cjs"
+      }
     }
+  },
+  "engines": {
+    "node": ">=22.0.0"
   },
   "publishConfig": {
     "access": "public"
   },
   "files": [
-    "dist/**/*"
+    "dist/**/*",
+    "plugin/**/*"
   ],
   "scripts": {
     "lint": "eslint .",

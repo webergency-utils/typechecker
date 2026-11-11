@@ -46,7 +46,13 @@ export type Format
             readonly __format_message? : Msg
         };
 
-export type Length<Min extends number, Max extends number> = MinLength<Min> & MaxLength<Max>;
+export type Length
+<
+    Min extends number,
+    Max extends number,
+    Msg extends string = string
+>
+    = MinLength<Min, Msg> & MaxLength<Max, Msg>;
 
 // Number Constraints
 export type Minimum
@@ -105,7 +111,13 @@ export type MultipleOf
         };
 
 // Number Composite Helpers
-export type Range<Min extends number | bigint, Max extends number | bigint> = Minimum<Min> & Maximum<Max>;
+export type Range
+<
+    Min extends number | bigint,
+    Max extends number | bigint,
+    Msg extends string = string
+>
+    = Minimum<Min, Msg> & Maximum<Max, Msg>;
 
 // Array Constraints
 export type MinItems
@@ -159,8 +171,13 @@ export type MaxProperties
             readonly __maxProperties_message? : Msg
         };
 
-export type PropertiesRange<Min extends number, Max extends number> =
-    MinProperties<Min> & MaxProperties<Max>;
+export type PropertiesRange
+<
+    Min extends number,
+    Max extends number,
+    Msg extends string = string
+>
+    = MinProperties<Min, Msg> & MaxProperties<Max, Msg>;
 
 // Array `contains` / object `propertyNames` (nested schema tags)
 export type Contains

@@ -27,20 +27,26 @@ export function resolveEmitNames( sourceFile: ts.SourceFile ): IEmitNames
 }
 
 export function hoistEmitLocals(
-    sourceFile: ts.SourceFile,
-    cache: Map<string, ts.Expression>,
-    schemasMap?: Map<string, ts.Expression>,
-    emitNames?: IEmitNames,
-    customImports?: readonly ICustomFunctionImport[],
+    sourceFile      : ts.SourceFile,
+    cache           : Map<string, ts.Expression>,
+    schemasMap?     : Map<string, ts.Expression>,
+    emitNames?      : IEmitNames,
+    customImports?  : readonly ICustomFunctionImport[],
     serializerCache?: Map<string, ts.Expression>,
-    parserCache?: Map<string, ts.Expression>
+    parserCache?    : Map<string, ts.Expression>,
+    clonerCache?    : Map<string, ts.Expression>,
+    prunerCache?    : Map<string, ts.Expression>,
+    randomCache?    : Map<string, ts.Expression>
 )
 {
     const hasSchemas = !!( schemasMap && schemasMap.size > 0 );
     const hasValidators = cache.size > 0;
     const hasSerializers = !!( serializerCache && serializerCache.size > 0 );
     const hasParsers = !!( parserCache && parserCache.size > 0 );
-    const needsRuntime = hasValidators || hasSerializers || hasParsers;
+    const hasCloners = !!( clonerCache && clonerCache.size > 0 );
+    const hasPruners = !!( prunerCache && prunerCache.size > 0 );
+    const hasRandoms = !!( randomCache && randomCache.size > 0 );
+    const needsRuntime = hasValidators || hasSerializers || hasParsers || hasCloners || hasPruners || hasRandoms;
 
     if( !needsRuntime && !hasSchemas ){ return sourceFile }
 
@@ -111,7 +117,7 @@ export function hoistEmitLocals(
 
     if( parserCache )
     {
-        for( const [hash, expr] of parserCache.entries())
+        for( const [ hash, expr ] of parserCache.entries())
         {
             const parseName = `__parse_${hash}`;
 
@@ -119,6 +125,48 @@ export function hoistEmitLocals(
             {
                 prependedNames.add( parseName );
                 localStatements.push( constStatement( parseName, renameRuntimeRef( expr, names.runtimeNs )));
+            }
+        }
+    }
+
+    if( clonerCache )
+    {
+        for( const [ hash, expr ] of clonerCache.entries())
+        {
+            const cloneName = `__clone_${hash}`;
+
+            if( !declaredNames.has( cloneName ) && !prependedNames.has( cloneName ))
+            {
+                prependedNames.add( cloneName );
+                localStatements.push( constStatement( cloneName, renameRuntimeRef( expr, names.runtimeNs )));
+            }
+        }
+    }
+
+    if( prunerCache )
+    {
+        for( const [ hash, expr ] of prunerCache.entries())
+        {
+            const pruneName = `__prune_${hash}`;
+
+            if( !declaredNames.has( pruneName ) && !prependedNames.has( pruneName ))
+            {
+                prependedNames.add( pruneName );
+                localStatements.push( constStatement( pruneName, renameRuntimeRef( expr, names.runtimeNs )));
+            }
+        }
+    }
+
+    if( randomCache )
+    {
+        for( const [ hash, expr ] of randomCache.entries())
+        {
+            const randName = `__rand_${hash}`;
+
+            if( !declaredNames.has( randName ) && !prependedNames.has( randName ))
+            {
+                prependedNames.add( randName );
+                localStatements.push( constStatement( randName, renameRuntimeRef( expr, names.runtimeNs )));
             }
         }
     }
@@ -137,17 +185,28 @@ export function hoistEmitLocals(
         }
     }
 
+    const directives: ts.Statement[] = [];
     const existingImports: ts.Statement[] = [];
     const rest: ts.Statement[] = [];
+    let inPrologue = true;
 
     for( const statement of sourceFile.statements )
     {
+        if( inPrologue && ts.isExpressionStatement( statement ) && ts.isStringLiteral( statement.expression ))
+        {
+            directives.push( statement );
+            continue;
+        }
+
+        inPrologue = false;
+
         if( ts.isImportDeclaration( statement )){ existingImports.push( statement ) }
         else { rest.push( statement ) }
     }
 
     return ts.factory.updateSourceFile( sourceFile,
         [
+            ...directives,
             ...importStatements,
             ...existingImports,
             ...localStatements,

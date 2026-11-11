@@ -560,7 +560,7 @@ describe( 'Serializer & Stringify', () =>
             expect( qs ).toContain( 'items' );
             expect( qs ).toContain( 'name' );
             expect( qs ).toContain( 'qty' );
-            expect( mod.dumpNum( Infinity )).toBe( 'Infinity' );
+            expect(() => mod.dumpNum( Infinity )).toThrow( /Type<number>/ );
             expect(() => mod.dumpNum( NaN )).toThrow( /Type<number>/ );
         });
 

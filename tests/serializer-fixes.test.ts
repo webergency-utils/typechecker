@@ -508,21 +508,24 @@ describe( 'Serializer Fixes & Regressions', () =>
     it( 'enforces BigIntLiteral equality including negative literals and unions in JSON and query modes', async() =>
     {
         const mod = await emitAndImport<{
-            serTen   : ( v: any, transform?: any ) => string
-            serTenQ  : ( v: any, transform?: any ) => string
-            serNeg   : ( v: any ) => string
-            serUnion : ( v: any ) => string
+            serTen    : ( v: any, transform?: any ) => string
+            serTenNum : ( v: any ) => string
+            serTenQ   : ( v: any, transform?: any ) => string
+            serNeg    : ( v: any ) => string
+            serUnion  : ( v: any ) => string
         }>( `
             import { stringify, tag } from '../src/index.js';
             export const serTen = ( v: 10n & tag<'bigten'>, transform?: any ) =>
                 stringify<10n & tag<'bigten'>>( v, { transform } );
+            export const serTenNum = ( v: 10n ) => stringify<10n>( v, { bigintAs: 'number' } );
             export const serTenQ = ( v: { n: 10n & tag<'bigten'> }, transform?: any ) =>
                 stringify<{ n: 10n & tag<'bigten'> }>( v, { format: 'query', transform } );
             export const serNeg = ( v: -42n ) => stringify<-42n>( v );
             export const serUnion = ( v: 1n | 2n ) => stringify<1n | 2n>( v );
         `, 'temp_ser_bigint_literal' );
 
-        expect( mod.serTen( 10n )).toBe( '10' );
+        expect( mod.serTen( 10n )).toBe( '"10"' );
+        expect( mod.serTenNum( 10n )).toBe( '10' );
         expect(() => mod.serTen( 11n as any )).toThrow( /Literal<10n>/ );
 
         const seenTags: string[][] = [];
@@ -531,17 +534,17 @@ describe( 'Serializer Fixes & Regressions', () =>
             seenTags.push( ctx.tags );
 
             return val + 1n;
-        })).toBe( '10' );
+        })).toBe( '"10"' );
         expect( seenTags ).toContainEqual([ 'bigten' ]);
 
         expect( mod.serTenQ({ n : 10n })).toBe( 'n=10' );
         expect(() => mod.serTenQ({ n : 11n as any })).toThrow( /Literal<10n>/ );
 
-        expect( mod.serNeg( -42n )).toBe( '-42' );
+        expect( mod.serNeg( -42n )).toBe( '"-42"' );
         expect(() => mod.serNeg( 42n as any )).toThrow( /Literal<-42n>/ );
 
-        expect( mod.serUnion( 1n )).toBe( '1' );
-        expect( mod.serUnion( 2n )).toBe( '2' );
+        expect( mod.serUnion( 1n )).toBe( '"1"' );
+        expect( mod.serUnion( 2n )).toBe( '"2"' );
         expect(() => mod.serUnion( 3n as any )).toThrow();
     });
 

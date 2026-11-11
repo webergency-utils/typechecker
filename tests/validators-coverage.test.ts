@@ -233,7 +233,7 @@ describe( 'validators coverage edges', () =>
             expect( ctx.success ).toBe( false );
         });
 
-        it( 'should coerce date and date-time formats under from:query', () => 
+        it( 'should validate date and date-time formats under from:query while preserving string type', () => 
         {
             // Arrange
             ctx.from = 'query';
@@ -243,8 +243,8 @@ describe( 'validators coverage edges', () =>
             const dateTime = validators.format( '2024-06-01T12:00:00.000Z', 'dt', ctx, 'date-time' );
 
             // Assert
-            expect( date ).toBeInstanceOf( Date );
-            expect( dateTime ).toBeInstanceOf( Date );
+            expect( date ).toBe( '2024-06-01' );
+            expect( dateTime ).toBe( '2024-06-01T12:00:00.000Z' );
             expect( ctx.success ).toBe( true );
         });
     });

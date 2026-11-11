@@ -23,31 +23,126 @@ function isDisjointLiteralAlternation( inner: string ): boolean
     return true;
 }
 
+interface ParsedQuantifier
+{
+    kind    : 'none' | 'optional' | 'fixed' | 'variable'
+    end     : number
+    invalid : boolean
+}
+
+function readQuantifier( source: string, pos: number ): ParsedQuantifier
+{
+    if( pos >= source.length )
+    {
+        return { kind : 'none', end : pos, invalid : false };
+    }
+
+    const ch = source[pos];
+
+    if( ch === '*' || ch === '+' )
+    {
+        const end = source[pos + 1] === '?' ? pos + 2 : pos + 1;
+
+        return { kind : 'variable', end, invalid : false };
+    }
+
+    if( ch === '?' )
+    {
+        const end = source[pos + 1] === '?' ? pos + 2 : pos + 1;
+
+        return { kind : 'optional', end, invalid : false };
+    }
+
+    if( ch === '{' )
+    {
+        const match = /^\{(\d+)(?:,(\d*))?\}\??/.exec( source.slice( pos ));
+
+        if( !match )
+        {
+            return { kind : 'none', end : pos, invalid : false };
+        }
+
+        const end = pos + match[0].length;
+        const min = Number( match[1]);
+
+        if( min > 100 )
+        {
+            return { kind : 'variable', end, invalid : true };
+        }
+
+        if( match[2] === undefined )
+        {
+            const kind = min === 0 ? 'optional' : ( min === 1 ? 'none' : 'fixed' );
+
+            return { kind, end, invalid : false };
+        }
+
+        if( match[2] === '' )
+        {
+            return { kind : 'variable', end, invalid : false };
+        }
+
+        const max = Number( match[2]);
+
+        if( max > 100 || max < min )
+        {
+            return { kind : 'variable', end, invalid : true };
+        }
+
+        if( min === max )
+        {
+            const kind = min === 0 ? 'optional' : ( min === 1 ? 'none' : 'fixed' );
+
+            return { kind, end, invalid : false };
+        }
+
+        if( min === 0 && max === 1 )
+        {
+            return { kind : 'optional', end, invalid : false };
+        }
+
+        return { kind : 'variable', end, invalid : false };
+    }
+
+    return { kind : 'none', end : pos, invalid : false };
+}
+
+interface RegexGroupFrame
+{
+    hasVarOrOpt    : boolean
+    hasFixed       : boolean
+    hasAlternation : boolean
+    hasUnsafeAlt   : boolean
+    start          : number
+}
+
 export function isSafeRegexSource( source: string ): boolean
 {
-    if( source.length > 1024 || /\\[1-9]/.test( source )){ return false }
+    if( source.length > 1024 ){ return false }
 
-    const groups: { hasRepeat : boolean, hasAlternation : boolean, start : number }[] = [];
+    const groups: RegexGroupFrame[] = [];
     let inClass = false;
-    let escaped = false;
 
     for( let i = 0; i < source.length; i++ )
     {
         const ch = source[i];
 
-        if( escaped )
-        {
-            escaped = false;
-            continue;
-        }
-
         if( ch === '\\' )
         {
-            escaped = true;
+            if( i + 1 >= source.length ){ return false }
+
+            const next = source[i + 1];
+
+            if( !inClass && (( next >= '1' && next <= '9' ) || next === 'k' ))
+            {
+                return false;
+            }
+
+            i++;
             continue;
         }
 
-        if( ch === '[' )
+        if( ch === '[' && !inClass )
         {
             inClass = true;
             continue;
@@ -63,8 +158,33 @@ export function isSafeRegexSource( source: string ): boolean
 
         if( ch === '(' )
         {
-            const bodyStart = source.startsWith( '?:', i + 1 ) ? i + 3 : i + 1;
-            groups.push({ hasRepeat : false, hasAlternation : false, start : bodyStart });
+            if( source[i + 1] === '?' )
+            {
+                if( source.startsWith( '<=', i + 2 ) || source.startsWith( '<!', i + 2 ))
+                {
+                    i += 3;
+                }
+                else if( source[i + 2] === '<' )
+                {
+                    const gt = source.indexOf( '>', i + 3 );
+
+                    if( gt === -1 ){ return false }
+
+                    i = gt;
+                }
+                else if( source[i + 2] === ':' || source[i + 2] === '=' || source[i + 2] === '!' )
+                {
+                    i += 2;
+                }
+            }
+
+            groups.push({
+                hasVarOrOpt    : false,
+                hasFixed       : false,
+                hasAlternation : false,
+                hasUnsafeAlt   : false,
+                start          : i + 1
+            });
             continue;
         }
 
@@ -74,28 +194,61 @@ export function isSafeRegexSource( source: string ): boolean
             continue;
         }
 
-        if( ch === '*' || ch === '+' || ch === '{' )
-        {
-            if( groups.length > 0 ){ groups[groups.length - 1].hasRepeat = true }
-            continue;
-        }
-
         if( ch === ')' && groups.length > 0 )
         {
             const group = groups.pop()!;
-            const next = source[i + 1];
-            const isRepeated = next === '*' || next === '+' || next === '{';
+            const unsafeAlt = group.hasUnsafeAlt ||
+                ( group.hasAlternation && !isDisjointLiteralAlternation( source.slice( group.start, i )));
+            const q = readQuantifier( source, i + 1 );
 
-            if( isRepeated )
+            if( q.invalid ){ return false }
+
+            i = q.end - 1;
+            const parent = groups.length > 0 ? groups[groups.length - 1] : undefined;
+
+            if( q.kind === 'variable' )
             {
-                if( group.hasRepeat ){ return false }
+                if( group.hasVarOrOpt || group.hasFixed || unsafeAlt ){ return false }
 
-                if( group.hasAlternation && !isDisjointLiteralAlternation( source.slice( group.start, i )))
+                if( parent ){ parent.hasVarOrOpt = true }
+            }
+            else if( q.kind === 'fixed' )
+            {
+                if( group.hasVarOrOpt || unsafeAlt ){ return false }
+
+                if( parent ){ parent.hasFixed = true }
+            }
+            else if( q.kind === 'optional' )
+            {
+                if( parent ){ parent.hasVarOrOpt = true }
+            }
+            else if( parent )
+            {
+                if( group.hasVarOrOpt ){ parent.hasVarOrOpt = true }
+
+                if( group.hasFixed ){ parent.hasFixed = true }
+
+                if( unsafeAlt ){ parent.hasUnsafeAlt = true }
+            }
+
+            continue;
+        }
+
+        if( ch === '*' || ch === '+' || ch === '?' || ch === '{' )
+        {
+            const q = readQuantifier( source, i );
+
+            if( q.invalid ){ return false }
+
+            if( q.end > i )
+            {
+                i = q.end - 1;
+
+                if( q.kind !== 'none' && groups.length > 0 )
                 {
-                    return false;
+                    if( q.kind === 'fixed' ){ groups[groups.length - 1].hasFixed = true }
+                    else { groups[groups.length - 1].hasVarOrOpt = true }
                 }
-
-                if( groups.length > 0 ){ groups[groups.length - 1].hasRepeat = true }
             }
         }
     }

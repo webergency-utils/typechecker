@@ -142,7 +142,7 @@ describe( 'Phases 5–9 Next-Gen Improvements', () =>
             expect( 'issues' in stdFail && stdFail.issues?.length ).toBe( 2 );
         });
 
-        it( 'runtimeSafeSerialize catches SerializationError and rethrows unexpected errors', () =>
+        it( 'runtimeSafeSerialize catches SerializationError and wraps unexpected errors safely', () =>
         {
             const okRes = runtimeSafeSerialize(( x: number ) => String( x ), 42 );
             expect( okRes ).toEqual({ success : true, data : '42' });
@@ -159,10 +159,17 @@ describe( 'Phases 5–9 Next-Gen Improvements', () =>
                 expect( failRes.error.path ).toBe( 'user.age' );
             }
 
-            expect(() => runtimeSafeSerialize(() =>
+            const boomRes = runtimeSafeSerialize(() =>
             {
                 throw new TypeError( 'unexpected boom' );
-            }, 'bad' )).toThrow( 'unexpected boom' );
+            }, 'bad' );
+            expect( boomRes.success ).toBe( false );
+
+            if( !boomRes.success )
+            {
+                expect( boomRes.error ).toBeInstanceOf( SerializationError );
+                expect( boomRes.error.message ).toBe( 'unexpected boom' );
+            }
         });
 
         it( 'throws transformer missing error when validator() or safeSerialize() macro stubs are invoked directly', () =>
@@ -506,7 +513,7 @@ describe( 'Phases 5–9 Next-Gen Improvements', () =>
 
             // JSON Schema patternProperties + compileSchema
             expect( mod.metricsSchema.patternProperties ).toEqual({
-                '^metric_.*$' : { type : 'number' }
+                '^metric_[\\s\\S]*$' : { type : 'number' }
             });
             expect( isSchema( mod.metricsSchema, validBag )).toBe( true );
             expect( isSchema( mod.metricsSchema, { service : 'auth', other : 1 })).toBe( false );
@@ -629,27 +636,22 @@ describe( 'Phases 5–9 Next-Gen Improvements', () =>
             // Webpack adapter
             const webpackPlugin = typecheckerWebpack();
             let tapped = false;
-            webpackPlugin.apply({
-                hooks : {
-                    compilation : {
+            const fakeCompiler: any = {
+                options : { module : { rules : [] } },
+                hooks   : {
+                    watchRun : {
                         tap : ( _name: string, cb: Function ) =>
                         {
-                            cb({
-                                hooks : {
-                                    normalModuleLoader : {
-                                        tap : ( _n: string, innerCb: Function ) =>
-                                        {
-                                            tapped = true;
-                                            innerCb();
-                                        }
-                                    }
-                                }
-                            });
+                            tapped = true;
+                            cb({ modifiedFiles : new Set([ sampleFile ]) });
                         }
                     }
                 }
-            });
+            };
+            webpackPlugin.apply( fakeCompiler );
             expect( tapped ).toBe( true );
+            expect( fakeCompiler.options.module.rules.length ).toBe( 1 );
+            expect( fakeCompiler.options.module.rules[0].enforce ).toBe( 'pre' );
             expect( webpackPlugin.transform( 'const plain = 1;', sampleFile )).toBeNull();
 
             // Esbuild adapter + unified typecheckerPlugin object
@@ -756,7 +758,7 @@ describe( 'Phases 5–9 Next-Gen Improvements', () =>
             const tplMapIr = resolveTypeIr( propsByName.get( 'tplMap' )!, checker );
             expect( tplMapIr.kind ).toBe( 'object' );
             expect( tplMapIr.getTemplateIndexInfos().length ).toBe( 1 );
-            expect( tplMapIr.getTemplateIndexInfos()[0]?.pattern ).toBe( '^k_.*$' );
+            expect( tplMapIr.getTemplateIndexInfos()[0]?.pattern ).toBe( '^k_[\\s\\S]*$' );
         });
     });
 });

@@ -210,13 +210,20 @@ export function createCustomFunctionScope( sourceFile: ts.SourceFile, checker: t
     return { bind, imports };
 }
 
+export function isClassConstructorType( type: ts.Type ): boolean
+{
+    return typeof type.getConstructSignatures === 'function' && type.getConstructSignatures().length > 0;
+}
+
 /**
  * A real `class` declaration used as a type — not an interface or type-literal shape. Those stay
  * structural; classes are nominal (`instanceof`) at runtime.
  */
 export function resolveClassIdentity( type: ts.Type ): IFunctionIdentity | undefined
 {
-    const symbol = type.getSymbol() || type.aliasSymbol;
+    if( isClassConstructorType( type )){ return undefined }
+
+    const symbol = ( typeof type.getSymbol === 'function' ? type.getSymbol() : type.symbol ) || type.aliasSymbol;
 
     if( !symbol ){ return undefined }
 

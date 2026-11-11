@@ -94,9 +94,18 @@ function internalizeJsonProperty(
                 {
                     delete val[key];
                 }
-                else
+                else if( key !== '__proto__' && key !== 'constructor' && key !== 'prototype' )
                 {
                     val[key] = next;
+                }
+                else
+                {
+                    Object.defineProperty( val, key, {
+                        value        : next,
+                        enumerable   : true,
+                        configurable : true,
+                        writable     : true
+                    });
                 }
             }
         }

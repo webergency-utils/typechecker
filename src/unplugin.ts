@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import ts from 'typescript';
 import transformer from './transformer.js';
 
@@ -25,16 +26,55 @@ export interface TransformOutput
 
 export interface BundlerTransformerController
 {
-    transform  : ( code: string, id: string ) => TransformOutput | null
-    invalidate : ( id?: string ) => void
+    transform     : ( code: string, id: string ) => TransformOutput | null
+    invalidate    : ( id?: string ) => void
+    getWatchFiles : () => string[]
 }
 
 const DEFAULT_INCLUDE_RE = /\.(?:ts|tsx|mts|cts)$/;
 const DEFAULT_EXCLUDE_RE = /(?:^|[/\\])node_modules(?:[/\\]|$)/;
+const RELATIVE_INDEX_SPECIFIER_RE = /['"]((?:\.\.?\/)+(?:(?:src|dist)\/)?index(?:\.(?:js|cjs|mjs|ts|mts|cts))?)['"]/g;
 
 function matchesFilter( filter: RegExp | (( id: string ) => boolean ), id: string ): boolean
 {
     return typeof filter === 'function' ? filter( id ) : filter.test( id );
+}
+
+function hasRelativeTypecheckerImport( code: string, cleanId: string ): boolean
+{
+    RELATIVE_INDEX_SPECIFIER_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while(( match = RELATIVE_INDEX_SPECIFIER_RE.exec( code )) !== null )
+    {
+        const specifier = match[1];
+        const dir = path.dirname( path.resolve( cleanId ));
+        const targetBase = path.resolve( dir, specifier ).replace( /\.(?:js|cjs|mjs|ts|mts|cts)$/, '' );
+
+        if(
+            fs.existsSync( `${targetBase}.ts` ) ||
+            fs.existsSync( `${targetBase}.js` ) ||
+            fs.existsSync( `${targetBase}.d.ts` )
+        )
+        {
+            const targetDir = path.dirname( targetBase );
+
+            if(
+                fs.existsSync( path.join( targetDir, 'runtime', 'validators.ts' )) ||
+                fs.existsSync( path.join( targetDir, 'runtime', 'validators.js' )) ||
+                fs.existsSync( path.join( targetDir, 'runtime', 'validators.d.ts' ))
+            )
+            {
+                return true;
+            }
+
+            continue;
+        }
+
+        return true;
+    }
+
+    return false;
 }
 
 export function shouldTransformFile(
@@ -51,9 +91,9 @@ export function shouldTransformFile(
 
     if( matchesFilter( exclude, cleanId )){ return false }
 
-    if( !code.includes( 'typechecker' ) && !code.includes( '/index' )){ return false }
+    if( code.includes( 'typechecker' )){ return true }
 
-    return true;
+    return hasRelativeTypecheckerImport( code, cleanId );
 }
 
 function loadTsConfig( options: TypecheckerBundlerOptions ): ts.ParsedCommandLine
@@ -103,6 +143,7 @@ export function createBundlerTransformer(
     );
     const overlays = new Map<string, { code : string, sourceFile : ts.SourceFile }>();
     let cachedProgram: ts.Program | undefined;
+    let lastProgram: ts.Program | undefined;
 
     const baseHost = ts.createCompilerHost( compilerOptions, true );
     const origGetSourceFile = baseHost.getSourceFile.bind( baseHost );
@@ -151,6 +192,24 @@ export function createBundlerTransformer(
         cachedProgram = undefined;
     };
 
+    const getWatchFiles = (): string[] =>
+    {
+        const prog = cachedProgram ?? lastProgram;
+
+        if( !prog ){ return [] }
+
+        const watched: string[] = [];
+
+        for( const sf of prog.getSourceFiles())
+        {
+            if( sf.fileName.includes( 'node_modules' )){ continue }
+
+            watched.push( sf.fileName );
+        }
+
+        return watched;
+    };
+
     const transform = ( code: string, id: string ): TransformOutput | null =>
     {
         if( !shouldTransformFile( code, id, options )){ return null }
@@ -174,10 +233,12 @@ export function createBundlerTransformer(
         if( !cachedProgram )
         {
             cachedProgram = ts.createProgram({
-                rootNames : [ ...rootFiles ],
-                options   : compilerOptions,
-                host      : baseHost
+                rootNames  : [ ...rootFiles ],
+                options    : compilerOptions,
+                host       : baseHost,
+                oldProgram : lastProgram
             });
+            lastProgram = cachedProgram;
         }
 
         const sourceFile = cachedProgram.getSourceFile( cleanId );
@@ -186,7 +247,7 @@ export function createBundlerTransformer(
 
         const transformResult = ts.transform(
             sourceFile,
-            [ transformer( cachedProgram ) ],
+            [ transformer( cachedProgram, { skipDiagnostics : true }) ],
             compilerOptions
         );
         const transformedSf = transformResult.transformed[0] as ts.SourceFile;
@@ -217,7 +278,33 @@ export function createBundlerTransformer(
         return { code : printed, map : null };
     };
 
-    return { transform, invalidate };
+    return { transform, invalidate, getWatchFiles };
+}
+
+function addPluginWatchFiles( pluginCtx: any, controller: BundlerTransformerController ): void
+{
+    if( typeof pluginCtx?.addWatchFile !== 'function' ){ return }
+
+    for( const dep of controller.getWatchFiles())
+    {
+        pluginCtx.addWatchFile( dep );
+    }
+}
+
+function resolveWebpackLoaderPath(): string
+{
+    const currentDir = typeof __dirname === 'string'
+        ? __dirname
+        : path.dirname( fileURLToPath( import.meta.url ));
+    const cjsCandidate = path.join( currentDir, 'webpack-loader.cjs' );
+
+    if( fs.existsSync( cjsCandidate )){ return cjsCandidate }
+
+    const jsCandidate = path.join( currentDir, 'webpack-loader.js' );
+
+    if( fs.existsSync( jsCandidate )){ return jsCandidate }
+
+    return path.join( currentDir, 'webpack-loader.ts' );
 }
 
 /** Vite / Vitest plugin for ahead-of-time `@webergency-utils/typechecker` macro expansion. */
@@ -228,9 +315,13 @@ export function typecheckerVite( options: TypecheckerBundlerOptions = {})
     return {
         name    : 'webergency-typechecker',
         enforce : 'pre' as const,
-        transform( code: string, id: string )
+        transform( this: any, code: string, id: string )
         {
-            return controller.transform( code, id );
+            const res = controller.transform( code, id );
+
+            if( res ){ addPluginWatchFiles( this, controller ) }
+
+            return res;
         },
         handleHotUpdate( ctx: { file : string })
         {
@@ -246,9 +337,17 @@ export function typecheckerRollup( options: TypecheckerBundlerOptions = {})
 
     return {
         name : 'webergency-typechecker',
-        transform( code: string, id: string )
+        transform( this: any, code: string, id: string )
         {
-            return controller.transform( code, id );
+            const res = controller.transform( code, id );
+
+            if( res ){ addPluginWatchFiles( this, controller ) }
+
+            return res;
+        },
+        watchChange( id: string )
+        {
+            controller.invalidate( id );
         }
     };
 }
@@ -273,7 +372,11 @@ export function typecheckerEsbuild( options: TypecheckerBundlerOptions = {})
                 const ext = path.extname( args.path ).toLowerCase();
                 const loader = ext === '.tsx' ? 'tsx' : 'ts';
 
-                return { contents : res.code, loader };
+                return {
+                    contents   : res.code,
+                    loader,
+                    watchFiles : controller.getWatchFiles()
+                };
             });
         }
     };
@@ -283,17 +386,56 @@ export function typecheckerEsbuild( options: TypecheckerBundlerOptions = {})
 export function typecheckerWebpack( options: TypecheckerBundlerOptions = {})
 {
     const controller = createBundlerTransformer( options );
+    const include = options.include ?? DEFAULT_INCLUDE_RE;
+    const exclude = options.exclude ?? DEFAULT_EXCLUDE_RE;
 
     return {
         name : 'webergency-typechecker',
         apply( compiler: any )
         {
-            compiler.hooks?.compilation?.tap( 'webergency-typechecker', ( compilation: any ) =>
+            compiler.options = compiler.options || {};
+            compiler.options.module = compiler.options.module || {};
+            compiler.options.module.rules = compiler.options.module.rules || [];
+            compiler.options.module.rules.unshift({
+                test    : include,
+                exclude,
+                enforce : 'pre',
+                use     : [
+                    {
+                        loader  : resolveWebpackLoaderPath(),
+                        options : { controller }
+                    }
+                ]
+            });
+
+            compiler.hooks?.watchRun?.tap( 'webergency-typechecker', ( comp: any ) =>
             {
-                compilation.hooks?.normalModuleLoader?.tap( 'webergency-typechecker', () =>
+                const modified: Iterable<string> | undefined = comp?.modifiedFiles;
+                const removed: Iterable<string> | undefined = comp?.removedFiles;
+                let invalidatedSpecific = false;
+
+                if( modified )
+                {
+                    for( const f of modified )
+                    {
+                        controller.invalidate( f );
+                        invalidatedSpecific = true;
+                    }
+                }
+
+                if( removed )
+                {
+                    for( const f of removed )
+                    {
+                        controller.invalidate( f );
+                        invalidatedSpecific = true;
+                    }
+                }
+
+                if( !invalidatedSpecific )
                 {
                     controller.invalidate();
-                });
+                }
             });
         },
         transform( code: string, id: string )

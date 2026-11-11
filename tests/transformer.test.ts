@@ -450,7 +450,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).toContain( 'validators.function' );
     });
 
-    it( 'should emit allOf for object intersections and x-typescript-type for Set/bigint', () => 
+    it( 'should merge pure object intersections and emit x-typescript-type for Set/bigint', () => 
     {
         const code = `
             import { jsonSchema } from './src/index.js';
@@ -463,7 +463,8 @@ describe( 'Transformer Call Expression Replacements', () =>
             const s3 = jsonSchema<bigint>();
         `;
         const compiled = compileAndTransform( code );
-        expect( compiled ).toContain( '"allOf"' );
+        expect( compiled ).toContain( '"required": ["a", "b"]' );
+        expect( compiled ).toContain( '"additionalProperties": false' );
         expect( compiled ).toContain( '"x-typescript-type": "Set"' );
         expect( compiled ).toContain( '"x-typescript-type": "bigint"' );
     });

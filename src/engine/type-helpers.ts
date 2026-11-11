@@ -1,6 +1,7 @@
 import ts from 'typescript';
 import { isTagKey } from './tagKeys.js';
-import { resolveFunctionIdentity, type ICustomFunctionScope } from './customFns.js';
+import { isClassConstructorType, resolveClassIdentity, resolveFunctionIdentity, type ICustomFunctionScope } from './customFns.js';
+import { formatCasing, type CasingFormat } from '../runtime/casing.js';
 export { isTagKey };
 
 export const BUFFER_LIKE: ReadonlySet<string> = new Set([
@@ -20,6 +21,25 @@ export type ParsedConstraint =
         nestedCheck? : ts.Expression
     };
 
+export interface JsDocMetadata
+{
+    title?       : string
+    description? : string
+    default?     : unknown
+    hasDefault?  : boolean
+    examples?    : unknown[]
+    deprecated?  : boolean
+    readOnly?    : boolean
+    writeOnly?   : boolean
+    secret?      : boolean
+}
+
+export interface JsDocExtraction
+{
+    metadata    : JsDocMetadata
+    constraints : ParsedConstraint[]
+}
+
 /** No-op scope for codegen unit tests that never hit Custom tags. */
 export const VERBATIM_CUSTOM_SCOPE: ICustomFunctionScope =
 {
@@ -35,11 +55,16 @@ export type TaggedUnionInfo =
 
 export type MergedPropInfo =
     {
-        name       : string
-        symbol     : ts.Symbol
-        type       : ts.Type
-        isOptional : boolean
-        hasDefault : boolean
+        name              : string
+        symbol            : ts.Symbol
+        type              : ts.Type
+        isOptional        : boolean
+        hasDefault        : boolean
+        isReadOnly?       : boolean
+        isWriteOnly?      : boolean
+        isSecret?         : boolean
+        jsdocConstraints? : ParsedConstraint[]
+        jsdocMeta?        : JsDocMetadata
     };
 
 export interface TemplateIndexInfo
@@ -180,20 +205,496 @@ export function typeHasDefaultTag( type: ts.Type, checker: ts.TypeChecker ): boo
     return getTypeProps( type, checker ).some( p => p.getName() === '__default' );
 }
 
+function typeHasPhantomKey( type: ts.Type, checker: ts.TypeChecker, key: string ): boolean
+{
+    if( typeof type.isIntersection === 'function' && type.isIntersection())
+    {
+        return type.types.some( t => typeHasPhantomKey( t, checker, key ));
+    }
+
+    if( typeof type.isUnion === 'function' && type.isUnion())
+    {
+        const nonNullish = type.types.filter( t => !( t.getFlags() & ( ts.TypeFlags.Undefined | ts.TypeFlags.Null )));
+
+        return nonNullish.length > 0 && nonNullish.every( t => typeHasPhantomKey( t, checker, key ));
+    }
+
+    return getTypeProps( type, checker ).some( p => p.getName() === key );
+}
+
+export function typeHasReadOnlyTag( type: ts.Type, checker: ts.TypeChecker ): boolean
+{
+    return typeHasPhantomKey( type, checker, '__readonly' );
+}
+
+export function typeHasWriteOnlyTag( type: ts.Type, checker: ts.TypeChecker ): boolean
+{
+    return typeHasPhantomKey( type, checker, '__writeonly' );
+}
+
+export function typeHasSecretTag( type: ts.Type, checker: ts.TypeChecker ): boolean
+{
+    return typeHasPhantomKey( type, checker, '__secret' );
+}
+
+function hasNonPublicModifier( prop: ts.Symbol ): boolean
+{
+    const decl = prop.valueDeclaration || prop.declarations?.[0];
+
+    if( !decl || typeof ts.canHaveModifiers !== 'function' || !ts.canHaveModifiers( decl )){ return false }
+
+    const mods = ts.getModifiers( decl );
+
+    if( !mods ){ return false }
+
+    return mods.some( m => m.kind === ts.SyntaxKind.PrivateKeyword || m.kind === ts.SyntaxKind.ProtectedKeyword );
+}
+
+export function isIgnoredPropertySymbol( prop: ts.Symbol, isClassInstance: boolean = false ): boolean
+{
+    const name = prop.getName();
+
+    if( isTagKey( name )){ return true }
+
+    if( name.startsWith( '__@' ) || name.startsWith( '#' ) || name.startsWith( '__#' )){ return true }
+
+    if( isClassInstance )
+    {
+        if(( prop.flags & ts.SymbolFlags.Method ) !== 0 ){ return true }
+
+        if( hasNonPublicModifier( prop )){ return true }
+    }
+
+    return false;
+}
+
+export function assertNotTypeParameter( type: ts.Type ): void
+{
+    const flags = typeof type.getFlags === 'function' ? type.getFlags() : 0;
+
+    if(( flags & ts.TypeFlags.TypeParameter ) !== 0 )
+    {
+        const name = typeSymbolName( type ) || 'T';
+        throw new Error( `[Webergency] Cannot compile runtime validator for unresolved type parameter '${name}'. Provide a concrete type argument.` );
+    }
+}
+
+export function resolveWirePropertyName( propName: string, casing?: CasingFormat ): string
+{
+    if( !casing ){ return propName }
+
+    return formatCasing( propName, casing );
+}
+
+export function buildWirePropertyMap(
+    propNames : readonly string[],
+    casing?   : CasingFormat
+): Map<string, string>
+{
+    const map = new Map<string, string>();
+    const seenWire = new Map<string, string>();
+
+    for( const propName of propNames )
+    {
+        const wireName = resolveWirePropertyName( propName, casing );
+        const prev = seenWire.get( wireName );
+
+        if( prev !== undefined && prev !== propName )
+        {
+            throw new Error(
+                `[Webergency] Casing conversion collision: properties '${prev}' and '${propName}' both map to wire key '${wireName}' under propertyCasing '${casing}'.`
+            );
+        }
+
+        seenWire.set( wireName, propName );
+        map.set( propName, wireName );
+    }
+
+    return map;
+}
+
+function isBuiltInLibDeclaration( symbol: ts.Symbol | undefined ): boolean
+{
+    const decl = symbol?.valueDeclaration || symbol?.declarations?.[0];
+    const sf = decl?.getSourceFile?.();
+
+    if( !sf ){ return false }
+
+    return Boolean( sf.hasNoDefaultLib || sf.fileName.includes( 'typescript/lib/' ));
+}
+
+function parseJsDocLiteral( text: string ): unknown
+{
+    try
+    {
+        return JSON.parse( text );
+    }
+    catch
+    {
+        return text;
+    }
+}
+
+export function hasJsDocMetadata( meta: JsDocMetadata | undefined ): boolean
+{
+    if( !meta ){ return false }
+
+    return meta.title !== undefined ||
+        meta.description !== undefined ||
+        meta.hasDefault === true ||
+        ( meta.examples !== undefined && meta.examples.length > 0 ) ||
+        meta.deprecated === true ||
+        meta.readOnly === true ||
+        meta.writeOnly === true ||
+        meta.secret === true;
+}
+
+export function mergeConstraintsWithJsDoc(
+    primary : ParsedConstraint[],
+    jsdoc   : ParsedConstraint[] | undefined
+): ParsedConstraint[]
+{
+    if( !jsdoc || jsdoc.length === 0 ){ return primary }
+
+    if( primary.length === 0 ){ return jsdoc.slice() }
+
+    const existingTypes = new Set( primary.map( c => c.type ));
+    const merged = primary.slice();
+
+    for( const jc of jsdoc )
+    {
+        if( !existingTypes.has( jc.type ))
+        {
+            merged.push( jc );
+            existingTypes.add( jc.type );
+        }
+    }
+
+    return merged;
+}
+
+function mergeJsDocExtractions( inner: JsDocExtraction, outer: JsDocExtraction ): JsDocExtraction
+{
+    const metadata: JsDocMetadata = {};
+    const title = outer.metadata.title ?? inner.metadata.title;
+    const description = outer.metadata.description ?? inner.metadata.description;
+
+    if( title !== undefined ){ metadata.title = title }
+
+    if( description !== undefined ){ metadata.description = description }
+
+    if( outer.metadata.hasDefault )
+    {
+        metadata.default = outer.metadata.default;
+        metadata.hasDefault = true;
+    }
+    else if( inner.metadata.hasDefault )
+    {
+        metadata.default = inner.metadata.default;
+        metadata.hasDefault = true;
+    }
+
+    if( outer.metadata.deprecated || inner.metadata.deprecated )
+    {
+        metadata.deprecated = true;
+    }
+
+    if( outer.metadata.readOnly || inner.metadata.readOnly )
+    {
+        metadata.readOnly = true;
+    }
+
+    if( outer.metadata.writeOnly || inner.metadata.writeOnly )
+    {
+        metadata.writeOnly = true;
+    }
+
+    if( outer.metadata.secret || inner.metadata.secret )
+    {
+        metadata.secret = true;
+    }
+
+    const examples = [ ...( inner.metadata.examples || []), ...( outer.metadata.examples || []) ];
+
+    if( examples.length > 0 ){ metadata.examples = examples }
+
+    return {
+        metadata,
+        constraints : mergeConstraintsWithJsDoc( outer.constraints, inner.constraints )
+    };
+}
+
+export function extractSymbolJsDocInfo( symbol: ts.Symbol | undefined, checker: ts.TypeChecker ): JsDocExtraction
+{
+    const metadata: JsDocMetadata = {};
+    const constraints: ParsedConstraint[] = [];
+
+    if( !symbol || isBuiltInLibDeclaration( symbol ))
+    {
+        return { metadata, constraints };
+    }
+
+    if( typeof symbol.getDocumentationComment === 'function' )
+    {
+        try
+        {
+            const doc = ts.displayPartsToString( symbol.getDocumentationComment( checker )).trim();
+
+            if( doc.length > 0 ){ metadata.description = doc }
+        }
+        catch
+        { /* ignore mock symbols */ }
+    }
+
+    if( typeof symbol.getJsDocTags === 'function' )
+    {
+        let tags: ts.JSDocTagInfo[];
+
+        try
+        {
+            tags = symbol.getJsDocTags( checker ) || [];
+        }
+        catch
+        {
+            tags = [];
+        }
+
+        for( const tag of tags )
+        {
+            const rawText = typeof tag.text === 'string'
+                ? tag.text
+                : ( tag.text ? ts.displayPartsToString( tag.text ) : '' );
+            const text = rawText.trim();
+            const tagName = tag.name;
+
+            if( tagName === 'title' && text.length > 0 )
+            {
+                metadata.title = text;
+            }
+            else if(( tagName === 'description' || tagName === 'desc' ) && text.length > 0 )
+            {
+                if( !metadata.description ){ metadata.description = text }
+            }
+            else if( tagName === 'deprecated' )
+            {
+                metadata.deprecated = true;
+            }
+            else if(( tagName === 'readonly' || tagName === 'readOnly' ) && text !== 'false' )
+            {
+                metadata.readOnly = true;
+                constraints.push({ type : 'readOnly', value : true });
+            }
+            else if(( tagName === 'writeonly' || tagName === 'writeOnly' ) && text !== 'false' )
+            {
+                metadata.writeOnly = true;
+                constraints.push({ type : 'writeOnly', value : true });
+            }
+            else if( tagName === 'secret' && text !== 'false' )
+            {
+                metadata.secret = true;
+                constraints.push({ type : 'secret', value : true });
+            }
+            else if( tagName === 'example' && text.length > 0 )
+            {
+                if( !metadata.examples ){ metadata.examples = [] }
+
+                metadata.examples.push( parseJsDocLiteral( text ));
+            }
+            else if( tagName === 'default' && text.length > 0 && text !== 'undefined' )
+            {
+                const parsed = parseJsDocLiteral( text );
+                metadata.default = parsed;
+                metadata.hasDefault = true;
+                constraints.push({ type : 'default', value : parsed });
+            }
+            else if(
+                tagName === 'minimum' ||
+                tagName === 'maximum' ||
+                tagName === 'exclusiveMinimum' ||
+                tagName === 'exclusiveMaximum' ||
+                tagName === 'multipleOf'
+            )
+            {
+                const n = Number( text );
+
+                if( text.length > 0 && Number.isFinite( n ) && ( tagName !== 'multipleOf' || n > 0 ))
+                {
+                    constraints.push({ type : tagName, value : n });
+                }
+            }
+            else if(
+                tagName === 'minLength' ||
+                tagName === 'maxLength' ||
+                tagName === 'minItems' ||
+                tagName === 'maxItems' ||
+                tagName === 'minProperties' ||
+                tagName === 'maxProperties' ||
+                tagName === 'minContains' ||
+                tagName === 'maxContains'
+            )
+            {
+                const n = Number( text );
+
+                if( text.length > 0 && Number.isInteger( n ) && n >= 0 )
+                {
+                    constraints.push({ type : tagName, value : n });
+                }
+            }
+            else if( tagName === 'pattern' && text.length > 0 )
+            {
+                constraints.push({ type : 'pattern', value : text });
+            }
+            else if( tagName === 'format' && text.length > 0 )
+            {
+                constraints.push({ type : 'format', value : text });
+            }
+            else if( tagName === 'uniqueItems' && text !== 'false' )
+            {
+                constraints.push({ type : 'uniqueItems', value : true });
+            }
+        }
+    }
+
+    return { metadata, constraints };
+}
+
+function resolveReferencedAliasJsDoc(
+    typeNode : ts.TypeNode | undefined,
+    checker  : ts.TypeChecker,
+    seen     : Set<ts.Symbol> = new Set()
+): JsDocExtraction | undefined
+{
+    if( !typeNode || !ts.isTypeReferenceNode( typeNode ) || typeof checker.getSymbolAtLocation !== 'function' )
+    {
+        return undefined;
+    }
+
+    let sym: ts.Symbol | undefined;
+
+    try
+    {
+        sym = checker.getSymbolAtLocation( typeNode.typeName );
+
+        if( sym && ( sym.flags & ts.SymbolFlags.Alias ) && typeof checker.getAliasedSymbol === 'function' )
+        {
+            sym = checker.getAliasedSymbol( sym );
+        }
+    }
+    catch
+    {
+        return undefined;
+    }
+
+    if( !sym || seen.has( sym ) || isBuiltInLibDeclaration( sym )){ return undefined }
+
+    seen.add( sym );
+    const own = extractSymbolJsDocInfo( sym, checker );
+    const decl = sym.declarations?.[0];
+
+    if( decl && ts.isTypeAliasDeclaration( decl ))
+    {
+        const inner = resolveReferencedAliasJsDoc( decl.type, checker, seen );
+
+        if( inner ){ return mergeJsDocExtractions( inner, own ) }
+    }
+
+    return own;
+}
+
+export function extractPropertyJsDocInfo( prop: ts.Symbol, checker: ts.TypeChecker ): JsDocExtraction
+{
+    const own = extractSymbolJsDocInfo( prop, checker );
+    const decl = prop.valueDeclaration || prop.declarations?.[0];
+    const typeNode = decl && ( ts.isPropertySignature( decl ) || ts.isPropertyDeclaration( decl ) || ts.isParameter( decl ))
+        ? decl.type
+        : undefined;
+    const refInfo = resolveReferencedAliasJsDoc( typeNode, checker );
+
+    if( refInfo ){ return mergeJsDocExtractions( refInfo, own ) }
+
+    return own;
+}
+
+export function extractTypeJsDocInfo( type: ts.Type, checker: ts.TypeChecker ): JsDocExtraction
+{
+    const attachedNode = ( type as any ).__jsdocTypeNode as ts.TypeNode | undefined;
+
+    if( attachedNode )
+    {
+        const fromNode = resolveReferencedAliasJsDoc( attachedNode, checker );
+
+        if( fromNode ){ return fromNode }
+    }
+
+    const aliasSym = type.aliasSymbol;
+    const typeSym = typeof type.getSymbol === 'function' ? type.getSymbol() : type.symbol;
+    const symName = typeSym && typeof typeSym.getName === 'function' ? typeSym.getName() : typeSym?.name;
+    const validTypeSym = typeSym && symName !== '__type' && symName !== '__object' ? typeSym : undefined;
+
+    if( aliasSym && validTypeSym && aliasSym !== validTypeSym )
+    {
+        return mergeJsDocExtractions(
+            extractSymbolJsDocInfo( validTypeSym, checker ),
+            extractSymbolJsDocInfo( aliasSym, checker )
+        );
+    }
+
+    return extractSymbolJsDocInfo( aliasSym || validTypeSym, checker );
+}
+
+export function wrapTypeNodeWithJsDoc( typeNode: ts.TypeNode, type: ts.Type, checker: ts.TypeChecker ): ts.Type
+{
+    const fromNode = resolveReferencedAliasJsDoc( typeNode, checker );
+
+    if( !fromNode || ( fromNode.constraints.length === 0 && !hasJsDocMetadata( fromNode.metadata )))
+    {
+        return type;
+    }
+
+    // Only wrap when TypeScript erased `aliasSymbol` (e.g. `type Short = string`).
+    if( type.aliasSymbol )
+    {
+        const existing = extractTypeJsDocInfo( type, checker );
+
+        if( existing.constraints.length >= fromNode.constraints.length && hasJsDocMetadata( existing.metadata ) === hasJsDocMetadata( fromNode.metadata ))
+        {
+            return type;
+        }
+    }
+
+    const proto = typeof type === 'object' && type !== null ? Object.getPrototypeOf( type ) : Object.prototype;
+
+    return Object.assign( Object.create( proto ), type, {
+        id              : undefined,
+        __jsdocTypeNode : typeNode
+    });
+}
+
 export function mapStructuralProps( type: ts.Type, checker: ts.TypeChecker ): MergedPropInfo[]
 {
+    const isClassInst = resolveClassIdentity( type ) !== undefined;
+
     return getTypeProps( type, checker )
-        .filter( p => !isTagKey( p.getName()))
+        .filter( p => !isIgnoredPropertySymbol( p, isClassInst ))
         .map( prop =>
         {
             const propType = getPropertyType( type, prop, checker );
+            const jsdoc = extractPropertyJsDocInfo( prop, checker );
+            const isReadOnly = typeHasReadOnlyTag( propType, checker ) || Boolean( jsdoc.metadata.readOnly );
+            const isSecret = typeHasSecretTag( propType, checker ) || Boolean( jsdoc.metadata.secret );
+            const isWriteOnly = typeHasWriteOnlyTag( propType, checker ) || Boolean( jsdoc.metadata.writeOnly );
 
             return {
-                name       : prop.getName(),
-                symbol     : prop,
-                type       : propType,
-                isOptional : Boolean( prop.flags & ts.SymbolFlags.Optional ),
-                hasDefault : typeHasDefaultTag( propType, checker )
+                name             : prop.getName(),
+                symbol           : prop,
+                type             : propType,
+                isOptional       : Boolean( prop.flags & ts.SymbolFlags.Optional ),
+                hasDefault       : typeHasDefaultTag( propType, checker ) || Boolean( jsdoc.metadata.hasDefault ),
+                isReadOnly,
+                isWriteOnly,
+                isSecret,
+                jsdocConstraints : jsdoc.constraints.length > 0 ? jsdoc.constraints : undefined,
+                jsdocMeta        : hasJsDocMetadata( jsdoc.metadata ) ? jsdoc.metadata : undefined
             };
         });
 }
@@ -262,15 +763,22 @@ export function isBrandOnlyType( type: ts.Type, checker: ts.TypeChecker ): boole
 
 export function isDiscriminableObject( type: ts.Type, checker: ts.TypeChecker ): boolean
 {
+    if( typeof type.isIntersection === 'function' && type.isIntersection())
+    {
+        return tryMergeObjectTypes( type.types, checker, type ) !== undefined;
+    }
+
     if( !( type.getFlags() & ts.TypeFlags.Object )){ return false }
 
     if( checker.isArrayType( type ) || checker.isTupleType( type )){ return false }
 
     if( typeof type.getCallSignatures === 'function' && type.getCallSignatures().length > 0 ){ return false }
 
+    if( isClassConstructorType( type ) || resolveClassIdentity( type ) !== undefined ){ return false }
+
     const name = typeSymbolName( type );
 
-    return name !== 'Date' && name !== 'URL' && name !== 'Set' && name !== 'ReadonlySet' && name !== 'Map' && name !== 'ReadonlyMap' && name !== 'RegExp';
+    return name !== 'Date' && name !== 'URL' && name !== 'Set' && name !== 'ReadonlySet' && name !== 'Map' && name !== 'ReadonlyMap' && name !== 'RegExp' && name !== 'Promise' && name !== 'File' && name !== 'Blob' && ( name === undefined || !BUFFER_LIKE.has( name ));
 }
 
 export function singleLiteralValue( type: ts.Type ): string | number | boolean | undefined
@@ -303,11 +811,11 @@ export function tryTaggedUnionTypes( members: readonly ts.Type[], checker: ts.Ty
 
         for( const prop of getTypeProps( member, checker ))
         {
-            const declaration = prop.valueDeclaration || prop.declarations?.[0];
+            if( isIgnoredPropertySymbol( prop )){ continue }
 
-            if( !declaration ){ continue }
+            if(( prop.flags & ts.SymbolFlags.Optional ) !== 0 ){ continue }
 
-            const value = singleLiteralValue( checker.getTypeOfSymbolAtLocation( prop, declaration ));
+            const value = singleLiteralValue( getPropertyType( member, prop, checker ));
 
             if( value !== undefined ){ literals.set( prop.getName(), value ) }
         }
@@ -345,12 +853,26 @@ export function stringIndexType( type: ts.Type, checker: ts.TypeChecker ): ts.Ty
     return checker.getIndexInfoOfType( type, ts.IndexKind.String )?.type;
 }
 
+export function numberIndexType( type: ts.Type, checker: ts.TypeChecker ): ts.Type | undefined
+{
+    if( typeof checker.getIndexInfoOfType !== 'function' ){ return undefined }
+
+    return checker.getIndexInfoOfType( type, ts.IndexKind.Number )?.type;
+}
+
 export function getTemplateIndexInfos( type: ts.Type, checker: ts.TypeChecker ): TemplateIndexInfo[]
 {
     if( typeof ( checker as any ).getIndexInfosOfType !== 'function' ){ return [] }
 
     const infos: ts.IndexInfo[] = ( checker as any ).getIndexInfosOfType( type ) || [];
     const result: TemplateIndexInfo[] = [];
+    const typeFlags = typeof type.getFlags === 'function' ? type.getFlags() : 0;
+    const symName = typeSymbolName( type );
+    const allowNumIndex = ( typeFlags & ts.TypeFlags.Object ) !== 0 &&
+        !( typeof checker.isArrayType === 'function' && checker.isArrayType( type )) &&
+        !( typeof checker.isTupleType === 'function' && checker.isTupleType( type )) &&
+        symName !== 'String' &&
+        ( symName === undefined || !BUFFER_LIKE.has( symName ));
 
     for( const info of infos )
     {
@@ -366,6 +888,14 @@ export function getTemplateIndexInfos( type: ts.Type, checker: ts.TypeChecker ):
                 valueType : info.type
             });
         }
+        else if( allowNumIndex && ( keyFlags & ts.TypeFlags.Number ))
+        {
+            result.push({
+                pattern   : '^(?:0|[1-9][0-9]*)$',
+                keyType   : info.keyType,
+                valueType : info.type
+            });
+        }
     }
 
     return result;
@@ -374,6 +904,8 @@ export function getTemplateIndexInfos( type: ts.Type, checker: ts.TypeChecker ):
 function isMergeableObjectType( t: ts.Type, checker: ts.TypeChecker ): boolean
 {
     if( isConstraintOnlyType( t, checker ) || isBrandOnlyType( t, checker )){ return false }
+
+    if( isClassConstructorType( t ) || resolveClassIdentity( t ) !== undefined ){ return false }
 
     const flags = typeof t.getFlags === 'function' ? t.getFlags() : 0;
     const isObj = (( flags & ts.TypeFlags.Object ) !== 0 ) || ( typeof ( t as any ).isClassOrInterface === 'function' && ( t as any ).isClassOrInterface());
@@ -384,7 +916,7 @@ function isMergeableObjectType( t: ts.Type, checker: ts.TypeChecker ): boolean
 
     if( typeof checker.isTupleType === 'function' && checker.isTupleType( t )){ return false }
 
-    if( typeof t.getCallSignatures === 'function' && t.getCallSignatures().length > 0 && ( typeof t.getConstructSignatures !== 'function' || t.getConstructSignatures().length === 0 ))
+    if( typeof t.getCallSignatures === 'function' && t.getCallSignatures().length > 0 )
     {
         return false;
     }
@@ -399,7 +931,11 @@ function isMergeableObjectType( t: ts.Type, checker: ts.TypeChecker ): boolean
     return true;
 }
 
-export function tryMergeObjectTypes( types: readonly ts.Type[], checker: ts.TypeChecker ): MergedObjectInfo | undefined
+export function tryMergeObjectTypes(
+    types             : readonly ts.Type[],
+    checker           : ts.TypeChecker,
+    intersectionType? : ts.Type
+): MergedObjectInfo | undefined
 {
     const objectTypes = types.filter( t => isMergeableObjectType( t, checker ));
 
@@ -421,28 +957,97 @@ export function tryMergeObjectTypes( types: readonly ts.Type[], checker: ts.Type
     {
         const idx = stringIndexType( t, checker );
 
-        if( idx ){ indexType = idx }
+        if( idx )
+        {
+            indexType = indexType && indexType !== idx
+                ? synthesizeIntersection( indexType, [ indexType, idx ])
+                : idx;
+        }
 
         for( const pInfo of getTemplateIndexInfos( t, checker ))
         {
-            patternMap.set( pInfo.pattern, pInfo );
+            const prevPat = patternMap.get( pInfo.pattern );
+
+            if( prevPat && prevPat.valueType !== pInfo.valueType )
+            {
+                patternMap.set( pInfo.pattern, {
+                    ...pInfo,
+                    valueType : synthesizeIntersection( prevPat.valueType, [ prevPat.valueType, pInfo.valueType ])
+                });
+            }
+            else
+            {
+                patternMap.set( pInfo.pattern, pInfo );
+            }
         }
 
         for( const prop of getTypeProps( t, checker ))
         {
+            if( isIgnoredPropertySymbol( prop )){ continue }
+
             const name = prop.getName();
-
-            if( isTagKey( name )){ continue }
-
             const propType = getPropertyType( t, prop, checker );
+            const jsdoc = extractPropertyJsDocInfo( prop, checker );
+            const curOptional = ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0;
+            const curHasDefault = typeHasDefaultTag( propType, checker ) || Boolean( jsdoc.metadata.hasDefault );
+            const curReadOnly = typeHasReadOnlyTag( propType, checker ) || Boolean( jsdoc.metadata.readOnly );
+            const curWriteOnly = typeHasWriteOnlyTag( propType, checker ) || Boolean( jsdoc.metadata.writeOnly );
+            const curSecret = typeHasSecretTag( propType, checker ) || Boolean( jsdoc.metadata.secret );
+            const prev = propMap.get( name );
 
-            propMap.set( name, {
-                name,
-                symbol     : prop,
-                type       : propType,
-                isOptional : ( prop.getFlags() & ts.SymbolFlags.Optional ) !== 0,
-                hasDefault : typeHasDefaultTag( propType, checker )
-            });
+            if( prev )
+            {
+                let mergedType: ts.Type;
+
+                if( prev.type === propType )
+                {
+                    mergedType = propType;
+                }
+                else if( intersectionType && typeof checker.getPropertyOfType === 'function' )
+                {
+                    const interProp = checker.getPropertyOfType( intersectionType, name );
+                    mergedType = interProp
+                        ? getPropertyType( intersectionType, interProp, checker )
+                        : synthesizeIntersection( prev.type, [ prev.type, propType ]);
+                }
+                else
+                {
+                    mergedType = synthesizeIntersection( prev.type, [ prev.type, propType ]);
+                }
+
+                const mergedJsdoc = mergeJsDocExtractions(
+                    { metadata : prev.jsdocMeta || {}, constraints : prev.jsdocConstraints || [] },
+                    jsdoc
+                );
+
+                propMap.set( name, {
+                    name,
+                    symbol           : prop,
+                    type             : mergedType,
+                    isOptional       : prev.isOptional && curOptional,
+                    hasDefault       : prev.hasDefault || curHasDefault || Boolean( mergedJsdoc.metadata.hasDefault ),
+                    isReadOnly       : Boolean( prev.isReadOnly ) || curReadOnly || Boolean( mergedJsdoc.metadata.readOnly ),
+                    isWriteOnly      : Boolean( prev.isWriteOnly ) || curWriteOnly || Boolean( mergedJsdoc.metadata.writeOnly ),
+                    isSecret         : Boolean( prev.isSecret ) || curSecret || Boolean( mergedJsdoc.metadata.secret ),
+                    jsdocConstraints : mergedJsdoc.constraints.length > 0 ? mergedJsdoc.constraints : undefined,
+                    jsdocMeta        : hasJsDocMetadata( mergedJsdoc.metadata ) ? mergedJsdoc.metadata : undefined
+                });
+            }
+            else
+            {
+                propMap.set( name, {
+                    name,
+                    symbol           : prop,
+                    type             : propType,
+                    isOptional       : curOptional,
+                    hasDefault       : curHasDefault,
+                    isReadOnly       : curReadOnly,
+                    isWriteOnly      : curWriteOnly,
+                    isSecret         : curSecret,
+                    jsdocConstraints : jsdoc.constraints.length > 0 ? jsdoc.constraints : undefined,
+                    jsdocMeta        : hasJsDocMetadata( jsdoc.metadata ) ? jsdoc.metadata : undefined
+                });
+            }
         }
     }
 
@@ -455,13 +1060,7 @@ export function stripUndefinedFromType( type: ts.Type | undefined ): ts.Type
 {
     if( !type ){ return { getFlags : () => ts.TypeFlags.Any } as any }
 
-    if( typeof type.isUnion !== 'function' || !type.isUnion()){ return type }
-
-    const nonUndefined = type.types.filter( t => !( t.getFlags() & ts.TypeFlags.Undefined ));
-
-    if( nonUndefined.length === 1 ){ return nonUndefined[0] }
-
-    return type;
+    return stripUndefinedFromUnion( type );
 }
 
 const strippedUnionCache = new WeakMap<object, ts.Type>();
@@ -583,6 +1182,12 @@ export function collectConstraintsFromProps(
         }
 
         if( pName === '__default' ){ constraints.push({ type : 'default', value : val }); continue }
+
+        if( pName === '__readonly' ){ constraints.push({ type : 'readOnly', value : true }); continue }
+
+        if( pName === '__writeonly' ){ constraints.push({ type : 'writeOnly', value : true }); continue }
+
+        if( pName === '__secret' ){ constraints.push({ type : 'secret', value : true }); continue }
 
         if( pName === '__message' ){ constraints.push({ type : 'message', value : val }); continue }
 
@@ -793,7 +1398,7 @@ function resolveBaseCandidates( original: ts.Type, candidates: ts.Type[], checke
 {
     if( candidates.length === 1 ){ return candidates[0] }
 
-    if( tryMergeObjectTypes( candidates, checker ))
+    if( tryMergeObjectTypes( candidates, checker, original ))
     {
         return synthesizeIntersection( original, candidates );
     }
@@ -873,7 +1478,8 @@ export function resolveWalkType( type: ts.Type, checker: ts.TypeChecker ): { typ
         {
             const merged = tryMergeObjectTypes(
                 type.types.filter( t => !isConstraintOnlyType( t, checker ) && !isBrandOnlyType( t, checker )),
-                checker
+                checker,
+                type
             );
 
             if( merged && !peeled.hasTags )
@@ -885,7 +1491,7 @@ export function resolveWalkType( type: ts.Type, checker: ts.TypeChecker ): { typ
             return { type : peeled.base, constraints : peeled.constraints };
         }
 
-        const merged = tryMergeObjectTypes( type.types, checker );
+        const merged = tryMergeObjectTypes( type.types, checker, type );
 
         if( merged ){ return { type, constraints : [] } }
     }
@@ -923,7 +1529,8 @@ export function isValidMapKeyType( type: ts.Type, checker: ts.TypeChecker ): boo
             ts.TypeFlags.NumberLiteral |
             ts.TypeFlags.BooleanLiteral |
             ts.TypeFlags.BigIntLiteral |
-            ts.TypeFlags.TemplateLiteral
+            ts.TypeFlags.TemplateLiteral |
+            ts.TypeFlags.StringMapping
         )
     )
     {
@@ -962,7 +1569,22 @@ function templateSlotRegex( subType: ts.Type ): string
 {
     const subFlags = typeof subType.getFlags === 'function' ? subType.getFlags() : 0;
 
-    if( subFlags & ts.TypeFlags.String ){ return '.*' }
+    if( subFlags & ts.TypeFlags.String ){ return '[\\s\\S]*' }
+
+    if( subFlags & ts.TypeFlags.StringMapping )
+    {
+        const symName = typeSymbolName( subType );
+
+        if( symName === 'Uppercase' ){ return '[^a-z]*' }
+
+        if( symName === 'Lowercase' ){ return '[^A-Z]*' }
+
+        if( symName === 'Capitalize' ){ return '(?:[^a-z][\\s\\S]*)?' }
+
+        if( symName === 'Uncapitalize' ){ return '(?:[^A-Z][\\s\\S]*)?' }
+
+        return '[\\s\\S]*';
+    }
 
     if( subFlags & ts.TypeFlags.Number ){ return '[+-]?(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?' }
 
@@ -999,7 +1621,7 @@ function templateSlotRegex( subType: ts.Type ): string
         return `(?:${subType.types.map( t => templateSlotRegex( t )).join( '|' )})`;
     }
 
-    return '.*';
+    return '[\\s\\S]*';
 }
 
 export function buildTemplateLiteralRegex( templateType: ts.TemplateLiteralType ): string
@@ -1061,6 +1683,9 @@ export interface TupleInspection
     hasOptional  : boolean
     fixedCount   : number
     minItems     : number
+    restIndex    : number
+    restType?    : ts.Type
+    suffixTypes  : readonly ts.Type[]
 }
 
 export function inspectTupleType( type: ts.Type, checker: ts.TypeChecker ): TupleInspection
@@ -1072,18 +1697,33 @@ export function inspectTupleType( type: ts.Type, checker: ts.TypeChecker ): Tupl
         : ( tupleRef.typeArguments || fromChecker || []);
     const target = tupleRef.target || ( type as unknown as ts.TupleType );
     const elementFlags: readonly ts.ElementFlags[] = target?.elementFlags || [];
-    const hasRest = elementFlags.some( f => ( f & ts.ElementFlags.Rest ) !== 0 );
+    const restIndex = elementFlags.findIndex( f => ( f & ( ts.ElementFlags.Rest | ts.ElementFlags.Variadic )) !== 0 );
+    const hasRest = restIndex !== -1 && restIndex < typeArgs.length;
     const hasOptional = elementFlags.some( f => ( f & ts.ElementFlags.Optional ) !== 0 );
-    const fixedCount = hasRest && typeArgs.length > 0 ? typeArgs.length - 1 : typeArgs.length;
-    let minItems = 0;
+    const fixedCount = hasRest ? restIndex : typeArgs.length;
+    const restType = hasRest ? typeArgs[restIndex] : undefined;
+    const suffixTypes = hasRest ? typeArgs.slice( restIndex + 1 ) : [];
+    let minPrefix = 0;
 
     for( let i = 0; i < fixedCount; i++ )
     {
         if( !( elementFlags[i] & ts.ElementFlags.Optional ))
         {
-            minItems = i + 1;
+            minPrefix = i + 1;
         }
     }
 
-    return { typeArgs, elementFlags, hasRest, hasOptional, fixedCount, minItems };
+    const minItems = minPrefix + suffixTypes.length;
+
+    return {
+        typeArgs,
+        elementFlags,
+        hasRest,
+        hasOptional,
+        fixedCount,
+        minItems,
+        restIndex : hasRest ? restIndex : -1,
+        restType,
+        suffixTypes
+    };
 }

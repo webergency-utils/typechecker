@@ -1,7 +1,22 @@
-import { validators, isMultipleOfNumber, hasUniqueItems, isPlainObject, findExclusiveKeyArm } from './validators.js';
+import {
+    validators,
+    isMultipleOfNumber,
+    hasUniqueItems,
+    isPlainObject,
+    findExclusiveKeyArm,
+    assignBracketPair,
+    extractFormDataObject,
+    extractHeadersObject,
+    MAX_BRACKET_KEYS,
+    splitHeaderList,
+    type CoercionKind,
+    type StandardSchemaV1,
+    type ValidationMode,
+    type UnionResolution
+} from './validators.js';
 import { getCachedPattern, testRegex } from './regex.js';
-import { resolvePath, hasPath } from './path.js';
-import type { CoercionKind } from './validators.js';
+import { resolvePath, hasPath, tokenizePath, isIndexSegment } from './path.js';
+import type { CasingFormat } from './casing.js';
 import
 {
     applyNodeTransform,
@@ -11,6 +26,27 @@ import
     type TransformFn
 }
     from './transform.js';
+
+export interface FormDataLike
+{
+    entries() : IterableIterator<[string, unknown]>
+    getAll( name: string ) : unknown[]
+}
+
+export interface HeadersLike
+{
+    entries()       : IterableIterator<[string, string]>
+    getSetCookie?() : string[]
+}
+
+export type HeadersInput =
+    | HeadersLike
+    | Record<string, unknown>
+    | ReadonlyArray<readonly [string, string]>;
+
+export type ParseSource = 'json' | 'query' | 'string' | 'formData' | 'headers';
+
+export type ParseInput = string | FormDataLike | HeadersInput;
 
 export class ParseError extends Error
 {
@@ -57,7 +93,10 @@ export function safeParse<T>(
             return { success : false, error : e };
         }
 
-        throw e;
+        return {
+            success : false,
+            error   : new ParseError( '', e instanceof Error ? e.message : String( e ))
+        };
     }
 }
 
@@ -106,6 +145,62 @@ export function expectArray( v: any, path: string ): any[]
     if( !Array.isArray( v )){ throw new ParseError( path, 'Type<Array>' ) }
 
     return v;
+}
+
+export function expectFile( v: any, path: string ): File
+{
+    if( !( v instanceof File )){ throw new ParseError( path, 'Type<File>' ) }
+
+    return v;
+}
+
+export function expectBlob( v: any, path: string ): Blob
+{
+    if( !( v instanceof Blob )){ throw new ParseError( path, 'Type<Blob>' ) }
+
+    return v;
+}
+
+function redactSecretText( text: string, rawVal: any ): string
+{
+    if( typeof rawVal !== 'string' || rawVal.length === 0 ){ return text }
+
+    let out = text.includes( rawVal ) ? text.split( rawVal ).join( '[REDACTED]' ) : text;
+    const trimmed = rawVal.trim();
+
+    if( trimmed.length > 0 && out.includes( trimmed ))
+    {
+        out = out.split( trimmed ).join( '[REDACTED]' );
+    }
+
+    return out;
+}
+
+export function redactParseSecret<T>( fn: () => T, rawVal: any, path: string = '' ): T
+{
+    try
+    {
+        return fn();
+    }
+    catch( e )
+    {
+        if( e instanceof ParseError )
+        {
+            const rawCode = parseErrorCode( e );
+            const redacted = redactSecretText( rawCode, rawVal );
+
+            if( redacted !== rawCode )
+            {
+                throw new ParseError( e.path, redacted );
+            }
+
+            throw e;
+        }
+
+        const rawMsg = e instanceof Error ? e.message : String( e );
+
+        throw new ParseError( path, redactSecretText( rawMsg, rawVal ));
+    }
 }
 
 export interface ParseProbeFrame
@@ -293,40 +388,6 @@ export function parseUnion(
     throw new ParseError( path, expected );
 }
 
-const intRE = /^[0-9]+$/;
-const MAX_QUERY_ARRAY_INDEX = 1000000;
-const MAX_QUERY_DEPTH = 32;
-const MAX_QUERY_KEYS = 10000;
-
-function isQueryArrayIndex( key: string ): boolean
-{
-    if( !intRE.test( key ) || key.length > 7 ){ return false }
-
-    return parseInt( key, 10 ) <= MAX_QUERY_ARRAY_INDEX;
-}
-
-function isUnsafeKey( key: string | number ): boolean
-{
-    return key === '__proto__' || key === 'prototype' || key === 'constructor';
-}
-
-function createPlainObject(): Record<string | number, any>
-{
-    return Object.create( null );
-}
-
-/** Assign a dynamic key without prototype-polluting sinks (`obj[key] = …`). */
-function setOwn( obj: any, key: string | number, value: any ): void
-{
-    Object.defineProperty( obj, key,
-        {
-            value,
-            writable     : true,
-            enumerable   : true,
-            configurable : true
-        });
-}
-
 /** decodeURIComponent throws URIError on lone `%` / bad hex; keep the raw segment instead. */
 function safeDecodeURIComponent( value: string ): string
 {
@@ -340,21 +401,6 @@ function safeDecodeURIComponent( value: string ): string
     }
 }
 
-function maxNumericKey( target: any ): number
-{
-    let max = -1;
-
-    for( const k of Object.keys( target ))
-    {
-        if( isQueryArrayIndex( k ))
-        {
-            max = Math.max( max, parseInt( k, 10 ));
-        }
-    }
-
-    return max;
-}
-
 /**
  * Parses a URL query string or x-www-form-urlencoded string into a nested JavaScript object structure,
  * handling bracket notation like user[name]=Alice, tags[]=a, and items[0]=b matching server QueryParser.
@@ -362,94 +408,18 @@ function maxNumericKey( target: any ): number
  */
 export function parseQueryString( querystring: string ): Record<string, any>
 {
-    const query: any = createPlainObject();
+    const query: any = Object.create( null );
 
     if( !querystring ){ return query }
 
     if( querystring.charAt( 0 ) === '?' ){ throw new ParseError( '', 'Invalid query' ) }
-
-    const assign = ( key: string | number, value: any ) =>
-    {
-        const rawKeys = key.toString().replace( /\]\[/g, '[' ).replace( /]$/, '' ).split( '[' );
-        const keys = rawKeys.length > MAX_QUERY_DEPTH ? rawKeys.slice( 0, MAX_QUERY_DEPTH ) : rawKeys;
-        let obj = query, parent, parent_key;
-
-        for( let i = 0; i < keys.length; ++i )
-        {
-            let k: string | number = keys[i];
-
-            if( isUnsafeKey( k )){ return }
-
-            if( k && isQueryArrayIndex( k.toString())){ k = parseInt( k, 10 ) }
-            else if( k === '' )
-            {
-                k = Array.isArray( obj ) ? obj.length - 1 : maxNumericKey( obj );
-
-                if( k === -1 || i === keys.length - 1 || Object.prototype.hasOwnProperty.call( obj[k] || createPlainObject(), keys[i + 1]))
-                {
-                    k += 1;
-                }
-            }
-
-            if( typeof k === 'string' && Array.isArray( obj ))
-            {
-                obj = obj.reduce(( o: any, v: any, i: number ) =>
-                {
-                    setOwn( o, i, v );
-
-                    return o;
-                }, createPlainObject());
-                setOwn( parent, parent_key!, obj );
-            }
-
-            if( i < keys.length - 1 )
-            {
-                if( !obj[k])
-                {
-                    setOwn( obj, k, ( keys[i + 1] === '' || isQueryArrayIndex( keys[i + 1])) ? [] : createPlainObject());
-                }
-
-                if( isUnsafeKey( keys[i + 1])){ return }
-
-                parent = obj;
-                parent_key = k;
-                obj = obj[k];
-            }
-            else
-            {
-                if( obj[k] !== undefined )
-                {
-                    if( Array.isArray( obj[k]))
-                    {
-                        obj[k].push( value );
-                    }
-                    else if( typeof obj[k] === 'object' && obj[k] !== null )
-                    {
-                        const nested = obj[k];
-                        const nextIndex = maxNumericKey( nested ) + 1;
-                        setOwn( nested, nextIndex, value );
-                    }
-                    else
-                    {
-                        const arr = [obj[k]];
-                        arr.push( value );
-                        setOwn( obj, k, arr );
-                    }
-                }
-                else
-                {
-                    setOwn( obj, k, value );
-                }
-            }
-        }
-    };
 
     let value, pair, last_pair = 0, paramCount = 0;
     const sep = '&', eq = '=';
 
     do
     {
-        if( ++paramCount > MAX_QUERY_KEYS ){ break }
+        if( ++paramCount > MAX_BRACKET_KEYS ){ break }
 
         pair = querystring.indexOf( sep, last_pair );
 
@@ -459,14 +429,19 @@ export function parseQueryString( querystring: string ): Record<string, any>
         {
             if( ~( value = querystring.indexOf( eq, last_pair )) && value < pair )
             {
-                assign(
+                assignBracketPair(
+                    query,
                     safeDecodeURIComponent( querystring.substring( last_pair, value ).replace( /\+/g, ' ' )),
                     safeDecodeURIComponent( querystring.substring( value + 1, pair ).replace( /\+/g, ' ' ))
                 );
             }
             else
             {
-                assign( safeDecodeURIComponent( querystring.substring( last_pair, pair ).replace( /\+/g, ' ' )), true );
+                assignBracketPair(
+                    query,
+                    safeDecodeURIComponent( querystring.substring( last_pair, pair ).replace( /\+/g, ' ' )),
+                    true
+                );
             }
         }
 
@@ -475,6 +450,30 @@ export function parseQueryString( querystring: string ): Record<string, any>
     while( last_pair < querystring.length );
 
     return query;
+}
+
+export function parseFormData( raw: unknown ): Record<string, any>
+{
+    const out = extractFormDataObject( raw );
+
+    if( !out )
+    {
+        throw new ParseError( '', 'Input must be FormData' );
+    }
+
+    return out;
+}
+
+export function parseHeaders( raw: unknown ): Record<string, any>
+{
+    const out = extractHeadersObject( raw );
+
+    if( !out )
+    {
+        throw new ParseError( '', 'Input must be Headers, header tuples, or a header object' );
+    }
+
+    return out;
 }
 
 export function coerceNumber( val: any, path: string ): number
@@ -529,15 +528,49 @@ export function coerceArray<T>( val: any, path: string, mapper: ( item: any, ite
     if( val === undefined || val === null ){ return [] }
 
     const arr = Array.isArray( val ) ? val : [val];
+    const out: T[] = new Array( arr.length );
 
-    return arr.map(( item, idx ) => mapper( item, `${path}[${idx}]` ));
+    for( let i = 0; i < arr.length; i++ )
+    {
+        out[i] = mapper( arr[i], `${path}[${i}]` );
+    }
+
+    return out;
+}
+
+export function coerceHeaderArray<T>( val: any, path: string, mapper: ( item: any, itemPath: string ) => T ): T[]
+{
+    if( val === undefined || val === null ){ return [] }
+
+    const arr = Array.isArray( val ) ? val : typeof val === 'string' ? splitHeaderList( val ) : [val];
+    const out: T[] = new Array( arr.length );
+
+    for( let i = 0; i < arr.length; i++ )
+    {
+        out[i] = mapper( arr[i], `${path}[${i}]` );
+    }
+
+    return out;
+}
+
+export function mapParseArray<T>( val: any, path: string, mapper: ( item: any, itemPath: string, index: number, arr: any[]) => T ): T[]
+{
+    const arr = expectArray( val, path );
+    const out: T[] = new Array( arr.length );
+
+    for( let i = 0; i < arr.length; i++ )
+    {
+        out[i] = mapper( arr[i], `${path}[${i}]`, i, arr );
+    }
+
+    return out;
 }
 
 export function parseSet<T>(
     val    : any,
     path   : string,
-    from   : 'json' | 'query' | 'string',
-    mapper : ( item: any, itemPath: string ) => T
+    from   : ParseSource,
+    mapper : ( item: any, itemPath: string, index: number, items: any[]) => T
 ): Set<T>
 {
     let items: any[];
@@ -550,7 +583,11 @@ export function parseSet<T>(
     {
         items = val;
     }
-    else if( from === 'query' || from === 'string' )
+    else if( from === 'headers' && typeof val === 'string' )
+    {
+        items = splitHeaderList( val );
+    }
+    else if( from !== 'json' )
     {
         if( val === undefined || val === null ){ return new Set<T>() }
 
@@ -567,7 +604,7 @@ export function parseSet<T>(
 
     for( let i = 0; i < items.length; i++ )
     {
-        out.add( mapper( items[i], `${path}[${i}]` ));
+        out.add( mapper( items[i], `${path}[${i}]`, i, items ));
     }
 
     return out;
@@ -576,9 +613,9 @@ export function parseSet<T>(
 export function parseMap<K, V>(
     val       : any,
     path      : string,
-    from      : 'json' | 'query' | 'string',
+    from      : ParseSource,
     keyMapper : ( k: any, keyPath: string ) => K,
-    valMapper : ( v: any, valPath: string ) => V
+    valMapper : ( v: any, valPath: string, key: any, holder: any ) => V
 ): Map<K, V>
 {
     const out = new Map<K, V>();
@@ -588,29 +625,23 @@ export function parseMap<K, V>(
         for( const [ k, v ] of val.entries())
         {
             const mappedK = keyMapper( k, `${path}.key(${String( k )})` );
-            const mappedV = valMapper( v, `${path}[${String( k )}]` );
+            const mappedV = valMapper( v, `${path}[${String( k )}]`, k, null );
             out.set( mappedK, mappedV );
         }
 
         return out;
     }
 
-    if(( from === 'query' || from === 'string' ) && ( val === undefined || val === null ))
+    const wantsCoerce = from !== 'json';
+
+    if( wantsCoerce && ( val === undefined || val === null ))
     {
         return out;
     }
 
-    const allowSparseArray = ( from === 'query' || from === 'string' ) && Array.isArray( val );
+    const allowSparseArray = wantsCoerce && Array.isArray( val );
 
-    if(
-        val === null ||
-        typeof val !== 'object' ||
-        ( Array.isArray( val ) && !allowSparseArray ) ||
-        val instanceof Set ||
-        val instanceof Date ||
-        val instanceof URL ||
-        val instanceof RegExp
-    )
+    if( !isPlainObject( val ) && !allowSparseArray )
     {
         throw new ParseError( path, 'Type<Map>' );
     }
@@ -620,9 +651,35 @@ export function parseMap<K, V>(
         if( val[k] === undefined ){ continue }
 
         const mappedK = keyMapper( k, `${path}.key(${k})` );
-        const mappedV = valMapper( val[k], `${path}[${k}]` );
+        const mappedV = valMapper( val[k], `${path}[${k}]`, k, val );
         out.set( mappedK, mappedV );
     }
+
+    return out;
+}
+
+const STRICT_PARSE_BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+function decodeStrictBase64( val: string, path: string, typeName: string ): Uint8Array
+{
+    const trimmed = val.trim();
+
+    if( !STRICT_PARSE_BASE64_RE.test( trimmed ))
+    {
+        throw new ParseError( path, `Type<${typeName}>` );
+    }
+
+    if( typeof Buffer !== 'undefined' )
+    {
+        const buf = Buffer.from( trimmed, 'base64' );
+
+        return new Uint8Array( buf.buffer, buf.byteOffset, buf.byteLength );
+    }
+
+    const bin = atob( trimmed );
+    const out = new Uint8Array( bin.length );
+
+    for( let i = 0; i < bin.length; i++ ){ out[i] = bin.charCodeAt( i ) }
 
     return out;
 }
@@ -638,24 +695,147 @@ export function coerceBuffer( val: any, path: string ): Buffer
         return hasBuffer ? Buffer.from( val ) : ( new Uint8Array( val ) as unknown as Buffer );
     }
 
-    if( val instanceof ArrayBuffer )
+    if( val instanceof ArrayBuffer || ( typeof SharedArrayBuffer !== 'undefined' && val instanceof SharedArrayBuffer ))
     {
         return hasBuffer ? Buffer.from( new Uint8Array( val )) : ( new Uint8Array( val ) as unknown as Buffer );
     }
 
+    if( ArrayBuffer.isView( val ))
+    {
+        const view = new Uint8Array( val.buffer, val.byteOffset, val.byteLength );
+
+        return hasBuffer ? Buffer.from( view ) : ( new Uint8Array( view ) as unknown as Buffer );
+    }
+
     if( typeof val === 'string' )
     {
-        if( hasBuffer ){ return Buffer.from( val, 'base64' ) }
+        const bytes = decodeStrictBase64( val, path, 'Buffer' );
 
-        const bin = atob( val );
-        const out = new Uint8Array( bin.length );
-
-        for( let i = 0; i < bin.length; i++ ){ out[i] = bin.charCodeAt( i ) }
-
-        return out as unknown as Buffer;
+        return hasBuffer ? Buffer.from( bytes ) : ( bytes as unknown as Buffer );
     }
 
     throw new ParseError( path, 'Type<Buffer>' );
+}
+
+export function coerceTypedArray( val: any, path: string, typeName: string ): any
+{
+    if( typeName === 'Buffer' ){ return coerceBuffer( val, path ) }
+
+    const ctor = ( globalThis as any )[typeName];
+
+    if( typeof ctor !== 'function' )
+    {
+        throw new ParseError( path, `Type<${typeName}>` );
+    }
+
+    if( val instanceof ctor ){ return val }
+
+    let bytes: Uint8Array;
+
+    if( val instanceof Uint8Array )
+    {
+        bytes = val;
+    }
+    else if( ArrayBuffer.isView( val ))
+    {
+        bytes = new Uint8Array( val.buffer, val.byteOffset, val.byteLength );
+    }
+    else if( val instanceof ArrayBuffer || ( typeof SharedArrayBuffer !== 'undefined' && val instanceof SharedArrayBuffer ))
+    {
+        bytes = new Uint8Array( val );
+    }
+    else if( typeof val === 'string' )
+    {
+        bytes = decodeStrictBase64( val, path, typeName );
+    }
+    else
+    {
+        throw new ParseError( path, `Type<${typeName}>` );
+    }
+
+    if( typeName === 'ArrayBuffer' )
+    {
+        const ab = new ArrayBuffer( bytes.byteLength );
+        new Uint8Array( ab ).set( bytes );
+
+        return ab;
+    }
+
+    if( typeName === 'SharedArrayBuffer' )
+    {
+        const sab = new SharedArrayBuffer( bytes.byteLength );
+        new Uint8Array( sab ).set( bytes );
+
+        return sab;
+    }
+
+    if( typeName === 'DataView' )
+    {
+        const ab = new ArrayBuffer( bytes.byteLength );
+        new Uint8Array( ab ).set( bytes );
+
+        return new DataView( ab );
+    }
+
+    const elemSize: number = ctor.BYTES_PER_ELEMENT;
+
+    if( bytes.byteLength % elemSize !== 0 )
+    {
+        throw new ParseError( path, `Type<${typeName}>` );
+    }
+
+    const ab = new ArrayBuffer( bytes.byteLength );
+    new Uint8Array( ab ).set( bytes );
+
+    return new ctor( ab );
+}
+
+const rawJsonIntegers = new WeakMap<object, Record<string, string>>();
+const RAW_JSON_INT_RE = /^-?\d+$/;
+
+function bigIntSourceReviver( this: any, key: string, val: any, ctx?: { source? : string }): any
+{
+    if(
+        key !== '' &&
+        typeof val === 'number' &&
+        !Number.isSafeInteger( val ) &&
+        typeof ctx?.source === 'string' &&
+        RAW_JSON_INT_RE.test( ctx.source ) &&
+        this !== null &&
+        typeof this === 'object'
+    )
+    {
+        let map = rawJsonIntegers.get( this );
+
+        if( !map )
+        {
+            map = Object.create( null ) as Record<string, string>;
+            rawJsonIntegers.set( this, map );
+        }
+
+        map[key] = ctx.source;
+    }
+
+    return val;
+}
+
+export function parseJson( raw: unknown, preserveBigInt = false ): any
+{
+    if( typeof raw !== 'string' )
+    {
+        throw new ParseError( '', 'Input must be a JSON string' );
+    }
+
+    try
+    {
+        return preserveBigInt
+            ? JSON.parse( raw, bigIntSourceReviver as any )
+            : JSON.parse( raw );
+    }
+    catch( e )
+    {
+        throw new ParseError( '', 'Invalid JSON: ' + ( e as Error ).message );
+    }
 }
 
 export function coerceBigInt( val: any, path: string ): bigint
@@ -680,6 +860,36 @@ export function coerceBigInt( val: any, path: string ): bigint
     }
 
     throw new ParseError( path, 'Type<bigint>' );
+}
+
+export function coerceBigIntProp( holder: any, key: string | number, val: any, path: string ): bigint
+{
+    if( typeof val === 'number' && !Number.isSafeInteger( val ) && holder !== null && typeof holder === 'object' )
+    {
+        const rawSrc = rawJsonIntegers.get( holder )?.[String( key )];
+
+        if( rawSrc !== undefined )
+        {
+            return BigInt( rawSrc );
+        }
+    }
+
+    return coerceBigInt( val, path );
+}
+
+export function coerceBigIntRoot( raw: unknown, val: any, path: string ): bigint
+{
+    if( typeof val === 'number' && !Number.isSafeInteger( val ) && typeof raw === 'string' )
+    {
+        const trimmed = raw.trim();
+
+        if( RAW_JSON_INT_RE.test( trimmed ))
+        {
+            return BigInt( trimmed );
+        }
+    }
+
+    return coerceBigInt( val, path );
 }
 
 export function coerceUrl( val: any, path: string ): URL
@@ -714,7 +924,7 @@ export function applyParseConstraints(
     val         : any,
     path        : string,
     constraints : ParseConstraint[],
-    from?       : 'json' | 'query' | 'string',
+    from?       : ParseSource,
     root?       : any
 ): any
 {
@@ -1030,4 +1240,128 @@ export function applyParseTransform(
 
         throw new ParseError( path, e instanceof Error ? e.message : String( e ));
     }
+}
+
+export interface RuntimeParseOptions
+{
+    reviver?   : JsonReviver
+    transform? : TransformFn | TransformFn[]
+}
+
+export interface CompiledParser<T, Input = string> extends StandardSchemaV1<Input, T>
+{
+    ( input: Input, options?: RuntimeParseOptions ) : T
+    parse     : ( input: Input, options?: RuntimeParseOptions ) => T
+    safe      : ( input: unknown, options?: RuntimeParseOptions ) => SafeParseResult<T>
+    safeParse : ( input: unknown, options?: RuntimeParseOptions ) => SafeParseResult<T>
+}
+
+export function checkParseOptions(
+    opts             : any,
+    expectedMode     : ValidationMode,
+    expectedFrom     : ParseSource,
+    expectedUnionRes : UnionResolution,
+    expectedCasing?  : CasingFormat
+): any
+{
+    if( opts == null ){ return opts }
+
+    if( typeof opts === 'string' )
+    {
+        if( opts !== expectedMode )
+        {
+            throw new ParseError( '', `Dynamic option "mode" ("${opts}") does not match compiled mode "${expectedMode}"` );
+        }
+
+        return undefined;
+    }
+
+    if( typeof opts === 'object' )
+    {
+        if( opts.mode !== undefined && opts.mode !== expectedMode )
+        {
+            throw new ParseError( '', `Dynamic option "mode" ("${opts.mode}") does not match compiled mode "${expectedMode}"` );
+        }
+
+        if( opts.from !== undefined && opts.from !== expectedFrom )
+        {
+            throw new ParseError( '', `Dynamic option "from" ("${opts.from}") does not match compiled source "${expectedFrom}"` );
+        }
+
+        if( opts.unionResolution !== undefined && opts.unionResolution !== expectedUnionRes )
+        {
+            throw new ParseError( '', `Dynamic option "unionResolution" ("${opts.unionResolution}") does not match compiled strategy "${expectedUnionRes}"` );
+        }
+
+        if( opts.propertyCasing !== undefined && opts.propertyCasing !== expectedCasing )
+        {
+            throw new ParseError( '', `Dynamic option "propertyCasing" ("${opts.propertyCasing}") does not match compiled casing "${expectedCasing ?? 'none'}"` );
+        }
+    }
+
+    return opts;
+}
+
+function mergeRuntimeParseOptions( defaults?: any, override?: RuntimeParseOptions ): any
+{
+    if( override === undefined ){ return defaults }
+
+    if( defaults === undefined || typeof defaults === 'string' ){ return override }
+
+    return { ...defaults, ...override };
+}
+
+function parseErrorToStandardIssues( err: ParseError ): StandardSchemaV1.Issue[]
+{
+    const segments = tokenizePath( err.path ).map( segment =>
+    {
+        if( !isIndexSegment( segment )){ return segment }
+
+        const inner = segment.slice( 1, -1 );
+
+        return /^\d+$/.test( inner ) ? Number( inner ) : inner;
+    });
+
+    return [{
+        message : parseErrorCode( err ),
+        ...( segments.length > 0 ? { path : segments } : {})
+    }];
+}
+
+export function createParser<T, Input = string>(
+    parseFn        : ( input: any, options?: any ) => T,
+    defaultOptions?: any
+): CompiledParser<T, Input>
+{
+    const fn = (( input: Input, overrideOptions?: RuntimeParseOptions ): T =>
+        parseFn( input, mergeRuntimeParseOptions( defaultOptions, overrideOptions ))
+    ) as CompiledParser<T, Input>;
+
+    fn.parse = fn;
+    fn.safe = ( input: unknown, overrideOptions?: RuntimeParseOptions ): SafeParseResult<T> =>
+        safeParse( parseFn, input, mergeRuntimeParseOptions( defaultOptions, overrideOptions ));
+    fn.safeParse = fn.safe;
+
+    Object.defineProperty( fn, '~standard', {
+        value : {
+            version : 1 as const,
+            vendor  : 'webergency-typechecker' as const,
+            validate( value: unknown ): StandardSchemaV1.Result<T>
+            {
+                const res = fn.safe( value );
+
+                if( res.success )
+                {
+                    return { value : res.data };
+                }
+
+                return { issues : parseErrorToStandardIssues( res.error ) };
+            }
+        },
+        writable     : true,
+        configurable : true,
+        enumerable   : false
+    });
+
+    return fn;
 }

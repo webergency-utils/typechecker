@@ -3,8 +3,6 @@ const runtime = require( '../dist-fuzz/runtime.cjs' );
 
 function isExpectedFuzzError( e )
 {
-    if( e instanceof RangeError || e instanceof TypeError ){ return true }
-
     if( runtime.ParseError && e instanceof runtime.ParseError ){ return true }
 
     if( runtime.SerializationError && e instanceof runtime.SerializationError ){ return true }
@@ -109,7 +107,7 @@ function pickFrom( provider )
 
     if( choice === 2 ){ return 'query' }
 
-    return ( _key, value ) => value;
+    return ( value, _ctx ) => value;
 }
 
 module.exports.fuzz = function( data )

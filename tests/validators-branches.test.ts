@@ -222,7 +222,7 @@ describe( 'validators uncovered branches', () =>
             expect( regex.lastIndex ).toBe( 2 );
         });
 
-        it( 'should reject multipleOf zero and accept Infinity as multiple', () => 
+        it( 'should reject multipleOf zero and non-finite Infinity', () => 
         {
             // Arrange / Act
             validators.multipleOf( 10, 'm', ctx, 0 );
@@ -237,7 +237,7 @@ describe( 'validators uncovered branches', () =>
             expect( validators.multipleOf( Infinity, 'm', ctx, 3 )).toBe( Infinity );
 
             // Assert
-            expect( ctx.success ).toBe( true );
+            expect( ctx.success ).toBe( false );
         });
 
         it( 'should detect circular structures in uniqueItems via stable stringify', () => 
