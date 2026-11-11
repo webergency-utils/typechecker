@@ -176,6 +176,54 @@ function applyConstraintsToJsonSchema(
             }
         }
         else if( c.type === 'uniqueItems' ){ target.uniqueItems = true }
+        else if( c.type === 'integer' )
+        {
+            if( target['x-typescript-type'] === undefined && ( target.type === undefined || target.type === 'number' ))
+            {
+                target.type = 'integer';
+            }
+        }
+        else if( c.type === 'safeInteger' )
+        {
+            if( target['x-typescript-type'] === undefined && ( target.type === undefined || target.type === 'number' ))
+            {
+                target.type = 'integer';
+            }
+
+            if( target.minimum === undefined || target.minimum < -9007199254740991 )
+            {
+                target.minimum = -9007199254740991;
+            }
+
+            if( target.maximum === undefined || target.maximum > 9007199254740991 )
+            {
+                target.maximum = 9007199254740991;
+            }
+        }
+        else if( c.type === 'positive' )
+        {
+            if( typeof target.exclusiveMinimum !== 'number' || target.exclusiveMinimum < 0 )
+            {
+                target.exclusiveMinimum = 0;
+            }
+        }
+        else if( c.type === 'nonNegative' )
+        {
+            if( target.minimum === undefined || target.minimum < 0 )
+            {
+                target.minimum = 0;
+            }
+        }
+        else if( c.type === 'negative' )
+        {
+            if( typeof target.exclusiveMaximum !== 'number' || target.exclusiveMaximum > 0 )
+            {
+                target.exclusiveMaximum = 0;
+            }
+        }
+        else if( c.type === 'finite' ){ target['x-finite'] = true }
+        else if( c.type === 'minDate' && typeof c.value === 'string' ){ target['x-min-date'] = c.value }
+        else if( c.type === 'maxDate' && typeof c.value === 'string' ){ target['x-max-date'] = c.value }
         else if( c.type === 'readOnly' ){ target.readOnly = true }
         else if( c.type === 'writeOnly' ){ target.writeOnly = true }
         else if( c.type === 'secret' )
@@ -227,7 +275,7 @@ function attachNestedConstraintChecks(
     });
 }
 
-function isDirectConstrainedBase( type: ts.Type, kind: { baseName : string, baseType? : ts.Type } | undefined ): kind is { baseName : string, baseType? : ts.Type }
+function isDirectConstrainedBase( type: ts.Type, kind: { baseName : string, baseType? : ts.Type } | undefined ): boolean
 {
     if( !kind ){ return false }
 
@@ -284,12 +332,12 @@ function wrapPropValidatorWithJsDoc(
     const attached = attachNestedConstraintChecks( extra, checker, validatorsMap, scope, unionResolution );
     const kind = constrainedBaseKind( propType, checker );
 
-    if( isDirectConstrainedBase( propType, kind ))
+    if( kind && isDirectConstrainedBase( propType, kind ))
     {
         return createConstrainedPrimitiveCheck( kind.baseName, attached );
     }
 
-    return createConstrainedPrimitiveCheck( 'any', attached, baseValidator );
+    return createConstrainedPrimitiveCheck( kind ? kind.baseName : 'any', attached, baseValidator );
 }
 
 function buildEnumValidator(
@@ -913,13 +961,13 @@ function buildValidatorScoped(
             const attached = attachNestedConstraintChecks( extraTypeConstraints, checker, validatorsMap, scope, unionResolution );
             const kind = constrainedBaseKind( type, checker );
 
-            if( isDirectConstrainedBase( type, kind ))
+            if( kind && isDirectConstrainedBase( type, kind ))
             {
                 result = createConstrainedPrimitiveCheck( kind.baseName, attached );
             }
             else
             {
-                result = createConstrainedPrimitiveCheck( 'any', attached, result );
+                result = createConstrainedPrimitiveCheck( kind ? kind.baseName : 'any', attached, result );
             }
         }
 
@@ -1986,6 +2034,11 @@ function buildJsonSchemaRaw(
         if( memberSchemas.length === 1 ) 
         {
             return { ...memberSchemas[0], ...constraints };
+        }
+
+        if( baseSchema['x-typescript-type'] === 'bigint' && constraints.type === 'integer' )
+        {
+            delete constraints.type;
         }
 
         return { ...baseSchema, ...constraints };

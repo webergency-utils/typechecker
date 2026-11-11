@@ -212,9 +212,21 @@ export async function emitAndImport<T extends Record<string, unknown> = Record<s
 
     try
     {
+        const validatorsDist = path.resolve( './dist/runtime/validators.js' );
+        const parseDist = path.resolve( './dist/runtime/parse-runtime.js' );
+        const serializeDist = path.resolve( './dist/runtime/serializer-runtime.js' );
+        const cloneDist = path.resolve( './dist/runtime/clone-runtime.js' );
+        const randomDist = path.resolve( './dist/runtime/random-runtime.js' );
+        const schemaCompilerDist = path.resolve( './dist/runtime/schema-compiler.js' );
         const output = emitWithTransformer({ 'main.ts' : source }, `${tempName}_src`, 'esm' );
         const patched = output
-            .replace( '@webergency-utils/typechecker/runtime', pathToFileURL( runtimeDist ).href )
+            .replaceAll( '@webergency-utils/typechecker/runtime/validators', pathToFileURL( validatorsDist ).href )
+            .replaceAll( '@webergency-utils/typechecker/runtime/parse', pathToFileURL( parseDist ).href )
+            .replaceAll( '@webergency-utils/typechecker/runtime/serialize', pathToFileURL( serializeDist ).href )
+            .replaceAll( '@webergency-utils/typechecker/runtime/clone', pathToFileURL( cloneDist ).href )
+            .replaceAll( '@webergency-utils/typechecker/runtime/random', pathToFileURL( randomDist ).href )
+            .replaceAll( '@webergency-utils/typechecker/runtime/schema-compiler', pathToFileURL( schemaCompilerDist ).href )
+            .replaceAll( '@webergency-utils/typechecker/runtime', pathToFileURL( runtimeDist ).href )
             .replace( /from ['"]\.\.\/src\/index(?:\.js)?['"]/g, `from '${pathToFileURL( indexDist ).href}'` )
             .replace( /from ['"]\.\/src\/index(?:\.js)?['"]/g, `from '${pathToFileURL( indexDist ).href}'` );
         const file = path.join( dir, 'main.js' );
@@ -239,6 +251,12 @@ export function emitAndRequire<T extends Record<string, unknown> = Record<string
 {
     const dir = path.resolve( `./${tempName}_cjs_pkg` );
     const runtimeDistCjs = path.resolve( './dist/runtime/index.cjs' );
+    const validatorsDistCjs = path.resolve( './dist/runtime/validators.cjs' );
+    const parseDistCjs = path.resolve( './dist/runtime/parse-runtime.cjs' );
+    const serializeDistCjs = path.resolve( './dist/runtime/serializer-runtime.cjs' );
+    const cloneDistCjs = path.resolve( './dist/runtime/clone-runtime.cjs' );
+    const randomDistCjs = path.resolve( './dist/runtime/random-runtime.cjs' );
+    const schemaCompilerDistCjs = path.resolve( './dist/runtime/schema-compiler.cjs' );
     const indexDistCjs = path.resolve( './dist/index.cjs' );
 
     if( !fs.existsSync( runtimeDistCjs ))
@@ -252,6 +270,12 @@ export function emitAndRequire<T extends Record<string, unknown> = Record<string
     {
         const output = emitWithTransformer({ 'main.ts' : source }, `${tempName}_cjs_src`, 'cjs' );
         const patched = output
+            .replace( /require\(['"]@webergency-utils\/typechecker\/runtime\/validators['"]\)/g, `require('${validatorsDistCjs}')` )
+            .replace( /require\(['"]@webergency-utils\/typechecker\/runtime\/parse['"]\)/g, `require('${parseDistCjs}')` )
+            .replace( /require\(['"]@webergency-utils\/typechecker\/runtime\/serialize['"]\)/g, `require('${serializeDistCjs}')` )
+            .replace( /require\(['"]@webergency-utils\/typechecker\/runtime\/clone['"]\)/g, `require('${cloneDistCjs}')` )
+            .replace( /require\(['"]@webergency-utils\/typechecker\/runtime\/random['"]\)/g, `require('${randomDistCjs}')` )
+            .replace( /require\(['"]@webergency-utils\/typechecker\/runtime\/schema-compiler['"]\)/g, `require('${schemaCompilerDistCjs}')` )
             .replace( /require\(['"]@webergency-utils\/typechecker\/runtime['"]\)/g, `require('${runtimeDistCjs}')` )
             .replace( /require\(['"]\.\.\/src\/index(?:\.js)?['"]\)/g, `require('${indexDistCjs}')` )
             .replace( /require\(['"]\.\/src\/index(?:\.js)?['"]\)/g, `require('${indexDistCjs}')` )

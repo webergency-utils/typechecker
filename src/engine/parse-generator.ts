@@ -175,12 +175,38 @@ function isTopType( type: ts.Type ): boolean
 function isStringSourceCompatible( type: ts.Type, checker: ts.TypeChecker, scope: ICustomFunctionScope ): boolean
 {
     let walk = type;
+    let hasSplit = false;
 
     if( typeof walk.isIntersection === 'function' && walk.isIntersection())
     {
         const peeled = peelTaggedIntersection( walk, checker, scope );
 
-        if( peeled ){ walk = peeled.base }
+        if( peeled )
+        {
+            walk = peeled.base;
+            hasSplit = peeled.constraints.some( c => c.type === 'transform_split' );
+        }
+    }
+
+    if( hasSplit )
+    {
+        if( typeof checker.isArrayType === 'function' && checker.isArrayType( walk ))
+        {
+            const elem = ( checker as any ).getTypeArguments?.( walk as ts.TypeReference )?.[0]
+                || ( walk as ts.TypeReference ).typeArguments?.[0];
+
+            return elem ? isStringSourceCompatible( elem, checker, scope ) : false;
+        }
+
+        const splitSym = typeSymbolName( walk );
+
+        if( splitSym === 'Set' || splitSym === 'ReadonlySet' )
+        {
+            const elem = ( checker as any ).getTypeArguments?.( walk as ts.TypeReference )?.[0]
+                || ( walk as ts.TypeReference ).typeArguments?.[0];
+
+            return elem ? isStringSourceCompatible( elem, checker, scope ) : false;
+        }
     }
 
     if( typeof walk.isUnion === 'function' && walk.isUnion())
@@ -513,12 +539,13 @@ function wrapConstraints(
 
     const hasSecret = constraints.some( c => c.type === 'secret' );
     const messageC = constraints.find( c => c.type === 'message' );
-    const earlyReal = constraints.filter( c => c.type === 'default' || c.type === 'transform' );
+    const earlyReal = constraints.filter( c => c.type === 'default' || c.type === 'transform' || c.type === 'transform_split' );
     const early = earlyReal.length > 0 && messageC ? [ ...earlyReal, messageC ] : earlyReal;
     const customTransforms = constraints.filter( c => c.type === 'transform_custom' );
     const lateReal = constraints.filter( c =>
         c.type !== 'default' &&
         c.type !== 'transform' &&
+        c.type !== 'transform_split' &&
         c.type !== 'transform_custom' &&
         c.type !== 'message' &&
         c.type !== 'tags' &&
@@ -539,6 +566,9 @@ function wrapConstraints(
     const maxContains = constraints.find( c => c.type === 'maxContains' )?.value as number | undefined;
     const fallbackMessage = typeof messageC?.value === 'string' ? messageC.value : undefined;
     const inner = innerFactory( '__v', 'p' );
+    const innerAssign = fallbackMessage !== undefined
+        ? `try { __v = ${inner}; } catch( _e ){ if( _e instanceof __tcRuntime.ParseError && _e.path === p ){ throw new __tcRuntime.ParseError( p, __tcRuntime.formatParseMessage( ${JSON.stringify( fallbackMessage )}, p, __v ) ); } throw _e; }`
+        : `__v = ${inner};`;
 
     let customTransformCode = '';
 
@@ -557,8 +587,9 @@ function wrapConstraints(
             const activeMsg = c.message !== undefined ? c.message : fallbackMessage;
             const msgArg = activeMsg !== undefined ? `, ${JSON.stringify( activeMsg )}` : '';
             const fallback = activeMsg !== undefined ? JSON.stringify( activeMsg ) : '"Custom"';
+            const secField = hasSecret ? ', secretDepth: 1' : '';
 
-            return `{ const _ctx = { success: true, errors: [], mode: "strict", from: ${JSON.stringify( from )}, root: root }; __tcRuntime.validators.custom(__v, p, _ctx, ${c.value}${msgArg}); if( !_ctx.success ){ throw new __tcRuntime.ParseError( p, (_ctx.errors[0] && _ctx.errors[0].error) || ${fallback} ); } }`;
+            return `{ const _ctx = { success: true, errors: [], mode: "strict", from: ${JSON.stringify( from )}, root: root${secField} }; __tcRuntime.validators.custom(__v, p, _ctx, ${c.value}${msgArg}); if( !_ctx.success ){ throw new __tcRuntime.ParseError( p, (_ctx.errors[0] && _ctx.errors[0].error) || ${fallback} ); } }`;
         }).join( ' ' );
         customConstraintCode = `if( __v !== undefined && __v !== null ){ ${stmts} } `;
     }
@@ -609,7 +640,7 @@ function wrapConstraints(
     const wrappedTail = hasSecret
         ? `return __tcRuntime.redactParseSecret( () => { ${tailBody} }, __v, p );`
         : tailBody;
-    const coreExpr = `( function( raw, p, root ){ ${earlyInit}${customTransformCode}__v = ${inner}; ${optionCode}${wrappedTail} })( ${varName}, ${pathExpr || '""'}, ${rootExpr} )`;
+    const coreExpr = `( function( raw, p, root ){ ${earlyInit}${customTransformCode}${innerAssign} ${optionCode}${wrappedTail} })( ${varName}, ${pathExpr || '""'}, ${rootExpr} )`;
 
     return hasSecret ? `__tcRuntime.redactParseSecret( () => ${coreExpr}, ${varName}, ${pathExpr || '""'} )` : coreExpr;
 }

@@ -19,13 +19,13 @@ import {
     assertGuardSchema,
     compileSchema,
     convertPropertyCasing,
-    createValidator,
     type ResolveDefaults,
     type WithModifiers,
     type ConvertPropertyCasing,
     type constraint
 } from '../src/index.js';
 import {
+    createValidator,
     isMultipleOfNumber,
     deepEqual,
     hasUniqueItems,

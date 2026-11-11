@@ -33,6 +33,7 @@ export default defineConfig({
         'src/engine/parse-generator.ts',
         'src/engine/clone-prune-generator.ts',
         'src/engine/random-generator.ts',
+        'src/engine/guard-generator.ts',
         'src/engine/type-helpers.ts',
         'src/engine/type-ir.ts',
         'src/engine/specificity.ts',

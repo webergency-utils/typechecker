@@ -4,6 +4,13 @@ export * from './serializer-runtime.js';
 export * from './parse-runtime.js';
 export
 {
+    formatConstraintMessage,
+    isPlainObject,
+    validators
+}
+    from './validators.js';
+export
+{
     TransformWalkError,
     applyNodeTransform,
     makeTransformContext
@@ -19,6 +26,8 @@ export type
     from './transform.js';
 export * from './path.js';
 export * from './regex.js';
+export { getCachedPattern, testRegex } from './regex.js';
 export * from './casing.js';
 export * from './clone-runtime.js';
+export { setSafeProp } from './clone-runtime.js';
 export * from './random-runtime.js';

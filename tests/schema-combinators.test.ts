@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
     type ValidationContext,
-    getOrCompileSchema,
     validate,
     is,
     assert,
     assertGuard
 } from '../src/runtime/validators.js';
+import { getOrCompileSchema } from '../src/runtime/schema-compiler.js';
 
 describe( 'schema combinators', () =>
 {

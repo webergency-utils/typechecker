@@ -183,12 +183,15 @@ export function createConstrainedPrimitiveCheck( baseType: string, constraints: 
 {
     const hasSecret = constraints.some( c => c.type === 'secret' );
     const defaultConstraint = constraints.find( c => c.type === 'default' );
-    const transformConstraints = constraints.filter( c => c.type === 'transform' || c.type === 'transform_custom' );
+    const transformConstraints = constraints.filter( c =>
+        c.type === 'transform' || c.type === 'transform_split' || c.type === 'transform_custom'
+    );
     const messageConstraint = constraints.find( c => c.type === 'message' );
     const tagConstraint = constraints.find( c => c.type === 'tags' );
     const remainingConstraints = constraints.filter( c =>
         c.type !== 'default' &&
         c.type !== 'transform' &&
+        c.type !== 'transform_split' &&
         c.type !== 'transform_custom' &&
         c.type !== 'message' &&
         c.type !== 'tags' &&
@@ -224,6 +227,22 @@ export function createConstrainedPrimitiveCheck( baseType: string, constraints: 
         if( c.type === 'exclusiveMaximum' ) { return `validators.exclusiveMaximum(v, path, ctx, ${valStr}${msgArg})` }
 
         if( c.type === 'multipleOf' ) { return `validators.multipleOf(v, path, ctx, ${valStr}${msgArg})` }
+
+        if( c.type === 'integer' ) { return `validators.integer(v, path, ctx${msgArg})` }
+
+        if( c.type === 'safeInteger' ) { return `validators.safeInteger(v, path, ctx${msgArg})` }
+
+        if( c.type === 'positive' ) { return `validators.positive(v, path, ctx${msgArg})` }
+
+        if( c.type === 'nonNegative' ) { return `validators.nonNegative(v, path, ctx${msgArg})` }
+
+        if( c.type === 'negative' ) { return `validators.negative(v, path, ctx${msgArg})` }
+
+        if( c.type === 'finite' ) { return `validators.finite(v, path, ctx${msgArg})` }
+
+        if( c.type === 'minDate' ) { return `validators.minDate(v, path, ctx, ${valStr}${msgArg})` }
+
+        if( c.type === 'maxDate' ) { return `validators.maxDate(v, path, ctx, ${valStr}${msgArg})` }
 
         if( c.type === 'pattern' )
         {
@@ -350,6 +369,15 @@ export function createConstrainedPrimitiveCheck( baseType: string, constraints: 
                 return 'v = validators.coerceQueryDate(v)';
             }
 
+            if( tc.type === 'transform_split' )
+            {
+                const delimJson = JSON.stringify( typeof tc.value === 'string' ? tc.value : ',' );
+
+                return baseType === 'set'
+                    ? `v = validators.splitStringToSet(v, ${delimJson})`
+                    : `v = validators.splitStringValue(v, ${delimJson})`;
+            }
+
             if( tc.type === 'transform_custom' ) 
             {
                 return `v = ${tc.value}(v)`;
@@ -365,12 +393,17 @@ export function createConstrainedPrimitiveCheck( baseType: string, constraints: 
         ? `if (ctx.success && v !== undefined && v !== null) {\n            ${constraintCode};\n        }\n        `
         : '';
 
+    const baseMsgInit = typeof fallbackMsg === 'string' ? 'const _errStart = ctx.errors.length;\n        ' : '';
+    const baseMsgOverride = typeof fallbackMsg === 'string'
+        ? `if (!ctx.success && ctx.errors.length === _errStart + 1 && ctx.errors[_errStart].path === path) ctx.errors[_errStart].error = validators.formatConstraintMessage(${JSON.stringify( fallbackMsg )}, path, v, Boolean(ctx.secretDepth));\n        `
+        : '';
+
     const tpl = `
     (v, path, ctx) => {
         const _s = ctx.success;
         ctx.success = true;
-        ${defaultInit}${transformInit}v = __BASE_CHECK__;
-        if (ctx.transform && ctx.success) v = validators.applyOptionTransform(v, path, ctx, __TAGS__, __KIND__);
+        ${defaultInit}${transformInit}${baseMsgInit}v = __BASE_CHECK__;
+        ${baseMsgOverride}if (ctx.transform && ctx.success) v = validators.applyOptionTransform(v, path, ctx, __TAGS__, __KIND__);
         ${constraintBlock}if (_s === false) ctx.success = false;
         return v;
     }

@@ -37,7 +37,8 @@ export type Format
         | 'email' | 'uuid' | 'url' | 'ipv4' | 'ipv6' | 'date' | 'date-time'
         | 'byte' | 'password' | 'regex' | 'hostname' | 'idn-email' | 'idn-hostname'
         | 'iri' | 'iri-reference' | 'uri' | 'uri-reference' | 'uri-template'
-        | 'time' | 'duration' | 'objectId',
+        | 'time' | 'duration' | 'objectId'
+        | 'ulid' | 'cuid2' | 'jwt' | 'semver' | 'base64url',
     Msg extends string = string
 >
     =
@@ -118,6 +119,65 @@ export type Range
     Msg extends string = string
 >
     = Minimum<Min, Msg> & Maximum<Max, Msg>;
+
+export type Integer<Msg extends string = string> =
+    {
+        readonly __integer?         : true
+        readonly __integer_message? : Msg
+    };
+
+export type SafeInteger<Msg extends string = string> =
+    {
+        readonly __safeInteger?         : true
+        readonly __safeInteger_message? : Msg
+    };
+
+export type Positive<Msg extends string = string> =
+    {
+        readonly __positive?         : true
+        readonly __positive_message? : Msg
+    };
+
+export type NonNegative<Msg extends string = string> =
+    {
+        readonly __nonNegative?         : true
+        readonly __nonNegative_message? : Msg
+    };
+
+export type Negative<Msg extends string = string> =
+    {
+        readonly __negative?         : true
+        readonly __negative_message? : Msg
+    };
+
+export type Finite<Msg extends string = string> =
+    {
+        readonly __finite?         : true
+        readonly __finite_message? : Msg
+    };
+
+// Date Constraints
+export type MinDate
+<
+    S   extends string,
+    Msg extends string = string
+>
+    =
+        {
+            readonly __minDate?         : S
+            readonly __minDate_message? : Msg
+        };
+
+export type MaxDate
+<
+    S   extends string,
+    Msg extends string = string
+>
+    =
+        {
+            readonly __maxDate?         : S
+            readonly __maxDate_message? : Msg
+        };
 
 // Array Constraints
 export type MinItems

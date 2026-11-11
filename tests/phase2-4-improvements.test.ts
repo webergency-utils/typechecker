@@ -544,7 +544,7 @@ describe( 'Phase 2-4 Engine, Parity, and API Improvements', () =>
             export const b = ( x: unknown ) => is<Beta>( x );
         `, 'temp_phase4_dedupe_aliases.ts' );
 
-        const callMatches = [ ...code.matchAll( /__tcRuntime\.is\((__val_[a-z0-9]+),/g ) ].map( m => m[1]);
+        const callMatches = [ ...code.matchAll( /(__is_[a-z0-9]+)\(/g ) ].map( m => m[1]);
         expect( callMatches.length ).toBe( 2 );
         expect( callMatches[0]).toBe( callMatches[1]);
     });

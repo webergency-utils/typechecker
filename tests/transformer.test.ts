@@ -490,9 +490,11 @@ describe( 'Transformer Call Expression Replacements', () =>
         const code = `
             import { is, assert } from '../src/index.js';
             const ok = is<number>(1);
+            const okRelaxed = is<number>(1, 'relaxed');
             const value = assert<string>('x');
         `;
         const compiled = compileAndTransform( code );
+        expect( compiled ).toMatch( /__is_[a-f0-9]+\(1\)/ );
         expect( compiled ).toContain( '__tcRuntime.is(' );
         expect( compiled ).toContain( '__tcRuntime.assert(' );
     });
@@ -712,7 +714,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         const names = topLevelBindings( compiled );
 
         expect( new Set( names ).size ).toBe( names.length );
-        expect( compiled ).toContain( 'import * as __tcRuntime_1 from "@webergency-utils/typechecker/runtime"' );
+        expect( compiled ).toContain( 'import * as __tcRuntime_1 from "@webergency-utils/typechecker/runtime/validators"' );
         expect( compiled ).toContain( '__tcRuntime_1.validate(' );
         expect( compiled ).toContain( 'const __tcRuntime = { nope: true }' );
     });
@@ -728,7 +730,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         `;
         const compiled = compileAndTransform( code );
 
-        expect( compiled ).toContain( 'import * as __tcRuntime_1 from "@webergency-utils/typechecker/runtime"' );
+        expect( compiled ).toContain( 'import * as __tcRuntime_1 from "@webergency-utils/typechecker/runtime/validators"' );
         expect( compiled ).toContain( '__tcRuntime_1.validate(' );
         expect( compiled ).toContain( 'const __tcRuntime = { fake: true }' );
     });
@@ -743,7 +745,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         `;
         const compiled = compileAndTransform( code );
 
-        expect( compiled ).toContain( 'import * as __tcRuntime_1 from "@webergency-utils/typechecker/runtime"' );
+        expect( compiled ).toContain( 'import * as __tcRuntime_1 from "@webergency-utils/typechecker/runtime/validators"' );
         expect( compiled ).toContain( '__tcRuntime_1.validate(' );
     });
 
@@ -757,8 +759,8 @@ describe( 'Transformer Call Expression Replacements', () =>
         const emitted = compileAndEmit( code, ts.ModuleKind.CommonJS );
 
         // The user import is elided once calls become synthesized nodes, so the emit must not rely on it.
-        expect( emitted ).toContain( 'require("@webergency-utils/typechecker/runtime")' );
-        expect( emitted ).toMatch( /const __tcRuntime = .*require\("@webergency-utils\/typechecker\/runtime"\)/ );
+        expect( emitted ).toContain( 'require("@webergency-utils/typechecker/runtime/validators")' );
+        expect( emitted ).toMatch( /const __tcRuntime = .*require\("@webergency-utils\/typechecker\/runtime\/validators"\)/ );
         expect( emitted ).toContain( '__tcRuntime.validate(' );
         expect( emitted ).not.toMatch( /=\s*rt\.validators/ );
     });
@@ -766,15 +768,21 @@ describe( 'Transformer Call Expression Replacements', () =>
     it( 'should reuse one local validator for duplicate typed calls', () =>
     {
         const code = `
-            import { validate, is } from '../src/index.js';
+            import { validate, assert, is } from '../src/index.js';
             const a = validate<number>(1);
-            const b = is<number>(2);
+            const b = assert<number>(2);
+            const c = is<number>(3);
+            const d = is<number>(4);
         `;
         const compiled = compileAndTransform( code );
         const vals = compiled.match( /const __val_[a-f0-9]+ =/g ) || [];
+        const guards = compiled.match( /const __is_[a-f0-9]+ =/g ) || [];
         expect( vals.length ).toBe( 1 );
+        expect( guards.length ).toBe( 1 );
         expect( compiled ).toContain( '__tcRuntime.validate(' );
-        expect( compiled ).toContain( '__tcRuntime.is(' );
+        expect( compiled ).toContain( '__tcRuntime.assert(' );
+        expect( compiled ).toMatch( /__is_[a-f0-9]+\(3\)/ );
+        expect( compiled ).toMatch( /__is_[a-f0-9]+\(4\)/ );
         expect( compiled ).not.toContain( 'registerValidator' );
         expect( compiled ).not.toContain( 'getValidator' );
     });
@@ -802,7 +810,7 @@ describe( 'Transformer Call Expression Replacements', () =>
         expect( compiled ).not.toContain( "assert<{ mode: 'strict' }>" );
         expect( compiled ).toContain( '__tcRuntime.validate(' );
         expect( compiled ).toContain( '__tcRuntime.assert(' );
-        expect( compiled ).toContain( '__tcRuntime.is(' );
+        expect( compiled ).toMatch( /__is_[a-f0-9]+\(__parse_/ );
         expect( compiled ).toContain( '__parse_' );
         expect( compiled ).toContain( '__ser_' );
     });

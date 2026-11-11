@@ -39,6 +39,9 @@ export namespace tag
     /** Marks a property as sensitive: omitted by `stringify<T>()`, marked `{ writeOnly: true, "x-secret": true }` in `jsonSchema<T>()`, and redacted from validation error payloads. */
     export type Secret = { readonly __secret? : true };
 
+    /** Custom validation failure message template (supports `{path}` and `{value}` placeholders). */
+    export type Message<Msg extends string> = { readonly __message? : Msg };
+
     export type Tag<Names extends string> = tag<Names>;
 }
 

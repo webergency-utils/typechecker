@@ -1,14 +1,19 @@
 import ts from 'typescript';
 import { buildValidator, generateHash, buildJsonSchema, objectToAst } from './engine/resolver.js';
 export { buildValidator, generateHash, buildJsonSchema } from './engine/resolver.js';
-import { hoistEmitLocals, resolveEmitNames } from './engine/hoister.js';
+import { DOMAIN_SENTINELS, hoistEmitLocals, resolveEmitNames } from './engine/hoister.js';
 import { createCustomFunctionScope, type ICustomFunctionScope } from './engine/customFns.js';
-import { installStaticConstraintDiagnostics, unwrapExpression, isTypecheckerImport } from './engine/staticAsserts.js';
-export { collectStaticConstraintDiagnostics } from './engine/staticAsserts.js';
+import {
+    installStaticConstraintDiagnostics,
+    unwrapExpression,
+    isTypecheckerImport
+} from './engine/staticAsserts.js';
+export { collectStaticConstraintDiagnostics, collectCodeFixesAtPosition } from './engine/staticAsserts.js';
 import { generateSerializerCode, SerializerGeneratorOptions, SerializeFormat } from './engine/serializer-generator.js';
 import { generateParseCode, ParseGeneratorOptions, ParseSource } from './engine/parse-generator.js';
 import { generateCloneCode, generatePruneCode } from './engine/clone-prune-generator.js';
 import { generateRandomCode } from './engine/random-generator.js';
+import { generateGuardCode } from './engine/guard-generator.js';
 import { templateToAst } from './engine/generators.js';
 import { ValidationMode, UnionResolution, JsonSchemaTarget, JsonSchemaOptions } from './runtime/validators.js';
 import type { CasingFormat } from './runtime/casing.js';
@@ -177,6 +182,37 @@ export function buildRandom(
     }
 
     return ts.factory.createIdentifier( `__rand_${resolvedHash}` );
+}
+
+export function buildGuard(
+    type        : ts.Type,
+    checker     : ts.TypeChecker,
+    map         : Map<string, ts.Expression>,
+    hash?       : string,
+    scope       : ICustomFunctionScope = VERBATIM_CUSTOM_SCOPE,
+    unsupported?: Set<string>
+): ts.Expression | undefined
+{
+    const resolvedHash = hash ?? generateHash( type, checker );
+
+    if( unsupported?.has( resolvedHash )){ return undefined }
+
+    if( !map.has( resolvedHash ))
+    {
+        const codeStr = generateGuardCode( type, checker, scope );
+
+        if( !codeStr )
+        {
+            unsupported?.add( resolvedHash );
+
+            return undefined;
+        }
+
+        const ast = templateToAst( codeStr );
+        map.set( resolvedHash, ast );
+    }
+
+    return ts.factory.createIdentifier( `__is_${resolvedHash}` );
 }
 
 const TYPE_FUNCTIONS = [
@@ -752,6 +788,8 @@ export default function transformer( program: ts.Program, config?: TransformerCo
             const emitNames = resolveEmitNames( sourceFile );
             const customFns = createCustomFunctionScope( sourceFile, checker );
             const validatorCache = new Map<string, ts.Expression>();
+            const guardCache = new Map<string, ts.Expression>();
+            const unsupportedGuards = new Set<string>();
             const schemasCache = new Map<string, ts.Expression>();
             const serializerCache = new Map<string, ts.Expression>();
             const parserCache = new Map<string, ts.Expression>();
@@ -872,7 +910,7 @@ export default function transformer( program: ts.Program, config?: TransformerCo
                                 const serRef = buildSerializer( type, checker, serializerCache, hash, options, customFns );
                                 const rawVisitedOpts = visitArgOrUndefined( node.arguments, optsIdx, visitor );
                                 const visitedOpts = needsRuntimeGuard
-                                    ? runtimeCall( emitNames.runtimeNs, 'checkSerializeOptions', [
+                                    ? runtimeCall( DOMAIN_SENTINELS.serialize, 'checkSerializeOptions', [
                                         rawVisitedOpts,
                                         ts.factory.createStringLiteral( options.mode || 'strip' ),
                                         ts.factory.createStringLiteral( options.format || 'json' ),
@@ -886,14 +924,14 @@ export default function transformer( program: ts.Program, config?: TransformerCo
 
                                 if( fnName === 'serializer' )
                                 {
-                                    return runtimeCall( emitNames.runtimeNs, 'createSerializer', [ serRef, visitedOpts ]);
+                                    return runtimeCall( DOMAIN_SENTINELS.serialize, 'createSerializer', [ serRef, visitedOpts ]);
                                 }
 
                                 const inputVisitorResult = visitArgOrUndefined( node.arguments, 0, visitor );
 
                                 if( fnName === 'safeSerialize' )
                                 {
-                                    return runtimeCall( emitNames.runtimeNs, 'safeSerialize', [ serRef, inputVisitorResult, visitedOpts ]);
+                                    return runtimeCall( DOMAIN_SENTINELS.serialize, 'safeSerialize', [ serRef, inputVisitorResult, visitedOpts ]);
                                 }
 
                                 return ts.factory.createCallExpression( serRef, undefined, [ inputVisitorResult, visitedOpts ]);
@@ -907,7 +945,7 @@ export default function transformer( program: ts.Program, config?: TransformerCo
                                 const parseRef = buildParser( type, checker, parserCache, hash, options, customFns );
                                 const rawVisitedOpts = visitArgOrUndefined( node.arguments, optsIdx, visitor );
                                 const visitedOpts = needsRuntimeGuard
-                                    ? runtimeCall( emitNames.runtimeNs, 'checkParseOptions', [
+                                    ? runtimeCall( DOMAIN_SENTINELS.parse, 'checkParseOptions', [
                                         rawVisitedOpts,
                                         ts.factory.createStringLiteral( options.mode || 'strip' ),
                                         ts.factory.createStringLiteral( options.from || 'json' ),
@@ -920,14 +958,14 @@ export default function transformer( program: ts.Program, config?: TransformerCo
 
                                 if( fnName === 'parser' )
                                 {
-                                    return runtimeCall( emitNames.runtimeNs, 'createParser', [ parseRef, visitedOpts ]);
+                                    return runtimeCall( DOMAIN_SENTINELS.parse, 'createParser', [ parseRef, visitedOpts ]);
                                 }
 
                                 const inputVisitorResult = visitArgOrUndefined( node.arguments, 0, visitor );
 
                                 if( fnName === 'safeParse' )
                                 {
-                                    return runtimeCall( emitNames.runtimeNs, 'safeParse', [ parseRef, inputVisitorResult, visitedOpts ]);
+                                    return runtimeCall( DOMAIN_SENTINELS.parse, 'safeParse', [ parseRef, inputVisitorResult, visitedOpts ]);
                                 }
 
                                 return ts.factory.createCallExpression( parseRef, undefined, [ inputVisitorResult, visitedOpts ]);
@@ -973,13 +1011,34 @@ export default function transformer( program: ts.Program, config?: TransformerCo
 
                                 const validatorRef = ts.factory.createIdentifier( `__val_${valKey}` );
                                 const optionsArg = visitArgOrUndefined( node.arguments, 0, visitor );
-                                const helperMethod = fnName === 'validator' ? 'createValidator' : 'createStandardSchema';
 
-                                return runtimeCall( emitNames.runtimeNs, helperMethod, [ validatorRef, optionsArg ]);
+                                if( fnName === 'validator' )
+                                {
+                                    const guardRef = buildGuard( type, checker, guardCache, hash, customFns, unsupportedGuards );
+                                    const args = guardRef
+                                        ? [ validatorRef, optionsArg, guardRef ]
+                                        : [ validatorRef, optionsArg ];
+
+                                    return runtimeCall( DOMAIN_SENTINELS.validators, 'createValidator', args );
+                                }
+
+                                return runtimeCall( DOMAIN_SENTINELS.validators, 'createStandardSchema', [ validatorRef, optionsArg ]);
                             }
 
                             if( VALIDATION_FUNCTIONS.includes( fnName ))
                             {
+                                if( fnName === 'is' && ( !node.arguments[1] || isUndefinedLiteral( node.arguments[1])))
+                                {
+                                    const guardRef = buildGuard( type, checker, guardCache, hash, customFns, unsupportedGuards );
+
+                                    if( guardRef )
+                                    {
+                                        const inputArg = visitArgOrUndefined( node.arguments, 0, visitor );
+
+                                        return ts.factory.createCallExpression( guardRef, undefined, [inputArg]);
+                                    }
+                                }
+
                                 const unionResolution = parseUnionResolution( node.arguments[1], fnName, checker );
                                 const valKey = unionResolution === 'declaration-order' ? `${hash}_decl` : hash;
 
@@ -992,7 +1051,7 @@ export default function transformer( program: ts.Program, config?: TransformerCo
                                 const optionsArg = visitArgOrUndefined( node.arguments, 1, visitor );
                                 const validatorRef = ts.factory.createIdentifier( `__val_${valKey}` );
 
-                                return runtimeCall( emitNames.runtimeNs, fnName, [ validatorRef, inputArg, optionsArg ]);
+                                return runtimeCall( DOMAIN_SENTINELS.validators, fnName, [ validatorRef, inputArg, optionsArg ]);
                             }
 
                             if( fnName === 'clone' || fnName === 'cloner' )
@@ -1032,10 +1091,10 @@ export default function transformer( program: ts.Program, config?: TransformerCo
 
                                 if( fnName === 'randomGenerator' )
                                 {
-                                    return runtimeCall( emitNames.runtimeNs, 'createRandomGenerator', [ randRef, ...seedArgs ]);
+                                    return runtimeCall( DOMAIN_SENTINELS.random, 'createRandomGenerator', [ randRef, ...seedArgs ]);
                                 }
 
-                                const rngExpr = runtimeCall( emitNames.runtimeNs, 'createRng', seedArgs );
+                                const rngExpr = runtimeCall( DOMAIN_SENTINELS.random, 'createRng', seedArgs );
 
                                 return ts.factory.createCallExpression( randRef, undefined, [rngExpr]);
                             }
@@ -1058,7 +1117,8 @@ export default function transformer( program: ts.Program, config?: TransformerCo
                 parserCache,
                 clonerCache,
                 prunerCache,
-                randomCache
+                randomCache,
+                guardCache
             );
         };
     };

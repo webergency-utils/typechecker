@@ -34,6 +34,268 @@ export interface BundlerTransformerController
 const DEFAULT_INCLUDE_RE = /\.(?:ts|tsx|mts|cts)$/;
 const DEFAULT_EXCLUDE_RE = /(?:^|[/\\])node_modules(?:[/\\]|$)/;
 const RELATIVE_INDEX_SPECIFIER_RE = /['"]((?:\.\.?\/)+(?:(?:src|dist)\/)?index(?:\.(?:js|cjs|mjs|ts|mts|cts))?)['"]/g;
+const VLQ_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const HOISTED_LINE_RE = /^(?:import \* as __tc|const __(?:val|is|ser|parse|clone|prune|rand|schema)_|const validators(?:_\d+)? = __tc)/;
+const ANCHOR_PREFIX_RE = /^((?:export\s+)?(?:default\s+)?(?:async\s+)?(?:const|let|var|function|class|return)\b[^=({]*)/;
+
+export interface SourceMapV3
+{
+    version        : 3
+    file           : string
+    sources        : string[]
+    sourcesContent : string[]
+    names          : string[]
+    mappings       : string
+}
+
+function encodeVlq( value: number ): string
+{
+    let vlq = value < 0 ? (( -value ) << 1 ) | 1 : value << 1;
+    let out = '';
+
+    do
+    {
+        let digit = vlq & 0x1f;
+        vlq >>>= 5;
+
+        if( vlq > 0 ){ digit |= 0x20 }
+
+        out += VLQ_CHARS[digit];
+    }
+    while( vlq > 0 );
+
+    return out;
+}
+
+function decodeVlqSegment( segment: string ): number[]
+{
+    const values: number[] = [];
+    let i = 0;
+
+    while( i < segment.length )
+    {
+        let result = 0;
+        let shift = 0;
+        let continuation = true;
+
+        while( continuation && i < segment.length )
+        {
+            const charIdx = VLQ_CHARS.indexOf( segment[i++]);
+            const digit = charIdx < 0 ? 0 : charIdx;
+            continuation = ( digit & 0x20 ) !== 0;
+            result += ( digit & 0x1f ) << shift;
+            shift += 5;
+        }
+
+        const isNegative = ( result & 1 ) === 1;
+        const shifted = result >>> 1;
+        values.push( isNegative ? -shifted : shifted );
+    }
+
+    return values;
+}
+
+function mapPrintedToOriginalLines( originalCode: string, printedCode: string ): ( number | null )[]
+{
+    const origLines = originalCode.replace( /\r\n/g, '\n' ).split( '\n' );
+    const origTrimmed = origLines.map( l => l.trim());
+    const printedLines = printedCode.replace( /\r\n/g, '\n' ).split( '\n' );
+    const result: ( number | null )[] = new Array( printedLines.length ).fill( null );
+    let cursor = 0;
+
+    for( let pIdx = 0; pIdx < printedLines.length; pIdx++ )
+    {
+        const trimmed = printedLines[pIdx].trim();
+
+        if( !trimmed || HOISTED_LINE_RE.test( trimmed )){ continue }
+
+        const maxLookahead = Math.min( origLines.length, cursor + 80 );
+        let matched = -1;
+
+        for( let oIdx = cursor; oIdx < maxLookahead; oIdx++ )
+        {
+            if( origTrimmed[oIdx] === trimmed )
+            {
+                matched = oIdx;
+                break;
+            }
+        }
+
+        if( matched < 0 )
+        {
+            const anchorMatch = ANCHOR_PREFIX_RE.exec( trimmed );
+
+            if( anchorMatch )
+            {
+                const anchor = anchorMatch[1].replace( /\s+/g, ' ' ).trim();
+
+                if( anchor.length > 0 )
+                {
+                    for( let oIdx = cursor; oIdx < maxLookahead; oIdx++ )
+                    {
+                        const origAnchorMatch = ANCHOR_PREFIX_RE.exec( origTrimmed[oIdx]);
+
+                        if( origAnchorMatch && origAnchorMatch[1].replace( /\s+/g, ' ' ).trim() === anchor )
+                        {
+                            matched = oIdx;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if( matched >= 0 )
+        {
+            result[pIdx] = matched;
+            cursor = matched + 1;
+        }
+    }
+
+    return result;
+}
+
+function buildDirectSourceMap(
+    originalCode : string,
+    printedCode  : string,
+    cleanId      : string
+): SourceMapV3
+{
+    const lineMap = mapPrintedToOriginalLines( originalCode, printedCode );
+    const lineGroups: string[] = [];
+    let hasPrev = false;
+    let prevOrigLine = 0;
+
+    for( let pIdx = 0; pIdx < lineMap.length; pIdx++ )
+    {
+        const origLine = lineMap[pIdx];
+
+        if( origLine === null )
+        {
+            lineGroups.push( '' );
+            continue;
+        }
+
+        const sourceDelta = 0;
+        const lineDelta = hasPrev ? origLine - prevOrigLine : origLine;
+        const colDelta = 0;
+        lineGroups.push(
+            encodeVlq( 0 ) +
+            encodeVlq( sourceDelta ) +
+            encodeVlq( lineDelta ) +
+            encodeVlq( colDelta )
+        );
+        prevOrigLine = origLine;
+        hasPrev = true;
+    }
+
+    return {
+        version        : 3,
+        file           : path.basename( cleanId ),
+        sources        : [cleanId],
+        sourcesContent : [originalCode],
+        names          : [],
+        mappings       : lineGroups.join( ';' )
+    };
+}
+
+function composeTranspiledSourceMap(
+    transpiledMapText : string,
+    originalCode      : string,
+    printedCode       : string,
+    cleanId           : string
+): SourceMapV3
+{
+    const rawMap = JSON.parse( transpiledMapText ) as { mappings? : string, names? : string[] };
+    const lineMap = mapPrintedToOriginalLines( originalCode, printedCode );
+    const rawLines = ( rawMap.mappings || '' ).split( ';' );
+    const outLines: string[] = [];
+
+    let rawSourceIdx = 0;
+    let rawOrigLine = 0;
+    let rawOrigCol = 0;
+    let rawNameIdx = 0;
+
+    let outHasPrev = false;
+    let outPrevOrigLine = 0;
+    let outPrevOrigCol = 0;
+    let outPrevNameIdx = 0;
+
+    for( const rawLine of rawLines )
+    {
+        if( !rawLine )
+        {
+            outLines.push( '' );
+            continue;
+        }
+
+        let rawGenCol = 0;
+        let outPrevGenCol = 0;
+        const outSegments: string[] = [];
+
+        for( const seg of rawLine.split( ',' ))
+        {
+            if( !seg ){ continue }
+
+            const fields = decodeVlqSegment( seg );
+
+            if( fields.length === 0 ){ continue }
+
+            rawGenCol += fields[0];
+
+            if( fields.length < 4 ){ continue }
+
+            rawSourceIdx += fields[1];
+            rawOrigLine += fields[2];
+            rawOrigCol += fields[3];
+            const hasName = fields.length >= 5;
+
+            if( hasName ){ rawNameIdx += fields[4] }
+
+            const mappedOrigLine = lineMap[rawOrigLine] ?? null;
+
+            if( mappedOrigLine === null ){ continue }
+
+            const genColDelta = rawGenCol - outPrevGenCol;
+            const srcDelta = 0;
+            const origLineDelta = outHasPrev ? mappedOrigLine - outPrevOrigLine : mappedOrigLine;
+            const targetCol = 0;
+            const origColDelta = outHasPrev ? targetCol - outPrevOrigCol : targetCol;
+
+            let encoded =
+                encodeVlq( genColDelta ) +
+                encodeVlq( srcDelta ) +
+                encodeVlq( origLineDelta ) +
+                encodeVlq( origColDelta );
+
+            if( hasName )
+            {
+                const nameDelta = outHasPrev ? rawNameIdx - outPrevNameIdx : rawNameIdx;
+                encoded += encodeVlq( nameDelta );
+                outPrevNameIdx = rawNameIdx;
+            }
+
+            outSegments.push( encoded );
+            outPrevGenCol = rawGenCol;
+            outPrevOrigLine = mappedOrigLine;
+            outPrevOrigCol = targetCol;
+            outHasPrev = true;
+        }
+
+        outLines.push( outSegments.join( ',' ));
+    }
+
+    void rawSourceIdx;
+
+    return {
+        version        : 3,
+        file           : path.basename( cleanId ),
+        sources        : [cleanId],
+        sourcesContent : [originalCode],
+        names          : Array.isArray( rawMap.names ) ? rawMap.names : [],
+        mappings       : outLines.join( ';' )
+    };
+}
 
 function matchesFilter( filter: RegExp | (( id: string ) => boolean ), id: string ): boolean
 {
@@ -271,11 +533,16 @@ export function createBundlerTransformer(
 
             return {
                 code : transpiled.outputText,
-                map  : transpiled.sourceMapText ? JSON.parse( transpiled.sourceMapText ) : null
+                map  : transpiled.sourceMapText
+                    ? composeTranspiledSourceMap( transpiled.sourceMapText, code, printed, cleanId )
+                    : buildDirectSourceMap( code, transpiled.outputText, cleanId )
             };
         }
 
-        return { code : printed, map : null };
+        return {
+            code : printed,
+            map  : buildDirectSourceMap( code, printed, cleanId )
+        };
     };
 
     return { transform, invalidate, getWatchFiles };

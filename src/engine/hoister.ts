@@ -2,11 +2,57 @@ import ts from 'typescript';
 import type { ICustomFunctionImport } from './customFns.js';
 
 const RUNTIME_NS = '__tcRuntime';
-const RUNTIME_MODULE = '@webergency-utils/typechecker/runtime';
 const VALIDATORS_NAME = 'validators';
 
+export type RuntimeDomain = 'validators' | 'serialize' | 'parse' | 'clone' | 'random';
+
+export const DOMAIN_SENTINELS: Record<RuntimeDomain, string> =
+{
+    validators : '__tcDom_validators',
+    serialize  : '__tcDom_serialize',
+    parse      : '__tcDom_parse',
+    clone      : '__tcDom_clone',
+    random     : '__tcDom_random'
+};
+
+const SENTINEL_TO_DOMAIN = new Map<string, RuntimeDomain>([
+    [ DOMAIN_SENTINELS.validators, 'validators' ],
+    [ DOMAIN_SENTINELS.serialize, 'serialize' ],
+    [ DOMAIN_SENTINELS.parse, 'parse' ],
+    [ DOMAIN_SENTINELS.clone, 'clone' ],
+    [ DOMAIN_SENTINELS.random, 'random' ]
+]);
+
+const DOMAIN_ORDER: readonly RuntimeDomain[] =
+[
+    'validators',
+    'serialize',
+    'parse',
+    'clone',
+    'random'
+];
+
+const DOMAIN_MODULES: Record<RuntimeDomain, string> =
+{
+    validators : '@webergency-utils/typechecker/runtime/validators',
+    serialize  : '@webergency-utils/typechecker/runtime/serialize',
+    parse      : '@webergency-utils/typechecker/runtime/parse',
+    clone      : '@webergency-utils/typechecker/runtime/clone',
+    random     : '@webergency-utils/typechecker/runtime/random'
+};
+
+const DOMAIN_FALLBACK_BASES: Record<RuntimeDomain, string> =
+{
+    validators : '__tcVal',
+    serialize  : '__tcSer',
+    parse      : '__tcParse',
+    clone      : '__tcClone',
+    random     : '__tcRand'
+};
+
 /** Identifiers the transformer and hoister emit into a file, resolved against names the file already binds. */
-export interface IEmitNames {
+export interface IEmitNames
+{
     runtimeNs      : string
     validatorsName : string
 }
@@ -36,27 +82,91 @@ export function hoistEmitLocals(
     parserCache?    : Map<string, ts.Expression>,
     clonerCache?    : Map<string, ts.Expression>,
     prunerCache?    : Map<string, ts.Expression>,
-    randomCache?    : Map<string, ts.Expression>
+    randomCache?    : Map<string, ts.Expression>,
+    guardCache?     : Map<string, ts.Expression>
 )
 {
     const hasSchemas = !!( schemasMap && schemasMap.size > 0 );
     const hasValidators = cache.size > 0;
+    const hasGuards = !!( guardCache && guardCache.size > 0 );
     const hasSerializers = !!( serializerCache && serializerCache.size > 0 );
     const hasParsers = !!( parserCache && parserCache.size > 0 );
     const hasCloners = !!( clonerCache && clonerCache.size > 0 );
     const hasPruners = !!( prunerCache && prunerCache.size > 0 );
     const hasRandoms = !!( randomCache && randomCache.size > 0 );
-    const needsRuntime = hasValidators || hasSerializers || hasParsers || hasCloners || hasPruners || hasRandoms;
+    const sentinelsUsed = collectUsedSentinels( sourceFile );
 
-    if( !needsRuntime && !hasSchemas ){ return sourceFile }
+    const activeDomains = new Set<RuntimeDomain>();
+
+    if( hasValidators || sentinelsUsed.has( 'validators' ) || mapUsesRuntimeRef( guardCache ))
+    {
+        activeDomains.add( 'validators' );
+    }
+
+    if( sentinelsUsed.has( 'serialize' ) || mapUsesRuntimeRef( serializerCache ))
+    {
+        activeDomains.add( 'serialize' );
+    }
+
+    if( sentinelsUsed.has( 'parse' ) || mapUsesRuntimeRef( parserCache ))
+    {
+        activeDomains.add( 'parse' );
+    }
+
+    if( sentinelsUsed.has( 'clone' ) || mapUsesRuntimeRef( clonerCache ) || mapUsesRuntimeRef( prunerCache ))
+    {
+        activeDomains.add( 'clone' );
+    }
+
+    if( sentinelsUsed.has( 'random' ) || mapUsesRuntimeRef( randomCache ))
+    {
+        activeDomains.add( 'random' );
+    }
+
+    const hasLocals =
+        hasValidators ||
+        hasGuards ||
+        hasSerializers ||
+        hasParsers ||
+        hasCloners ||
+        hasPruners ||
+        hasRandoms ||
+        hasSchemas;
+    const hasCustomImports = !!( customImports && customImports.length > 0 );
+
+    if( activeDomains.size === 0 && !hasLocals && !hasCustomImports ){ return sourceFile }
 
     const names = emitNames || resolveEmitNames( sourceFile );
+    const allBindings = collectAllBindingNames( sourceFile );
+    allBindings.add( names.runtimeNs );
+    allBindings.add( names.validatorsName );
+
+    const domainNs = new Map<RuntimeDomain, string>();
+    let isFirstDomain = true;
+
+    for( const domain of DOMAIN_ORDER )
+    {
+        if( !activeDomains.has( domain )){ continue }
+
+        if( isFirstDomain )
+        {
+            domainNs.set( domain, names.runtimeNs );
+            isFirstDomain = false;
+        }
+        else
+        {
+            const ns = uniqueName( DOMAIN_FALLBACK_BASES[domain], allBindings );
+            allBindings.add( ns );
+            domainNs.set( domain, ns );
+        }
+    }
+
     const declaredNames = collectBindingNames( sourceFile.statements );
     const importStatements: ts.Statement[] = [];
     const localStatements: ts.Statement[] = [];
     const prependedNames = new Set<string>();
 
-    if( needsRuntime )
+    for( const [ domain, ns ] of domainNs.entries())
     {
         importStatements.push(
             ts.factory.createImportDeclaration(
@@ -64,9 +174,9 @@ export function hoistEmitLocals(
                 ts.factory.createImportClause(
                     false,
                     undefined,
-                    ts.factory.createNamespaceImport( ts.factory.createIdentifier( names.runtimeNs ))
+                    ts.factory.createNamespaceImport( ts.factory.createIdentifier( ns ))
                 ),
-                ts.factory.createStringLiteral( RUNTIME_MODULE ),
+                ts.factory.createStringLiteral( DOMAIN_MODULES[domain]),
                 undefined
             )
         );
@@ -74,11 +184,12 @@ export function hoistEmitLocals(
 
     if( hasValidators )
     {
+        const valNs = domainNs.get( 'validators' ) || names.runtimeNs;
         localStatements.push(
             constStatement(
                 names.validatorsName,
                 ts.factory.createPropertyAccessExpression(
-                    ts.factory.createIdentifier( names.runtimeNs ),
+                    ts.factory.createIdentifier( valNs ),
                     VALIDATORS_NAME
                 )
             )
@@ -90,7 +201,7 @@ export function hoistEmitLocals(
         importStatements.push( customFunctionImport( custom ));
     }
 
-    for( const [hash, expr] of cache.entries())
+    for( const [ hash, expr ] of cache.entries())
     {
         const valName = `__val_${hash}`;
 
@@ -101,22 +212,42 @@ export function hoistEmitLocals(
         }
     }
 
+    if( guardCache )
+    {
+        const valNs = domainNs.get( 'validators' ) || names.runtimeNs;
+
+        for( const [ hash, expr ] of guardCache.entries())
+        {
+            const guardName = `__is_${hash}`;
+
+            if( !declaredNames.has( guardName ) && !prependedNames.has( guardName ))
+            {
+                prependedNames.add( guardName );
+                localStatements.push( constStatement( guardName, renameRuntimeRef( expr, valNs )));
+            }
+        }
+    }
+
     if( serializerCache )
     {
-        for( const [hash, expr] of serializerCache.entries())
+        const serNs = domainNs.get( 'serialize' ) || names.runtimeNs;
+
+        for( const [ hash, expr ] of serializerCache.entries())
         {
             const serName = `__ser_${hash}`;
 
             if( !declaredNames.has( serName ) && !prependedNames.has( serName ))
             {
                 prependedNames.add( serName );
-                localStatements.push( constStatement( serName, renameRuntimeRef( expr, names.runtimeNs )));
+                localStatements.push( constStatement( serName, renameRuntimeRef( expr, serNs )));
             }
         }
     }
 
     if( parserCache )
     {
+        const parseNs = domainNs.get( 'parse' ) || names.runtimeNs;
+
         for( const [ hash, expr ] of parserCache.entries())
         {
             const parseName = `__parse_${hash}`;
@@ -124,13 +255,15 @@ export function hoistEmitLocals(
             if( !declaredNames.has( parseName ) && !prependedNames.has( parseName ))
             {
                 prependedNames.add( parseName );
-                localStatements.push( constStatement( parseName, renameRuntimeRef( expr, names.runtimeNs )));
+                localStatements.push( constStatement( parseName, renameRuntimeRef( expr, parseNs )));
             }
         }
     }
 
     if( clonerCache )
     {
+        const cloneNs = domainNs.get( 'clone' ) || names.runtimeNs;
+
         for( const [ hash, expr ] of clonerCache.entries())
         {
             const cloneName = `__clone_${hash}`;
@@ -138,13 +271,15 @@ export function hoistEmitLocals(
             if( !declaredNames.has( cloneName ) && !prependedNames.has( cloneName ))
             {
                 prependedNames.add( cloneName );
-                localStatements.push( constStatement( cloneName, renameRuntimeRef( expr, names.runtimeNs )));
+                localStatements.push( constStatement( cloneName, renameRuntimeRef( expr, cloneNs )));
             }
         }
     }
 
     if( prunerCache )
     {
+        const cloneNs = domainNs.get( 'clone' ) || names.runtimeNs;
+
         for( const [ hash, expr ] of prunerCache.entries())
         {
             const pruneName = `__prune_${hash}`;
@@ -152,13 +287,15 @@ export function hoistEmitLocals(
             if( !declaredNames.has( pruneName ) && !prependedNames.has( pruneName ))
             {
                 prependedNames.add( pruneName );
-                localStatements.push( constStatement( pruneName, renameRuntimeRef( expr, names.runtimeNs )));
+                localStatements.push( constStatement( pruneName, renameRuntimeRef( expr, cloneNs )));
             }
         }
     }
 
     if( randomCache )
     {
+        const randNs = domainNs.get( 'random' ) || names.runtimeNs;
+
         for( const [ hash, expr ] of randomCache.entries())
         {
             const randName = `__rand_${hash}`;
@@ -166,14 +303,14 @@ export function hoistEmitLocals(
             if( !declaredNames.has( randName ) && !prependedNames.has( randName ))
             {
                 prependedNames.add( randName );
-                localStatements.push( constStatement( randName, renameRuntimeRef( expr, names.runtimeNs )));
+                localStatements.push( constStatement( randName, renameRuntimeRef( expr, randNs )));
             }
         }
     }
 
     if( schemasMap )
     {
-        for( const [hash, schemaExpr] of schemasMap.entries())
+        for( const [ hash, schemaExpr ] of schemasMap.entries())
         {
             const schemaName = `__schema_${hash}`;
 
@@ -183,6 +320,13 @@ export function hoistEmitLocals(
                 localStatements.push( constStatement( schemaName, schemaExpr ));
             }
         }
+    }
+
+    const sentinelMap = new Map<string, string>();
+
+    for( const [ domain, ns ] of domainNs.entries())
+    {
+        sentinelMap.set( DOMAIN_SENTINELS[domain], ns );
     }
 
     const directives: ts.Statement[] = [];
@@ -201,7 +345,10 @@ export function hoistEmitLocals(
         inPrologue = false;
 
         if( ts.isImportDeclaration( statement )){ existingImports.push( statement ) }
-        else { rest.push( statement ) }
+        else
+        {
+            rest.push( sentinelMap.size > 0 ? rewriteSentinels( statement, sentinelMap ) : statement );
+        }
     }
 
     return ts.factory.updateSourceFile( sourceFile,
@@ -212,6 +359,108 @@ export function hoistEmitLocals(
             ...localStatements,
             ...rest
         ]);
+}
+
+
+function collectUsedSentinels( sourceFile: ts.SourceFile ): Set<RuntimeDomain>
+{
+    const used = new Set<RuntimeDomain>();
+
+    const visit = ( node: ts.Node ) =>
+    {
+        if( ts.isPropertyAccessExpression( node ))
+        {
+            visit( node.expression );
+
+            return;
+        }
+
+        if( ts.isIdentifier( node ))
+        {
+            const domain = SENTINEL_TO_DOMAIN.get( node.text );
+
+            if( domain ){ used.add( domain ) }
+
+            return;
+        }
+
+        ts.forEachChild( node, visit );
+    };
+
+    ts.forEachChild( sourceFile, visit );
+
+    return used;
+}
+
+
+function mapUsesRuntimeRef( map: Map<string, ts.Expression> | undefined ): boolean
+{
+    if( !map || map.size === 0 ){ return false }
+
+    for( const expr of map.values())
+    {
+        if( exprUsesRuntimeRef( expr )){ return true }
+    }
+
+    return false;
+}
+
+
+function exprUsesRuntimeRef( root: ts.Node ): boolean
+{
+    let found = false;
+
+    const visit = ( node: ts.Node ) =>
+    {
+        if( found ){ return }
+
+        if( ts.isPropertyAccessExpression( node ))
+        {
+            visit( node.expression );
+
+            return;
+        }
+
+        if( ts.isIdentifier( node ) && node.text === RUNTIME_NS )
+        {
+            found = true;
+
+            return;
+        }
+
+        ts.forEachChild( node, visit );
+    };
+
+    visit( root );
+
+    return found;
+}
+
+
+function rewriteSentinels( statement: ts.Statement, sentinelMap: Map<string, string> ): ts.Statement
+{
+    const visit = ( node: ts.Node ): ts.Node =>
+    {
+        if( ts.isPropertyAccessExpression( node ))
+        {
+            return ts.factory.updatePropertyAccessExpression(
+                node,
+                visit( node.expression ) as ts.Expression,
+                node.name
+            );
+        }
+
+        if( ts.isIdentifier( node ))
+        {
+            const mapped = sentinelMap.get( node.text );
+
+            if( mapped ){ return ts.factory.createIdentifier( mapped ) }
+        }
+
+        return ts.visitEachChild( node, visit, undefined );
+    };
+
+    return visit( statement ) as ts.Statement;
 }
 
 

@@ -11,7 +11,8 @@ import
 }
     from './path.js';
 export { resolvePath, getValueAtPath, hasPath };
-import { createSafeRegex, isRegexSafe, testRegex } from './regex.js';
+import { createSafeRegex, getCachedPattern, isRegexSafe, testRegex } from './regex.js';
+export { getCachedPattern, testRegex };
 import { applyNodeTransform, type TransformFn } from './transform.js';
 import { formatCasing, type CasingFormat } from './casing.js';
 
@@ -87,6 +88,8 @@ export interface ValidationContext {
     unionProbe?      : { stripped : number, matched : number }
     /** Union resolution strategy (`'specificity'` | `'declaration-order'`). */
     unionResolution? : UnionResolution
+    /** Nesting depth inside `validators.secret` so `{value}` placeholders redact immediately. */
+    secretDepth?     : number
 }
 
 /** Evaluated properties / items collected for `unevaluatedProperties` / `unevaluatedItems`. */
@@ -227,6 +230,9 @@ export interface JsonSchemaObject
     then?                  : JsonSchema | boolean
     else?                  : JsonSchema | boolean
     'x-typescript-type'?   : JsonSchemaTypescriptType
+    'x-finite'?            : boolean
+    'x-min-date'?          : string
+    'x-max-date'?          : string
     key?                   : JsonSchema | boolean
     value?                 : JsonSchema | boolean
 }
@@ -235,10 +241,86 @@ export type SchemaValidator = ( v: any, path: string, ctx: ValidationContext ) =
 
 export type CompiledSchema<T = unknown> = SchemaValidator & StandardSchemaV1<unknown, T>;
 
+const MESSAGE_PLACEHOLDER_RE = /\{(path|value)\}/g;
+
+export function formatDisplayValue( val: any ): string
+{
+    if( typeof val === 'string' ){ return JSON.stringify( val ) }
+
+    if( typeof val === 'number' || typeof val === 'boolean' ){ return String( val ) }
+
+    if( typeof val === 'bigint' ){ return `${val}n` }
+
+    if( val === null ){ return 'null' }
+
+    if( val === undefined ){ return 'undefined' }
+
+    if( val instanceof Date ){ return Number.isNaN( val.getTime()) ? 'Invalid Date' : val.toISOString() }
+
+    if( Array.isArray( val ) || isPlainObject( val ))
+    {
+        try
+        {
+            return JSON.stringify( val );
+        }
+        catch
+        {
+            return String( val );
+        }
+    }
+
+    return String( val );
+}
+
+export function formatConstraintMessage(
+    template    : string,
+    path        : string,
+    value       : any,
+    redactValue : boolean = false
+): string
+{
+    if( !template.includes( '{' )){ return template }
+
+    return template.replace( MESSAGE_PLACEHOLDER_RE, ( _, token ) =>
+    {
+        if( token === 'path' ){ return path || 'root' }
+
+        return redactValue ? '[REDACTED]' : formatDisplayValue( value );
+    });
+}
+
+export function extractDateEpochMs( v: any ): number | undefined
+{
+    if( v instanceof Date ){ return v.getTime() }
+
+    if( typeof v === 'string' ){ return Date.parse( v ) }
+
+    if( typeof v === 'number' ){ return v }
+
+    return undefined;
+}
+
+export function splitStringValue( v: any, delim: string ): any
+{
+    if( typeof v !== 'string' ){ return v }
+
+    return v === '' && delim !== '' ? [] : v.split( delim );
+}
+
+export function splitStringToSet( v: any, delim: string ): any
+{
+    if( typeof v !== 'string' ){ return v }
+
+    return new Set( v === '' && delim !== '' ? [] : v.split( delim ));
+}
+
 export const report = ( ctx: ValidationContext, path: string, expected: string, value: any, message?: string ) => 
 {
     ctx.success = false;
-    ctx.errors.push({ path, value, error : message || expected });
+    const resolved = message !== undefined
+        ? formatConstraintMessage( message, path, value, ( ctx.secretDepth ?? 0 ) > 0 )
+        : expected;
+    ctx.errors.push({ path, value, error : resolved });
 };
 
 /**
@@ -1070,6 +1152,70 @@ function isUriTemplate( value: string ): boolean
     return URI_TEMPLATE_RE.test( value );
 }
 
+const JWT_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
+const SEMVER_NUMERIC_ID_RE = /^(?:0|[1-9]\d*)$/;
+const SEMVER_ALPHANUM_ID_RE = /^[0-9A-Za-z-]+$/;
+const SEMVER_DIGITS_ONLY_RE = /^\d+$/;
+
+function isJwt( value: string ): boolean
+{
+    const parts = value.split( '.' );
+
+    if( parts.length !== 3 ){ return false }
+
+    for( const part of parts )
+    {
+        if( part.length === 0 || part.length % 4 === 1 || !JWT_SEGMENT_RE.test( part ))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function isSemVer( value: string ): boolean
+{
+    if( value.length === 0 || value.length > 256 ){ return false }
+
+    const plusIdx = value.indexOf( '+' );
+    const withoutBuild = plusIdx === -1 ? value : value.slice( 0, plusIdx );
+
+    if( plusIdx !== -1 )
+    {
+        const build = value.slice( plusIdx + 1 );
+
+        if( build.length === 0 || !build.split( '.' ).every( p => SEMVER_ALPHANUM_ID_RE.test( p )))
+        {
+            return false;
+        }
+    }
+
+    const dashIdx = withoutBuild.indexOf( '-' );
+    const core = dashIdx === -1 ? withoutBuild : withoutBuild.slice( 0, dashIdx );
+
+    if( dashIdx !== -1 )
+    {
+        const pre = withoutBuild.slice( dashIdx + 1 );
+
+        if( pre.length === 0 ){ return false }
+
+        for( const part of pre.split( '.' ))
+        {
+            if( !SEMVER_ALPHANUM_ID_RE.test( part )){ return false }
+
+            if( SEMVER_DIGITS_ONLY_RE.test( part ) && part.length > 1 && part[0] === '0' )
+            {
+                return false;
+            }
+        }
+    }
+
+    const coreParts = core.split( '.' );
+
+    return coreParts.length === 3 && coreParts.every( p => SEMVER_NUMERIC_ID_RE.test( p ));
+}
+
 function parseFormatDate( value: string ): Date | undefined 
 {
     const match = value.match( /^(\d{4})-(\d{2})-(\d{2})$/ );
@@ -1612,6 +1758,105 @@ export function hasUniqueItems( v: any[]): boolean
     return true;
 }
 
+export function hasOnlyAllowedKeys( v: Record<string, any>, allowed: ReadonlySet<string> ): boolean
+{
+    const keys = Object.keys( v );
+
+    for( let i = 0; i < keys.length; i++ )
+    {
+        if( !allowed.has( keys[i])){ return false }
+    }
+
+    return true;
+}
+
+export function isMultipleOfValid( v: number | bigint, n: number | bigint ): boolean
+{
+    if( typeof v === 'bigint' || typeof n === 'bigint' )
+    {
+        try
+        {
+            const divisor = BigInt( n );
+
+            return divisor !== 0n && BigInt( v ) % divisor === 0n;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    return isMultipleOfNumber( v, n );
+}
+
+export function isMinDateValid( v: any, bound: string ): boolean
+{
+    const ts = extractDateEpochMs( v );
+
+    if( ts === undefined ){ return true }
+
+    const boundMs = Date.parse( bound );
+
+    return !Number.isNaN( ts ) && !Number.isNaN( boundMs ) && ts >= boundMs;
+}
+
+export function isMaxDateValid( v: any, bound: string ): boolean
+{
+    const ts = extractDateEpochMs( v );
+
+    if( ts === undefined ){ return true }
+
+    const boundMs = Date.parse( bound );
+
+    return !Number.isNaN( ts ) && !Number.isNaN( boundMs ) && ts <= boundMs;
+}
+
+export function isFormatValid( v: string, format: string ): boolean
+{
+    let regex: RegExp | undefined;
+    let isValid = true;
+
+    switch ( format )
+    {
+        case 'email': isValid = isEmail( v ); break;
+        case 'idn-email': isValid = isIdnEmail( v ); break;
+        // Versions 1-8 plus the nil UUID; a version nibble of 1-5 rejects v6 and v7.
+        case 'uuid': regex = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|00000000-0000-0000-0000-000000000000)$/i; break;
+        case 'url': regex = /^(?:https?|ftp):\/\/[^\s/$.?#].[^\s]*$/i; break;
+        case 'ipv4': regex = /^(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/; break;
+        case 'ipv6': regex = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$/; break;
+        case 'date': isValid = Boolean( parseFormatDate( v )); break;
+        case 'date-time': isValid = Boolean( parseFormatDateTime( v )); break;
+        case 'byte': regex = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/; break;
+        case 'base64url': regex = /^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2}(?:==)?|[A-Za-z0-9_-]{3}=?)?$/; break;
+        case 'password':
+        case 'binary': break;
+        case 'regex':
+            try { createSafeRegex( v ) }
+            catch{ isValid = false }
+            break;
+        case 'hostname': isValid = isHostname( v ); break;
+        case 'idn-hostname': isValid = isIdnHostname( v ); break;
+        case 'uri': isValid = isUri( v ); break;
+        case 'uri-reference': isValid = isUriReference( v ); break;
+        case 'iri': isValid = isIri( v ); break;
+        case 'iri-reference': isValid = isIriReference( v ); break;
+        case 'uri-template': isValid = isUriTemplate( v ); break;
+        case 'time': regex = /^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:[zZ]|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/; break;
+        case 'duration': regex = /^P(?!$)(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+S)?)?$/; break;
+        case 'objectId': regex = /^[0-9a-fA-F]{24}$/; break;
+        case 'ulid': regex = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/i; break;
+        case 'cuid2': regex = /^[a-z][0-9a-z]{23,31}$/; break;
+        case 'jwt': isValid = isJwt( v ); break;
+        case 'semver': isValid = isSemVer( v ); break;
+        default: isValid = false; break;
+    }
+
+    if( regex && !testRegex( regex, v )){ isValid = false }
+
+    return isValid;
+}
+
 const probeSource = new WeakMap<object, Record<string, any>>();
 
 export const validators = {
@@ -1619,6 +1864,9 @@ export const validators = {
     coerceQueryBoolean,
     coerceQueryDate,
     coerceJsonDate,
+    formatConstraintMessage,
+    splitStringValue,
+    splitStringToSet,
     applyOptionTransform : ( v: any, path: string, ctx: ValidationContext, tags: string[], kind: CoercionKind ) =>
     {
         if( !ctx.transform || v === undefined || v === null ){ return v }
@@ -2342,25 +2590,92 @@ export const validators = {
 
     multipleOf : ( v: number | bigint, path: string, ctx: ValidationContext, n: number | bigint, message?: string ) => 
     {
-        if( typeof v === 'bigint' || typeof n === 'bigint' ) 
-        {
-            try
-            {
-                const divisor = BigInt( n );
-
-                if( divisor === 0n || BigInt( v ) % divisor !== 0n )
-                {
-                    report( ctx, path, `MultipleOf<${n}>`, v, message );
-                }
-            }
-            catch
-            {
-                report( ctx, path, `MultipleOf<${n}>`, v, message );
-            }
-        }
-        else if( !isMultipleOfNumber( v, n )) 
+        if( !isMultipleOfValid( v, n ))
         {
             report( ctx, path, `MultipleOf<${n}>`, v, message );
+        }
+
+        return v;
+    },
+
+    integer : ( v: number | bigint, path: string, ctx: ValidationContext, message?: string ) =>
+    {
+        if( typeof v === 'number' && !Number.isInteger( v ))
+        {
+            report( ctx, path, 'Integer', v, message );
+        }
+
+        return v;
+    },
+
+    safeInteger : ( v: number | bigint, path: string, ctx: ValidationContext, message?: string ) =>
+    {
+        if(
+            ( typeof v === 'number' && !Number.isSafeInteger( v )) ||
+            ( typeof v === 'bigint' && ( v < -9007199254740991n || v > 9007199254740991n ))
+        )
+        {
+            report( ctx, path, 'SafeInteger', v, message );
+        }
+
+        return v;
+    },
+
+    positive : ( v: number | bigint, path: string, ctx: ValidationContext, message?: string ) =>
+    {
+        if(( typeof v === 'number' && !( v > 0 )) || ( typeof v === 'bigint' && !( v > 0n )))
+        {
+            report( ctx, path, 'Positive', v, message );
+        }
+
+        return v;
+    },
+
+    nonNegative : ( v: number | bigint, path: string, ctx: ValidationContext, message?: string ) =>
+    {
+        if(( typeof v === 'number' && !( v >= 0 )) || ( typeof v === 'bigint' && !( v >= 0n )))
+        {
+            report( ctx, path, 'NonNegative', v, message );
+        }
+
+        return v;
+    },
+
+    negative : ( v: number | bigint, path: string, ctx: ValidationContext, message?: string ) =>
+    {
+        if(( typeof v === 'number' && !( v < 0 )) || ( typeof v === 'bigint' && !( v < 0n )))
+        {
+            report( ctx, path, 'Negative', v, message );
+        }
+
+        return v;
+    },
+
+    finite : ( v: number | bigint, path: string, ctx: ValidationContext, message?: string ) =>
+    {
+        if( typeof v === 'number' && !Number.isFinite( v ))
+        {
+            report( ctx, path, 'Finite', v, message );
+        }
+
+        return v;
+    },
+
+    minDate : ( v: any, path: string, ctx: ValidationContext, bound: string, message?: string ) =>
+    {
+        if( !isMinDateValid( v, bound ))
+        {
+            report( ctx, path, `MinDate<${bound}>`, v, message );
+        }
+
+        return v;
+    },
+
+    maxDate : ( v: any, path: string, ctx: ValidationContext, bound: string, message?: string ) =>
+    {
+        if( !isMaxDateValid( v, bound ))
+        {
+            report( ctx, path, `MaxDate<${bound}>`, v, message );
         }
 
         return v;
@@ -2382,42 +2697,7 @@ export const validators = {
 
     format : ( v: string, path: string, ctx: ValidationContext, format: string, message?: string ) => 
     {
-        let regex: RegExp | undefined;
-        let isValid = true;
-
-        switch ( format ) 
-        {
-            case 'email': isValid = isEmail( v ); break;
-            case 'idn-email': isValid = isIdnEmail( v ); break;
-            // Versions 1-8 plus the nil UUID; a version nibble of 1-5 rejects v6 and v7.
-            case 'uuid': regex = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|00000000-0000-0000-0000-000000000000)$/i; break;
-            case 'url': regex = /^(?:https?|ftp):\/\/[^\s/$.?#].[^\s]*$/i; break;
-            case 'ipv4': regex = /^(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/; break;
-            case 'ipv6': regex = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$/; break;
-            case 'date': isValid = Boolean( parseFormatDate( v )); break;
-            case 'date-time': isValid = Boolean( parseFormatDateTime( v )); break;
-
-            case 'byte': regex = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/; break;
-            case 'password':
-            case 'binary': break;
-            case 'regex': try { createSafeRegex( v ) }
-            catch{ isValid = false }; break;
-            case 'hostname': isValid = isHostname( v ); break;
-            case 'idn-hostname': isValid = isIdnHostname( v ); break;
-            case 'uri': isValid = isUri( v ); break;
-            case 'uri-reference': isValid = isUriReference( v ); break;
-            case 'iri': isValid = isIri( v ); break;
-            case 'iri-reference': isValid = isIriReference( v ); break;
-            case 'uri-template': isValid = isUriTemplate( v ); break;
-            case 'time': regex = /^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:[zZ]|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/; break;
-            case 'duration': regex = /^P(?!$)(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+S)?)?$/; break;
-            case 'objectId': regex = /^[0-9a-fA-F]{24}$/; break;
-            default: isValid = false; break;
-        }
-
-        if( regex && !testRegex( regex, v )) { isValid = false }
-
-        if( !isValid ) { report( ctx, path, `Format<${format}>`, v, message ) }
+        if( !isFormatValid( v, format )) { report( ctx, path, `Format<${format}>`, v, message ) }
 
         return v;
     },
@@ -2488,7 +2768,8 @@ export const validators = {
                 from           : ctx.from,
                 mutate         : false,
                 root           : ctx.root,
-                dynamicAnchors : ctx.dynamicAnchors
+                dynamicAnchors : ctx.dynamicAnchors,
+                secretDepth    : ctx.secretDepth
             };
             itemCheck( v[i], indexPath( path, i ), probe );
 
@@ -2529,7 +2810,8 @@ export const validators = {
                 from           : ctx.from,
                 mutate         : false,
                 root           : ctx.root,
-                dynamicAnchors : ctx.dynamicAnchors
+                dynamicAnchors : ctx.dynamicAnchors,
+                secretDepth    : ctx.secretDepth
             };
             keyCheck( key, keyPath, probe );
 
@@ -2642,7 +2924,8 @@ export const validators = {
             root            : ctx.root,
             transform       : ctx.transform,
             dynamicAnchors  : ctx.dynamicAnchors,
-            unionResolution : ctx.unionResolution
+            unionResolution : ctx.unionResolution,
+            secretDepth     : ctx.secretDepth
         };
 
         const accept = ( val: any ) =>
@@ -3009,6 +3292,8 @@ export const validators = {
     secret : ( v: any, path: string, ctx: ValidationContext, inner: Function ) =>
     {
         const startIdx = ctx.errors.length;
+        const prevSecretDepth = ctx.secretDepth ?? 0;
+        ctx.secretDepth = prevSecretDepth + 1;
         let res: any;
 
         try
@@ -3034,6 +3319,10 @@ export const validators = {
             report( ctx, path, safeMsg, '[REDACTED]' );
 
             return v;
+        }
+        finally
+        {
+            ctx.secretDepth = prevSecretDepth;
         }
 
         for( let i = startIdx; i < ctx.errors.length; i++ )
@@ -3419,8 +3708,6 @@ export function groupErrorsByPath( errors: IValidationError[]): Record<string, {
     return grouped;
 }
 
-export { compileSchema, getOrCompileSchema } from './schema-compiler.js';
-
 /**
  * Array indices become numbers, the way Zod reports them. Every other segment stays a string, so an
  * object key that merely looks numeric is not turned into an index, and a key containing a bracket
@@ -3594,18 +3881,37 @@ function mergeValidationOptions<O extends GuardOptions>(
     return { ...baseObj, ...overObj } as O;
 }
 
+function isFastIsCompatible( options?: ValidationMode | ValidationOptions ): boolean
+{
+    if( options === undefined || options === 'strict' ){ return true }
+
+    if( typeof options === 'object' )
+    {
+        return ( options.mode === undefined || options.mode === 'strict' ) && options.from === undefined;
+    }
+
+    return false;
+}
+
 export function createValidator<T = unknown, Input = T>(
     validator : Function,
-    options?  : ValidationMode | ValidationOptions
+    options?  : ValidationMode | ValidationOptions,
+    fastIs?   : ( input: unknown ) => boolean
 ): CompiledValidator<T, Input>
 {
     const fn = (( input: unknown, overrideOptions?: ValidationMode | ValidationOptions ): IValidation<T> =>
         validate<T>( validator, input, mergeValidationOptions( options, overrideOptions ))
     ) as CompiledValidator<T, Input>;
+    const canUseFastIs = Boolean( fastIs ) && isFastIsCompatible( options );
 
     fn.validate = fn;
-    fn.is = ( input: unknown, overrideOptions?: ValidationMode | GuardOptions ): input is T =>
-        is( validator, input, mergeValidationOptions( options, overrideOptions ));
+    fn.is = canUseFastIs
+        ? ( input: unknown, overrideOptions?: ValidationMode | GuardOptions ): input is T =>
+            overrideOptions === undefined
+                ? fastIs!( input )
+                : is( validator, input, mergeValidationOptions( options, overrideOptions ))
+        : ( input: unknown, overrideOptions?: ValidationMode | GuardOptions ): input is T =>
+            is( validator, input, mergeValidationOptions( options, overrideOptions ));
     fn.assert = ( input: unknown, overrideOptions?: ValidationMode | AssertOptions ): T =>
         assert( validator, input, mergeValidationOptions( options as AssertOptions | ValidationMode | undefined, overrideOptions ));
     fn.assertGuard = ( input: unknown, overrideOptions?: ValidationMode | AssertGuardOptions ): void =>

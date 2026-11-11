@@ -9,18 +9,20 @@ import {
     randomGenerator as rawRandomGenerator,
     validateSchema,
     compileSchema,
-    validators,
-    assignBracketPair,
-    extractFormDataObject,
-    extractHeadersObject,
-    splitHeaderList,
-    toHeaderKebabKey,
     ParseError,
     SerializationError,
     type ParseOutput,
     type SerializeInput,
     type tag
 } from '../src/index.js';
+import {
+    validators,
+    assignBracketPair,
+    extractFormDataObject,
+    extractHeadersObject,
+    splitHeaderList,
+    toHeaderKebabKey
+} from '../src/runtime/validators.js';
 import {
     expectFile,
     expectBlob,

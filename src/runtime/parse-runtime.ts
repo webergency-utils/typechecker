@@ -9,12 +9,18 @@ import {
     extractHeadersObject,
     MAX_BRACKET_KEYS,
     splitHeaderList,
+    formatConstraintMessage,
+    isMinDateValid,
+    isMaxDateValid,
+    splitStringValue,
     type CoercionKind,
     type StandardSchemaV1,
     type ValidationMode,
     type UnionResolution
 } from './validators.js';
+export { formatConstraintMessage, validators };
 import { getCachedPattern, testRegex } from './regex.js';
+export { getCachedPattern, testRegex };
 import { resolvePath, hasPath, tokenizePath, isIndexSegment } from './path.js';
 import type { CasingFormat } from './casing.js';
 import
@@ -176,8 +182,22 @@ function redactSecretText( text: string, rawVal: any ): string
     return out;
 }
 
+let parseSecretDepth = 0;
+
+export function formatParseMessage( template: string, path: string, value: any ): string
+{
+    return formatConstraintMessage( template, path, value, parseSecretDepth > 0 );
+}
+
+function resolveParseMsg( msg: string | undefined, fallback: string, path: string, val: any ): string
+{
+    return msg !== undefined ? formatConstraintMessage( msg, path, val, parseSecretDepth > 0 ) : fallback;
+}
+
 export function redactParseSecret<T>( fn: () => T, rawVal: any, path: string = '' ): T
 {
+    parseSecretDepth++;
+
     try
     {
         return fn();
@@ -200,6 +220,10 @@ export function redactParseSecret<T>( fn: () => T, rawVal: any, path: string = '
         const rawMsg = e instanceof Error ? e.message : String( e );
 
         throw new ParseError( path, redactSecretText( rawMsg, rawVal ));
+    }
+    finally
+    {
+        parseSecretDepth--;
     }
 }
 
@@ -255,6 +279,26 @@ export function recordParseObjectStats( stripped: number, matched: number, ctx?:
     }
 }
 
+let parseUnionProbeDepth = 0;
+let savedParseStackTraceLimit = 10;
+
+function enterParseUnionProbe(): void
+{
+    if( parseUnionProbeDepth++ === 0 )
+    {
+        savedParseStackTraceLimit = Error.stackTraceLimit;
+        Error.stackTraceLimit = 0;
+    }
+}
+
+function exitParseUnionProbe(): void
+{
+    if( --parseUnionProbeDepth === 0 )
+    {
+        Error.stackTraceLimit = savedParseStackTraceLimit;
+    }
+}
+
 export function parseUnion(
     v             : any,
     path          : string,
@@ -277,35 +321,46 @@ export function parseUnion(
     if( !probeBestFit )
     {
         const top = parseProbeStack.length > 0 ? parseProbeStack[parseProbeStack.length - 1] : undefined;
+        enterParseUnionProbe();
 
-        for( const arm of arms )
+        try
         {
-            const savedStripped = top ? top.stripped : 0;
-            const savedMatched = top ? top.matched : 0;
-
-            try
+            for( const arm of arms )
             {
-                return arm( v, path );
-            }
-            catch( e )
-            {
-                if( top )
-                {
-                    top.stripped = savedStripped;
-                    top.matched = savedMatched;
-                }
+                const savedStripped = top ? top.stripped : 0;
+                const savedMatched = top ? top.matched : 0;
 
-                if( e instanceof ParseError )
+                try
                 {
-                    last = e;
-                    continue;
+                    return arm( v, path );
                 }
+                catch( e )
+                {
+                    if( top )
+                    {
+                        top.stripped = savedStripped;
+                        top.matched = savedMatched;
+                    }
 
-                throw e;
+                    if( e instanceof ParseError )
+                    {
+                        last = e;
+                        continue;
+                    }
+
+                    throw e;
+                }
             }
         }
+        finally
+        {
+            exitParseUnionProbe();
+        }
 
-        if( last && parseErrorCode( last ) === expected ){ throw last }
+        if( last && parseErrorCode( last ) === expected )
+        {
+            throw new ParseError( last.path, expected );
+        }
 
         throw new ParseError( path, expected );
     }
@@ -316,59 +371,67 @@ export function parseUnion(
     let bestMatched = -1;
     let fallbackResult: any;
     let hasFallback = false;
+    enterParseUnionProbe();
 
-    for( let i = 0; i < arms.length; i++ )
+    try
     {
-        const isFallback = Boolean( fallbackFlags && fallbackFlags[i]);
-
-        if( isFallback && ( hasBest || hasFallback )){ continue }
-
-        const frame: ParseProbeFrame = { stripped : 0, matched : 0 };
-        parseProbeStack.push( frame );
-
-        try
+        for( let i = 0; i < arms.length; i++ )
         {
-            const res = arms[i]( v, path );
-            parseProbeStack.pop();
+            const isFallback = Boolean( fallbackFlags && fallbackFlags[i]);
 
-            if( isFallback )
+            if( isFallback && ( hasBest || hasFallback )){ continue }
+
+            const frame: ParseProbeFrame = { stripped : 0, matched : 0 };
+            parseProbeStack.push( frame );
+
+            try
             {
-                fallbackResult = res;
-                hasFallback = true;
-                continue;
+                const res = arms[i]( v, path );
+                parseProbeStack.pop();
+
+                if( isFallback )
+                {
+                    fallbackResult = res;
+                    hasFallback = true;
+                    continue;
+                }
+
+                if( frame.stripped === 0 )
+                {
+                    recordParseObjectStats( 0, frame.matched );
+
+                    return res;
+                }
+
+                if(
+                    !hasBest ||
+                    frame.stripped < bestStripped ||
+                    ( frame.stripped === bestStripped && frame.matched > bestMatched )
+                )
+                {
+                    bestResult = res;
+                    hasBest = true;
+                    bestStripped = frame.stripped;
+                    bestMatched = frame.matched;
+                }
             }
-
-            if( frame.stripped === 0 )
+            catch( e )
             {
-                recordParseObjectStats( 0, frame.matched );
+                parseProbeStack.pop();
 
-                return res;
-            }
+                if( e instanceof ParseError )
+                {
+                    last = e;
+                    continue;
+                }
 
-            if(
-                !hasBest ||
-                frame.stripped < bestStripped ||
-                ( frame.stripped === bestStripped && frame.matched > bestMatched )
-            )
-            {
-                bestResult = res;
-                hasBest = true;
-                bestStripped = frame.stripped;
-                bestMatched = frame.matched;
+                throw e;
             }
         }
-        catch( e )
-        {
-            parseProbeStack.pop();
-
-            if( e instanceof ParseError )
-            {
-                last = e;
-                continue;
-            }
-
-            throw e;
-        }
+    }
+    finally
+    {
+        exitParseUnionProbe();
     }
 
     if( hasBest )
@@ -383,7 +446,10 @@ export function parseUnion(
         return fallbackResult;
     }
 
-    if( last && parseErrorCode( last ) === expected ){ throw last }
+    if( last && parseErrorCode( last ) === expected )
+    {
+        throw new ParseError( last.path, expected );
+    }
 
     throw new ParseError( path, expected );
 }
@@ -937,7 +1003,7 @@ export function applyParseConstraints(
     for( const c of constraints )
     {
         if( c.type === 'default' ){ defaultC.push( c ) }
-        else if( c.type === 'transform' ){ transforms.push( c ) }
+        else if( c.type === 'transform' || c.type === 'transform_split' ){ transforms.push( c ) }
         else if( c.type === 'message' ){ messageC.push( c ) }
         else { remaining.push( c ) }
     }
@@ -948,7 +1014,11 @@ export function applyParseConstraints(
     {
         for( const tc of transforms )
         {
-            if( tc.value === 'lowercase' && typeof v === 'string' ){ v = v.toLowerCase() }
+            if( tc.type === 'transform_split' )
+            {
+                v = splitStringValue( v, typeof tc.value === 'string' ? tc.value : ',' );
+            }
+            else if( tc.value === 'lowercase' && typeof v === 'string' ){ v = v.toLowerCase() }
             else if( tc.value === 'uppercase' && typeof v === 'string' ){ v = v.toUpperCase() }
             else if( tc.value === 'trim' && typeof v === 'string' ){ v = v.trim() }
             else if( tc.value === 'capitalize' && typeof v === 'string' && v.length > 0 )
@@ -973,42 +1043,42 @@ export function applyParseConstraints(
         {
             if( typeof v === 'string' && v.length < c.value )
             {
-                throw new ParseError( path, msg || `MinLength<${c.value}>` );
+                throw new ParseError( path, resolveParseMsg( msg, `MinLength<${c.value}>`, path, v ));
             }
         }
         else if( c.type === 'maxLength' )
         {
             if( typeof v === 'string' && v.length > c.value )
             {
-                throw new ParseError( path, msg || `MaxLength<${c.value}>` );
+                throw new ParseError( path, resolveParseMsg( msg, `MaxLength<${c.value}>`, path, v ));
             }
         }
         else if( c.type === 'minimum' )
         {
             if(( typeof v === 'number' || typeof v === 'bigint' ) && v < c.value )
             {
-                throw new ParseError( path, msg || `Minimum<${c.value}>` );
+                throw new ParseError( path, resolveParseMsg( msg, `Minimum<${c.value}>`, path, v ));
             }
         }
         else if( c.type === 'maximum' )
         {
             if(( typeof v === 'number' || typeof v === 'bigint' ) && v > c.value )
             {
-                throw new ParseError( path, msg || `Maximum<${c.value}>` );
+                throw new ParseError( path, resolveParseMsg( msg, `Maximum<${c.value}>`, path, v ));
             }
         }
         else if( c.type === 'exclusiveMinimum' )
         {
             if(( typeof v === 'number' || typeof v === 'bigint' ) && v <= c.value )
             {
-                throw new ParseError( path, msg || `ExclusiveMinimum<${c.value}>` );
+                throw new ParseError( path, resolveParseMsg( msg, `ExclusiveMinimum<${c.value}>`, path, v ));
             }
         }
         else if( c.type === 'exclusiveMaximum' )
         {
             if(( typeof v === 'number' || typeof v === 'bigint' ) && v >= c.value )
             {
-                throw new ParseError( path, msg || `ExclusiveMaximum<${c.value}>` );
+                throw new ParseError( path, resolveParseMsg( msg, `ExclusiveMaximum<${c.value}>`, path, v ));
             }
         }
         else if( c.type === 'multipleOf' )
@@ -1021,19 +1091,78 @@ export function applyParseConstraints(
 
                     if( divisor === 0n || BigInt( v ) % divisor !== 0n )
                     {
-                        throw new ParseError( path, msg || `MultipleOf<${c.value}>` );
+                        throw new ParseError( path, resolveParseMsg( msg, `MultipleOf<${c.value}>`, path, v ));
                     }
                 }
                 catch( e )
                 {
                     if( e instanceof ParseError ){ throw e }
 
-                    throw new ParseError( path, msg || `MultipleOf<${c.value}>` );
+                    throw new ParseError( path, resolveParseMsg( msg, `MultipleOf<${c.value}>`, path, v ));
                 }
             }
             else if( typeof v === 'number' && !isMultipleOfNumber( v, c.value ))
             {
-                throw new ParseError( path, msg || `MultipleOf<${c.value}>` );
+                throw new ParseError( path, resolveParseMsg( msg, `MultipleOf<${c.value}>`, path, v ));
+            }
+        }
+        else if( c.type === 'integer' )
+        {
+            if( typeof v === 'number' && !Number.isInteger( v ))
+            {
+                throw new ParseError( path, resolveParseMsg( msg, 'Integer', path, v ));
+            }
+        }
+        else if( c.type === 'safeInteger' )
+        {
+            if(
+                ( typeof v === 'number' && !Number.isSafeInteger( v )) ||
+                ( typeof v === 'bigint' && ( v < -9007199254740991n || v > 9007199254740991n ))
+            )
+            {
+                throw new ParseError( path, resolveParseMsg( msg, 'SafeInteger', path, v ));
+            }
+        }
+        else if( c.type === 'positive' )
+        {
+            if(( typeof v === 'number' && !( v > 0 )) || ( typeof v === 'bigint' && v <= 0n ))
+            {
+                throw new ParseError( path, resolveParseMsg( msg, 'Positive', path, v ));
+            }
+        }
+        else if( c.type === 'nonNegative' )
+        {
+            if(( typeof v === 'number' && !( v >= 0 )) || ( typeof v === 'bigint' && v < 0n ))
+            {
+                throw new ParseError( path, resolveParseMsg( msg, 'NonNegative', path, v ));
+            }
+        }
+        else if( c.type === 'negative' )
+        {
+            if(( typeof v === 'number' && !( v < 0 )) || ( typeof v === 'bigint' && v >= 0n ))
+            {
+                throw new ParseError( path, resolveParseMsg( msg, 'Negative', path, v ));
+            }
+        }
+        else if( c.type === 'finite' )
+        {
+            if( typeof v === 'number' && !Number.isFinite( v ))
+            {
+                throw new ParseError( path, resolveParseMsg( msg, 'Finite', path, v ));
+            }
+        }
+        else if( c.type === 'minDate' )
+        {
+            if( !isMinDateValid( v, c.value ))
+            {
+                throw new ParseError( path, resolveParseMsg( msg, `MinDate<'${c.value}'>`, path, v ));
+            }
+        }
+        else if( c.type === 'maxDate' )
+        {
+            if( !isMaxDateValid( v, c.value ))
+            {
+                throw new ParseError( path, resolveParseMsg( msg, `MaxDate<'${c.value}'>`, path, v ));
             }
         }
         else if( c.type === 'pattern' )
@@ -1042,11 +1171,11 @@ export function applyParseConstraints(
             {
                 const regex = c.regex !== undefined ? c.regex : getCachedPattern( c.value );
 
-                if( !regex ){ throw new ParseError( path, msg || 'UnsafePattern' ) }
+                if( !regex ){ throw new ParseError( path, resolveParseMsg( msg, 'UnsafePattern', path, v )) }
 
                 if( !testRegex( regex, v ))
                 {
-                    throw new ParseError( path, msg || `Pattern<'${c.value}'>` );
+                    throw new ParseError( path, resolveParseMsg( msg, `Pattern<'${c.value}'>`, path, v ));
                 }
             }
         }
@@ -1056,7 +1185,7 @@ export function applyParseConstraints(
 
             if( size < c.value )
             {
-                throw new ParseError( path, msg || `MinItems<${c.value}>` );
+                throw new ParseError( path, resolveParseMsg( msg, `MinItems<${c.value}>`, path, v ));
             }
         }
         else if( c.type === 'maxItems' && ( Array.isArray( v ) || v instanceof Set ))
@@ -1065,7 +1194,7 @@ export function applyParseConstraints(
 
             if( size > c.value )
             {
-                throw new ParseError( path, msg || `MaxItems<${c.value}>` );
+                throw new ParseError( path, resolveParseMsg( msg, `MaxItems<${c.value}>`, path, v ));
             }
         }
         else if( c.type === 'minProperties' && ( v instanceof Map || isPlainObject( v )))
@@ -1074,7 +1203,7 @@ export function applyParseConstraints(
 
             if( size < c.value )
             {
-                throw new ParseError( path, msg || `MinProperties<${c.value}>` );
+                throw new ParseError( path, resolveParseMsg( msg, `MinProperties<${c.value}>`, path, v ));
             }
         }
         else if( c.type === 'maxProperties' && ( v instanceof Map || isPlainObject( v )))
@@ -1083,18 +1212,19 @@ export function applyParseConstraints(
 
             if( size > c.value )
             {
-                throw new ParseError( path, msg || `MaxProperties<${c.value}>` );
+                throw new ParseError( path, resolveParseMsg( msg, `MaxProperties<${c.value}>`, path, v ));
             }
         }
         else if( c.type === 'format' )
         {
             const ctx =
             {
-                success : true,
-                errors  : [] as { path : string, value : any, error : string }[],
-                mode    : 'strict' as const,
+                success     : true,
+                errors      : [] as { path : string, value : any, error : string }[],
+                mode        : 'strict' as const,
                 from,
-                root    : root !== undefined ? root : v
+                root        : root !== undefined ? root : v,
+                secretDepth : parseSecretDepth
             };
             v = validators.format( v, path, ctx as any, c.value, msg );
 
@@ -1114,7 +1244,7 @@ export function applyParseConstraints(
 
                 if( !hasPath( rootTarget, resolved ))
                 {
-                    throw new ParseError( path, msg || `Requires<${key}>` );
+                    throw new ParseError( path, resolveParseMsg( msg, `Requires<${key}>`, path, v ));
                 }
             }
         }
@@ -1122,7 +1252,7 @@ export function applyParseConstraints(
         {
             if( Array.isArray( v ) && !hasUniqueItems( v ))
             {
-                throw new ParseError( path, msg || 'UniqueItems' );
+                throw new ParseError( path, resolveParseMsg( msg, 'UniqueItems', path, v ));
             }
         }
     }
@@ -1158,12 +1288,12 @@ export function applyContains(
 
     if( count < minContains )
     {
-        throw new ParseError( path, message || `Contains<min:${minContains}>` );
+        throw new ParseError( path, resolveParseMsg( message, `Contains<min:${minContains}>`, path, v ));
     }
 
     if( maxContains !== undefined && count > maxContains )
     {
-        throw new ParseError( path, message || `Contains<max:${maxContains}>` );
+        throw new ParseError( path, resolveParseMsg( message, `Contains<max:${maxContains}>`, path, v ));
     }
 
     return v;
@@ -1190,7 +1320,7 @@ export function applyPropertyNames(
         {
             if( e instanceof ParseError )
             {
-                throw new ParseError( e.path, message || parseErrorCode( e ));
+                throw new ParseError( e.path, resolveParseMsg( message, parseErrorCode( e ), e.path, key ));
             }
 
             throw e;

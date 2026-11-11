@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { validators, coerceQueryNumber, coerceQueryBoolean, coerceQueryDate, getOrCompileSchema, is, assert, assertGuard, validate } from '../src/runtime/validators.js';
+import { validators, coerceQueryNumber, coerceQueryBoolean, coerceQueryDate, is, assert, assertGuard, validate } from '../src/runtime/validators.js';
+import { getOrCompileSchema } from '../src/runtime/schema-compiler.js';
 
 describe( 'Validators', () => 
 {

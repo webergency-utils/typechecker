@@ -1,7 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import ts from 'typescript';
-import { hasUniqueItems, isMultipleOfNumber } from '../runtime/validators.js';
+import {
+    formatConstraintMessage,
+    hasUniqueItems,
+    isMultipleOfNumber,
+    splitStringValue
+} from '../runtime/validators.js';
+import { isSafeRegexSource } from '../runtime/regex.js';
 import { TagName } from './tagKeys.js';
 import {
     collectConstraintsFromProps,
@@ -14,6 +20,9 @@ import {
     type ParsedConstraint
 } from './type-helpers.js';
 
+export const LITERAL_CONSTRAINT_DIAGNOSTIC_CODE = 90001;
+export const CONTRADICTORY_CONSTRAINT_DIAGNOSTIC_CODE = 90002;
+
 export interface IStaticConstraint
 {
     type     : string
@@ -25,12 +34,26 @@ export interface IStaticConstraint
 const STATICALLY_CHECKED: ReadonlySet<string> = new Set<TagName>([
     'minLength', 'maxLength',
     'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf',
+    'integer', 'safeInteger', 'positive', 'nonNegative', 'negative', 'finite',
+    'minDate', 'maxDate',
     'minItems', 'maxItems', 'uniqueItems',
     'minProperties', 'maxProperties'
 ]);
 
+const BOOLEAN_FLAG_CONSTRAINTS: ReadonlySet<string> = new Set([
+    'uniqueItems', 'integer', 'safeInteger', 'positive', 'nonNegative', 'negative', 'finite'
+]);
+
 const STATIC_MACRO_FUNCTIONS: ReadonlySet<string> = new Set([
     'is', 'assert', 'assertGuard', 'validate', 'stringify', 'safeSerialize', 'parse', 'safeParse'
+]);
+
+const ALL_MACRO_FUNCTIONS: ReadonlySet<string> = new Set([
+    'is', 'assert', 'assertGuard', 'validate', 'validator', 'standardSchema', 'jsonSchema',
+    'stringify', 'serializer', 'safeSerialize',
+    'parse', 'parser', 'safeParse',
+    'clone', 'cloner', 'prune', 'pruner',
+    'random', 'randomGenerator'
 ]);
 
 const RELATIVE_TYPECHECKER_INDEX_RE = /^(?:\.\.?\/)+(?:(?:src|dist)\/)?index(?:\.(?:js|cjs|mjs|ts|mts|cts))?$/;
@@ -63,7 +86,14 @@ function collectAllParsedConstraints(
 
     for( const sub of types )
     {
-        raw.push( ...collectConstraintsFromProps( getTypeProps( sub, checker ), checker ));
+        try
+        {
+            raw.push( ...collectConstraintsFromProps( getTypeProps( sub, checker ), checker ));
+        }
+        catch
+        {
+            // Uninstantiated generic tag definitions (e.g. Custom<Fn>) are validated during macro codegen.
+        }
     }
 
     let merged = mergeConstraintsWithJsDoc( raw, extractTypeJsDocInfo( type, checker ).constraints );
@@ -81,6 +111,26 @@ function collectAllParsedConstraints(
     return merged;
 }
 
+function toStaticConstraints( parsedConstraints: ParsedConstraint[]): IStaticConstraint[]
+{
+    const constraints: IStaticConstraint[] = [];
+
+    for( const c of parsedConstraints )
+    {
+        if( !STATICALLY_CHECKED.has( c.type )){ continue }
+
+        const value = BOOLEAN_FLAG_CONSTRAINTS.has( c.type )
+            ? ( c.value === undefined ? true : c.value )
+            : c.value;
+
+        if( value === undefined ){ continue }
+
+        constraints.push({ type : c.type, value, message : c.message });
+    }
+
+    return constraints;
+}
+
 /**
  * Extract Minimum / Length / Items-style constraints from a (possibly intersected) type.
  */
@@ -90,20 +140,7 @@ export function extractStaticConstraints(
     extraJsDoc?: ParsedConstraint[]
 ): IStaticConstraint[]
 {
-    const constraints: IStaticConstraint[] = [];
-
-    for( const c of collectAllParsedConstraints( type, checker, extraJsDoc ))
-    {
-        if( !STATICALLY_CHECKED.has( c.type )){ continue }
-
-        const value = c.type === 'uniqueItems' ? true : c.value;
-
-        if( value === undefined ){ continue }
-
-        constraints.push({ type : c.type, value, message : c.message });
-    }
-
-    return constraints;
+    return toStaticConstraints( collectAllParsedConstraints( type, checker, extraJsDoc ));
 }
 
 function getSymbolType( checker: ts.TypeChecker, symbol: ts.Symbol ): ts.Type | undefined
@@ -140,7 +177,12 @@ function applyStaticTransforms(
 
     for( const c of parsedConstraints )
     {
-        if( c.type === 'transform_trim' && current.kind === 'string' )
+        if( c.type === 'transform_split' && current.kind === 'string' )
+        {
+            const delim = typeof c.value === 'string' ? c.value : ',';
+            current = { kind : 'array', value : splitStringValue( current.value, delim ) };
+        }
+        else if( c.type === 'transform_trim' && current.kind === 'string' )
         {
             current = { kind : 'string', value : current.value.trim() };
         }
@@ -375,12 +417,39 @@ export function tryGetConstantValue( expr: ts.Expression ): ConstantValue | unde
     return undefined;
 }
 
+function constantRawValue( constant: ConstantValue ): unknown
+{
+    if( constant.kind === 'object' ){ return `{...${constant.keyCount} keys}` }
+
+    return constant.value;
+}
+
+function resolveStaticMsg(
+    msg             : string | undefined,
+    fallbackMessage : string | undefined,
+    defaultMsg      : string,
+    pathStr         : string,
+    constant        : ConstantValue,
+    isSecret        : boolean
+): string
+{
+    const template = msg || fallbackMessage;
+
+    if( !template ){ return defaultMsg }
+
+    return formatConstraintMessage( template, pathStr, constantRawValue( constant ), isSecret );
+}
+
 export function evaluateStaticConstraints(
-    constant: ConstantValue,
-    constraints: IStaticConstraint[]
+    constant        : ConstantValue,
+    constraints     : IStaticConstraint[],
+    pathStr         : string = '',
+    isSecret        : boolean = false,
+    fallbackMessage?: string
 ): string[]
 {
     const errors: string[] = [];
+    const dispVal = isSecret ? '[REDACTED]' : String( constantRawValue( constant ));
 
     for( const c of constraints )
     {
@@ -388,28 +457,44 @@ export function evaluateStaticConstraints(
         {
             if( constant.value < c.value )
             {
-                errors.push( c.message || `Value ${String( constant.value )} does not satisfy Minimum<${c.value}>` );
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Value ${dispVal} does not satisfy Minimum<${c.value}>`,
+                    pathStr, constant, isSecret
+                ));
             }
         }
         else if( c.type === 'maximum' && constant.kind === 'number' )
         {
             if( constant.value > c.value )
             {
-                errors.push( c.message || `Value ${String( constant.value )} does not satisfy Maximum<${c.value}>` );
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Value ${dispVal} does not satisfy Maximum<${c.value}>`,
+                    pathStr, constant, isSecret
+                ));
             }
         }
         else if( c.type === 'exclusiveMinimum' && constant.kind === 'number' )
         {
             if( constant.value <= c.value )
             {
-                errors.push( c.message || `Value ${String( constant.value )} does not satisfy ExclusiveMinimum<${c.value}>` );
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Value ${dispVal} does not satisfy ExclusiveMinimum<${c.value}>`,
+                    pathStr, constant, isSecret
+                ));
             }
         }
         else if( c.type === 'exclusiveMaximum' && constant.kind === 'number' )
         {
             if( constant.value >= c.value )
             {
-                errors.push( c.message || `Value ${String( constant.value )} does not satisfy ExclusiveMaximum<${c.value}>` );
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Value ${dispVal} does not satisfy ExclusiveMaximum<${c.value}>`,
+                    pathStr, constant, isSecret
+                ));
             }
         }
         else if( c.type === 'multipleOf' && constant.kind === 'number' )
@@ -436,62 +521,185 @@ export function evaluateStaticConstraints(
 
             if( !ok )
             {
-                errors.push( c.message || `Value ${String( v )} does not satisfy MultipleOf<${n}>` );
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Value ${dispVal} does not satisfy MultipleOf<${n}>`,
+                    pathStr, constant, isSecret
+                ));
+            }
+        }
+        else if( c.type === 'integer' && constant.kind === 'number' )
+        {
+            if( typeof constant.value === 'number' && !Number.isInteger( constant.value ))
+            {
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Value ${dispVal} does not satisfy Integer`,
+                    pathStr, constant, isSecret
+                ));
+            }
+        }
+        else if( c.type === 'safeInteger' && constant.kind === 'number' )
+        {
+            if(
+                ( typeof constant.value === 'number' && !Number.isSafeInteger( constant.value )) ||
+                ( typeof constant.value === 'bigint' && ( constant.value < -9007199254740991n || constant.value > 9007199254740991n ))
+            )
+            {
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Value ${dispVal} does not satisfy SafeInteger`,
+                    pathStr, constant, isSecret
+                ));
+            }
+        }
+        else if( c.type === 'positive' && constant.kind === 'number' )
+        {
+            if(( typeof constant.value === 'number' && !( constant.value > 0 )) || ( typeof constant.value === 'bigint' && constant.value <= 0n ))
+            {
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Value ${dispVal} does not satisfy Positive`,
+                    pathStr, constant, isSecret
+                ));
+            }
+        }
+        else if( c.type === 'nonNegative' && constant.kind === 'number' )
+        {
+            if(( typeof constant.value === 'number' && !( constant.value >= 0 )) || ( typeof constant.value === 'bigint' && constant.value < 0n ))
+            {
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Value ${dispVal} does not satisfy NonNegative`,
+                    pathStr, constant, isSecret
+                ));
+            }
+        }
+        else if( c.type === 'negative' && constant.kind === 'number' )
+        {
+            if(( typeof constant.value === 'number' && !( constant.value < 0 )) || ( typeof constant.value === 'bigint' && constant.value >= 0n ))
+            {
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Value ${dispVal} does not satisfy Negative`,
+                    pathStr, constant, isSecret
+                ));
+            }
+        }
+        else if( c.type === 'finite' && constant.kind === 'number' )
+        {
+            if( typeof constant.value === 'number' && !Number.isFinite( constant.value ))
+            {
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Value ${dispVal} does not satisfy Finite`,
+                    pathStr, constant, isSecret
+                ));
+            }
+        }
+        else if( c.type === 'minDate' && constant.kind === 'string' && typeof c.value === 'string' )
+        {
+            const ms = Date.parse( constant.value );
+            const bound = Date.parse( c.value );
+
+            if( !Number.isNaN( bound ) && ( Number.isNaN( ms ) || ms < bound ))
+            {
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Value ${dispVal} does not satisfy MinDate<'${c.value}'>`,
+                    pathStr, constant, isSecret
+                ));
+            }
+        }
+        else if( c.type === 'maxDate' && constant.kind === 'string' && typeof c.value === 'string' )
+        {
+            const ms = Date.parse( constant.value );
+            const bound = Date.parse( c.value );
+
+            if( !Number.isNaN( bound ) && ( Number.isNaN( ms ) || ms > bound ))
+            {
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Value ${dispVal} does not satisfy MaxDate<'${c.value}'>`,
+                    pathStr, constant, isSecret
+                ));
             }
         }
         else if( c.type === 'minLength' && constant.kind === 'string' )
         {
             if( constant.value.length < c.value )
             {
-                errors.push( c.message || `Value length ${constant.value.length} does not satisfy MinLength<${c.value}>` );
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Value length ${constant.value.length} does not satisfy MinLength<${c.value}>`,
+                    pathStr, constant, isSecret
+                ));
             }
         }
         else if( c.type === 'maxLength' && constant.kind === 'string' )
         {
             if( constant.value.length > c.value )
             {
-                errors.push( c.message || `Value length ${constant.value.length} does not satisfy MaxLength<${c.value}>` );
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Value length ${constant.value.length} does not satisfy MaxLength<${c.value}>`,
+                    pathStr, constant, isSecret
+                ));
             }
         }
         else if( c.type === 'minItems' && constant.kind === 'array' )
         {
             if( constant.value.length < c.value )
             {
-                errors.push( c.message || `Array length ${constant.value.length} does not satisfy MinItems<${c.value}>` );
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Array length ${constant.value.length} does not satisfy MinItems<${c.value}>`,
+                    pathStr, constant, isSecret
+                ));
             }
         }
         else if( c.type === 'maxItems' && constant.kind === 'array' )
         {
             if( constant.value.length > c.value )
             {
-                errors.push( c.message || `Array length ${constant.value.length} does not satisfy MaxItems<${c.value}>` );
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Array length ${constant.value.length} does not satisfy MaxItems<${c.value}>`,
+                    pathStr, constant, isSecret
+                ));
             }
         }
         else if( c.type === 'uniqueItems' && constant.kind === 'array' )
         {
             if( !hasUniqueItems( constant.value ))
             {
-                errors.push( c.message || 'Array does not satisfy UniqueItems' );
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    'Array does not satisfy UniqueItems',
+                    pathStr, constant, isSecret
+                ));
             }
         }
         else if( c.type === 'minProperties' && constant.kind === 'object' )
         {
             if( constant.keyCount < c.value )
             {
-                errors.push(
-                    c.message ||
-                    `Object key count ${constant.keyCount} does not satisfy MinProperties<${c.value}>`
-                );
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Object key count ${constant.keyCount} does not satisfy MinProperties<${c.value}>`,
+                    pathStr, constant, isSecret
+                ));
             }
         }
         else if( c.type === 'maxProperties' && constant.kind === 'object' )
         {
             if( constant.keyCount > c.value )
             {
-                errors.push(
-                    c.message ||
-                    `Object key count ${constant.keyCount} does not satisfy MaxProperties<${c.value}>`
-                );
+                errors.push( resolveStaticMsg(
+                    c.message, fallbackMessage,
+                    `Object key count ${constant.keyCount} does not satisfy MaxProperties<${c.value}>`,
+                    pathStr, constant, isSecret
+                ));
             }
         }
     }
@@ -499,7 +707,286 @@ export function evaluateStaticConstraints(
     return errors;
 }
 
-function createDiagnostic( node: ts.Node, message: string ): ts.Diagnostic
+function cmpNumeric( a: number | bigint, b: number | bigint ): number
+{
+    if( typeof a === typeof b )
+    {
+        return a < b ? -1 : ( a > b ? 1 : 0 );
+    }
+
+    const numA = Number( a );
+    const numB = Number( b );
+
+    return numA < numB ? -1 : ( numA > numB ? 1 : 0 );
+}
+
+export function evaluateConstraintContradictions( parsedConstraints: ParsedConstraint[]): string[]
+{
+    const errors: string[] = [];
+    let min: number | bigint | undefined;
+    let max: number | bigint | undefined;
+    let exclMin: number | bigint | undefined;
+    let exclMax: number | bigint | undefined;
+    let positive = false;
+    let nonNegative = false;
+    let negative = false;
+    let integer = false;
+    let safeInteger = false;
+    let minLength: number | undefined;
+    let maxLength: number | undefined;
+    let minItems: number | undefined;
+    let maxItems: number | undefined;
+    let minContains: number | undefined;
+    let maxContains: number | undefined;
+    let minProps: number | undefined;
+    let maxProps: number | undefined;
+    let minDate: string | undefined;
+    let maxDate: string | undefined;
+
+    for( const c of parsedConstraints )
+    {
+        if( c.type === 'minimum' && ( typeof c.value === 'number' || typeof c.value === 'bigint' )){ min = c.value }
+        else if( c.type === 'maximum' && ( typeof c.value === 'number' || typeof c.value === 'bigint' )){ max = c.value }
+        else if( c.type === 'exclusiveMinimum' && ( typeof c.value === 'number' || typeof c.value === 'bigint' )){ exclMin = c.value }
+        else if( c.type === 'exclusiveMaximum' && ( typeof c.value === 'number' || typeof c.value === 'bigint' )){ exclMax = c.value }
+        else if( c.type === 'positive' ){ positive = true }
+        else if( c.type === 'nonNegative' ){ nonNegative = true }
+        else if( c.type === 'negative' ){ negative = true }
+        else if( c.type === 'integer' ){ integer = true }
+        else if( c.type === 'safeInteger' ){ safeInteger = true }
+        else if( c.type === 'multipleOf' && ( typeof c.value === 'number' || typeof c.value === 'bigint' ))
+        {
+            if(( typeof c.value === 'number' && !( c.value > 0 )) || ( typeof c.value === 'bigint' && c.value <= 0n ))
+            {
+                errors.push( `Invalid constraint: MultipleOf<${String( c.value )}> must be greater than 0` );
+            }
+        }
+        else if( c.type === 'minLength' && typeof c.value === 'number' ){ minLength = c.value }
+        else if( c.type === 'maxLength' && typeof c.value === 'number' ){ maxLength = c.value }
+        else if( c.type === 'minItems' && typeof c.value === 'number' ){ minItems = c.value }
+        else if( c.type === 'maxItems' && typeof c.value === 'number' ){ maxItems = c.value }
+        else if( c.type === 'minContains' && typeof c.value === 'number' ){ minContains = c.value }
+        else if( c.type === 'maxContains' && typeof c.value === 'number' ){ maxContains = c.value }
+        else if( c.type === 'minProperties' && typeof c.value === 'number' ){ minProps = c.value }
+        else if( c.type === 'maxProperties' && typeof c.value === 'number' ){ maxProps = c.value }
+        else if( c.type === 'minDate' && typeof c.value === 'string' ){ minDate = c.value }
+        else if( c.type === 'maxDate' && typeof c.value === 'string' ){ maxDate = c.value }
+        else if( c.type === 'pattern' && typeof c.value === 'string' )
+        {
+            let syntaxOk = true;
+
+            try
+            {
+                new RegExp( c.value );
+            }
+            catch
+            {
+                syntaxOk = false;
+                errors.push( `Invalid constraint: Pattern<'${c.value}'> is not a valid regular expression` );
+            }
+
+            if( syntaxOk && !isSafeRegexSource( c.value ))
+            {
+                errors.push( `Unsafe constraint: Pattern<'${c.value}'> is vulnerable to catastrophic backtracking (ReDoS)` );
+            }
+        }
+    }
+
+    let numericFlagged = false;
+
+    if( min !== undefined && max !== undefined && cmpNumeric( min, max ) > 0 )
+    {
+        errors.push( `Contradictory constraints: Minimum<${String( min )}> exceeds Maximum<${String( max )}>` );
+        numericFlagged = true;
+    }
+    else if( exclMin !== undefined && max !== undefined && cmpNumeric( exclMin, max ) >= 0 )
+    {
+        errors.push( `Contradictory constraints: ExclusiveMinimum<${String( exclMin )}> must be less than Maximum<${String( max )}>` );
+        numericFlagged = true;
+    }
+    else if( min !== undefined && exclMax !== undefined && cmpNumeric( min, exclMax ) >= 0 )
+    {
+        errors.push( `Contradictory constraints: Minimum<${String( min )}> must be less than ExclusiveMaximum<${String( exclMax )}>` );
+        numericFlagged = true;
+    }
+    else if( exclMin !== undefined && exclMax !== undefined && cmpNumeric( exclMin, exclMax ) >= 0 )
+    {
+        errors.push( `Contradictory constraints: ExclusiveMinimum<${String( exclMin )}> must be less than ExclusiveMaximum<${String( exclMax )}>` );
+        numericFlagged = true;
+    }
+
+    let lowerVal: number | bigint | undefined;
+    let lowerIncl = true;
+    let lowerDesc = '';
+
+    if( min !== undefined )
+    {
+        lowerVal = min;
+        lowerIncl = true;
+        lowerDesc = `Minimum<${String( min )}>`;
+    }
+
+    if( exclMin !== undefined && ( lowerVal === undefined || cmpNumeric( exclMin, lowerVal ) >= 0 ))
+    {
+        lowerVal = exclMin;
+        lowerIncl = false;
+        lowerDesc = `ExclusiveMinimum<${String( exclMin )}>`;
+    }
+
+    if( positive && ( lowerVal === undefined || cmpNumeric( 0, lowerVal ) >= 0 ))
+    {
+        lowerVal = 0;
+        lowerIncl = false;
+        lowerDesc = 'Positive';
+    }
+    else if( nonNegative && ( lowerVal === undefined || cmpNumeric( 0, lowerVal ) > 0 ))
+    {
+        lowerVal = 0;
+        lowerIncl = true;
+        lowerDesc = 'NonNegative';
+    }
+
+    let upperVal: number | bigint | undefined;
+    let upperIncl = true;
+    let upperDesc = '';
+
+    if( max !== undefined )
+    {
+        upperVal = max;
+        upperIncl = true;
+        upperDesc = `Maximum<${String( max )}>`;
+    }
+
+    if( exclMax !== undefined && ( upperVal === undefined || cmpNumeric( exclMax, upperVal ) <= 0 ))
+    {
+        upperVal = exclMax;
+        upperIncl = false;
+        upperDesc = `ExclusiveMaximum<${String( exclMax )}>`;
+    }
+
+    if( negative && ( upperVal === undefined || cmpNumeric( 0, upperVal ) <= 0 ))
+    {
+        upperVal = 0;
+        upperIncl = false;
+        upperDesc = 'Negative';
+    }
+
+    if( !numericFlagged && lowerVal !== undefined && upperVal !== undefined )
+    {
+        const cmp = cmpNumeric( lowerVal, upperVal );
+
+        if( cmp > 0 || ( cmp === 0 && ( !lowerIncl || !upperIncl )))
+        {
+            errors.push( `Contradictory constraints: ${lowerDesc} conflicts with ${upperDesc}` );
+            numericFlagged = true;
+        }
+    }
+
+    if( !numericFlagged && ( integer || safeInteger ) && typeof lowerVal === 'number' && typeof upperVal === 'number' )
+    {
+        const intLo = lowerIncl ? Math.ceil( lowerVal ) : Math.floor( lowerVal ) + 1;
+        const intHi = upperIncl ? Math.floor( upperVal ) : Math.ceil( upperVal ) - 1;
+
+        if( intLo > intHi )
+        {
+            errors.push( `Contradictory constraints: no integer exists between ${lowerDesc} and ${upperDesc}` );
+        }
+    }
+
+    if( minLength !== undefined && minLength < 0 )
+    {
+        errors.push( `Invalid constraint: MinLength<${minLength}> cannot be negative` );
+    }
+
+    if( maxLength !== undefined && maxLength < 0 )
+    {
+        errors.push( `Invalid constraint: MaxLength<${maxLength}> cannot be negative` );
+    }
+
+    if( minLength !== undefined && maxLength !== undefined && minLength >= 0 && maxLength >= 0 && minLength > maxLength )
+    {
+        errors.push( `Contradictory constraints: MinLength<${minLength}> exceeds MaxLength<${maxLength}>` );
+    }
+
+    if( minItems !== undefined && minItems < 0 )
+    {
+        errors.push( `Invalid constraint: MinItems<${minItems}> cannot be negative` );
+    }
+
+    if( maxItems !== undefined && maxItems < 0 )
+    {
+        errors.push( `Invalid constraint: MaxItems<${maxItems}> cannot be negative` );
+    }
+
+    if( minItems !== undefined && maxItems !== undefined && minItems >= 0 && maxItems >= 0 && minItems > maxItems )
+    {
+        errors.push( `Contradictory constraints: MinItems<${minItems}> exceeds MaxItems<${maxItems}>` );
+    }
+
+    if( minContains !== undefined && minContains < 0 )
+    {
+        errors.push( `Invalid constraint: MinContains<${minContains}> cannot be negative` );
+    }
+
+    if( maxContains !== undefined && maxContains < 0 )
+    {
+        errors.push( `Invalid constraint: MaxContains<${maxContains}> cannot be negative` );
+    }
+
+    if( minContains !== undefined && maxContains !== undefined && minContains >= 0 && maxContains >= 0 && minContains > maxContains )
+    {
+        errors.push( `Contradictory constraints: MinContains<${minContains}> exceeds MaxContains<${maxContains}>` );
+    }
+
+    if( minContains !== undefined && maxItems !== undefined && minContains >= 0 && maxItems >= 0 && minContains > maxItems )
+    {
+        errors.push( `Contradictory constraints: MinContains<${minContains}> exceeds MaxItems<${maxItems}>` );
+    }
+
+    if( minProps !== undefined && minProps < 0 )
+    {
+        errors.push( `Invalid constraint: MinProperties<${minProps}> cannot be negative` );
+    }
+
+    if( maxProps !== undefined && maxProps < 0 )
+    {
+        errors.push( `Invalid constraint: MaxProperties<${maxProps}> cannot be negative` );
+    }
+
+    if( minProps !== undefined && maxProps !== undefined && minProps >= 0 && maxProps >= 0 && minProps > maxProps )
+    {
+        errors.push( `Contradictory constraints: MinProperties<${minProps}> exceeds MaxProperties<${maxProps}>` );
+    }
+
+    if( minDate !== undefined || maxDate !== undefined )
+    {
+        const minMs = minDate !== undefined ? Date.parse( minDate ) : undefined;
+        const maxMs = maxDate !== undefined ? Date.parse( maxDate ) : undefined;
+
+        if( minDate !== undefined && Number.isNaN( minMs ))
+        {
+            errors.push( `Invalid constraint: MinDate<'${minDate}'> is not a valid ISO date` );
+        }
+
+        if( maxDate !== undefined && Number.isNaN( maxMs ))
+        {
+            errors.push( `Invalid constraint: MaxDate<'${maxDate}'> is not a valid ISO date` );
+        }
+
+        if( minMs !== undefined && maxMs !== undefined && !Number.isNaN( minMs ) && !Number.isNaN( maxMs ) && minMs > maxMs )
+        {
+            errors.push( `Contradictory constraints: MinDate<'${minDate}'> exceeds MaxDate<'${maxDate}'>` );
+        }
+    }
+
+    return errors;
+}
+
+function createDiagnostic(
+    node    : ts.Node,
+    message : string,
+    code    : number = LITERAL_CONSTRAINT_DIAGNOSTIC_CODE
+): ts.Diagnostic
 {
     const start = node.getStart();
     const length = node.getWidth();
@@ -510,9 +997,37 @@ function createDiagnostic( node: ts.Node, message: string ): ts.Diagnostic
         length,
         messageText : message,
         category    : ts.DiagnosticCategory.Error,
-        code        : 90001,
+        code,
         source      : 'webergency-typechecker'
     };
+}
+
+function checkTypeNodeContradictions(
+    typeNode    : ts.TypeNode,
+    checker     : ts.TypeChecker,
+    diagnostics : ts.Diagnostic[],
+    sourceFile  : ts.SourceFile,
+    extraJsDoc? : ParsedConstraint[]
+): void
+{
+    if( ts.isTypeReferenceNode( typeNode ) && !typeNode.typeArguments?.length && ( !extraJsDoc || extraJsDoc.length === 0 ))
+    {
+        const sym = checker.getSymbolAtLocation( typeNode.typeName );
+        const decl = sym?.declarations?.[0];
+
+        if( decl && decl.getSourceFile() === sourceFile )
+        {
+            return;
+        }
+    }
+
+    const type = wrapTypeNodeWithJsDoc( typeNode, checker.getTypeFromTypeNode( typeNode ), checker );
+    const parsedConstraints = collectAllParsedConstraints( type, checker, extraJsDoc );
+
+    for( const msg of evaluateConstraintContradictions( parsedConstraints ))
+    {
+        diagnostics.push( createDiagnostic( typeNode, msg, CONTRADICTORY_CONSTRAINT_DIAGNOSTIC_CODE ));
+    }
 }
 
 function checkExpressionAgainstType(
@@ -522,24 +1037,16 @@ function checkExpressionAgainstType(
     diagnostics : ts.Diagnostic[],
     anchorNode? : ts.Node,
     depth       : number = 0,
-    extraJsDoc? : ParsedConstraint[]
+    extraJsDoc? : ParsedConstraint[],
+    propPath    : string = ''
 )
 {
     if( depth > MAX_STATIC_DEPTH ){ return }
 
     const parsedConstraints = collectAllParsedConstraints( type, checker, extraJsDoc );
-    const constraints: IStaticConstraint[] = [];
-
-    for( const c of parsedConstraints )
-    {
-        if( !STATICALLY_CHECKED.has( c.type )){ continue }
-
-        const value = c.type === 'uniqueItems' ? true : c.value;
-
-        if( value === undefined ){ continue }
-
-        constraints.push({ type : c.type, value, message : c.message });
-    }
+    const constraints = toStaticConstraints( parsedConstraints );
+    const isSecret = parsedConstraints.some( c => c.type === 'secret' );
+    const fallbackMessage = parsedConstraints.find( c => c.type === 'message' )?.value;
 
     type = unwrapNonNullishType( type );
 
@@ -556,7 +1063,7 @@ function checkExpressionAgainstType(
 
             if( !transformed.skip && transformed.value )
             {
-                for( const msg of evaluateStaticConstraints( transformed.value, constraints ))
+                for( const msg of evaluateStaticConstraints( transformed.value, constraints, propPath, isSecret, fallbackMessage ))
                 {
                     diagnostics.push( createDiagnostic( target, msg ));
                 }
@@ -568,7 +1075,10 @@ function checkExpressionAgainstType(
 
             for( const msg of evaluateStaticConstraints(
                 { kind : 'array', value : new Array( unwrapped.elements.length ) },
-                lengthOnly
+                lengthOnly,
+                propPath,
+                isSecret,
+                fallbackMessage
             ))
             {
                 diagnostics.push( createDiagnostic( target, msg ));
@@ -578,11 +1088,11 @@ function checkExpressionAgainstType(
 
     if( ts.isObjectLiteralExpression( unwrapped ))
     {
-        checkObjectLiteral( unwrapped, type, checker, diagnostics, anchorNode, depth );
+        checkObjectLiteral( unwrapped, type, checker, diagnostics, anchorNode, depth, propPath );
     }
     else if( ts.isArrayLiteralExpression( unwrapped ))
     {
-        checkArrayLiteral( unwrapped, type, checker, diagnostics, anchorNode, depth );
+        checkArrayLiteral( unwrapped, type, checker, diagnostics, anchorNode, depth, propPath );
     }
 }
 
@@ -609,24 +1119,16 @@ function checkRuntimeConstantAgainstType(
     diagnostics : ts.Diagnostic[],
     anchorNode  : ts.Node,
     depth       : number = 0,
-    extraJsDoc? : ParsedConstraint[]
+    extraJsDoc? : ParsedConstraint[],
+    propPath    : string = ''
 )
 {
     if( depth > MAX_STATIC_DEPTH || val === null || val === undefined ){ return }
 
     const parsedConstraints = collectAllParsedConstraints( type, checker, extraJsDoc );
-    const constraints: IStaticConstraint[] = [];
-
-    for( const c of parsedConstraints )
-    {
-        if( !STATICALLY_CHECKED.has( c.type )){ continue }
-
-        const value = c.type === 'uniqueItems' ? true : c.value;
-
-        if( value === undefined ){ continue }
-
-        constraints.push({ type : c.type, value, message : c.message });
-    }
+    const constraints = toStaticConstraints( parsedConstraints );
+    const isSecret = parsedConstraints.some( c => c.type === 'secret' );
+    const fallbackMessage = parsedConstraints.find( c => c.type === 'message' )?.value;
 
     type = unwrapNonNullishType( type );
 
@@ -640,7 +1142,7 @@ function checkRuntimeConstantAgainstType(
 
             if( !transformed.skip && transformed.value )
             {
-                for( const msg of evaluateStaticConstraints( transformed.value, constraints ))
+                for( const msg of evaluateStaticConstraints( transformed.value, constraints, propPath, isSecret, fallbackMessage ))
                 {
                     diagnostics.push( createDiagnostic( anchorNode, msg ));
                 }
@@ -670,7 +1172,8 @@ function checkRuntimeConstantAgainstType(
 
                 if( slotType )
                 {
-                    checkRuntimeConstantAgainstType( val[i], slotType, checker, diagnostics, anchorNode, depth + 1 );
+                    const itemPath = `${propPath}[${i}]`;
+                    checkRuntimeConstantAgainstType( val[i], slotType, checker, diagnostics, anchorNode, depth + 1, undefined, itemPath );
                 }
             }
         }
@@ -681,9 +1184,10 @@ function checkRuntimeConstantAgainstType(
 
             if( elemType )
             {
-                for( const item of val )
+                for( let i = 0; i < val.length; i++ )
                 {
-                    checkRuntimeConstantAgainstType( item, elemType, checker, diagnostics, anchorNode, depth + 1 );
+                    const itemPath = `${propPath}[${i}]`;
+                    checkRuntimeConstantAgainstType( val[i], elemType, checker, diagnostics, anchorNode, depth + 1, undefined, itemPath );
                 }
             }
         }
@@ -701,7 +1205,8 @@ function checkRuntimeConstantAgainstType(
             if( !propType ){ continue }
 
             const propJsDoc = extractPropertyJsDocInfo( symbol, checker ).constraints;
-            checkRuntimeConstantAgainstType( propVal, propType, checker, diagnostics, anchorNode, depth + 1, propJsDoc );
+            const childPath = propPath ? `${propPath}.${propName}` : propName;
+            checkRuntimeConstantAgainstType( propVal, propType, checker, diagnostics, anchorNode, depth + 1, propJsDoc, childPath );
         }
     }
 }
@@ -791,7 +1296,8 @@ function checkArrayLiteral(
     checker     : ts.TypeChecker,
     diagnostics : ts.Diagnostic[],
     anchorNode? : ts.Node,
-    depth       : number = 0
+    depth       : number = 0,
+    propPath    : string = ''
 )
 {
     const peeled = peelTaggedIntersection( type, checker );
@@ -818,7 +1324,7 @@ function checkArrayLiteral(
 
             if( slotType )
             {
-                checkExpressionAgainstType( el, slotType, checker, diagnostics, anchorNode, depth + 1 );
+                checkExpressionAgainstType( el, slotType, checker, diagnostics, anchorNode, depth + 1, undefined, `${propPath}[${i}]` );
             }
         }
     }
@@ -829,11 +1335,13 @@ function checkArrayLiteral(
 
         if( !elemType ){ return }
 
-        for( const el of arr.elements )
+        for( let i = 0; i < arr.elements.length; i++ )
         {
+            const el = arr.elements[i];
+
             if( ts.isSpreadElement( el )){ continue }
 
-            checkExpressionAgainstType( el, elemType, checker, diagnostics, anchorNode, depth + 1 );
+            checkExpressionAgainstType( el, elemType, checker, diagnostics, anchorNode, depth + 1, undefined, `${propPath}[${i}]` );
         }
     }
 }
@@ -844,7 +1352,8 @@ function checkObjectLiteral(
     checker     : ts.TypeChecker,
     diagnostics : ts.Diagnostic[],
     anchorNode? : ts.Node,
-    depth       : number = 0
+    depth       : number = 0,
+    propPath    : string = ''
 )
 {
     for( const prop of obj.properties )
@@ -865,7 +1374,8 @@ function checkObjectLiteral(
             if( !propType ){ continue }
 
             const propJsDoc = extractPropertyJsDocInfo( symbol, checker ).constraints;
-            checkExpressionAgainstType( prop.initializer, propType, checker, diagnostics, anchorNode, depth + 1, propJsDoc );
+            const childPath = propPath ? `${propPath}.${propName}` : propName;
+            checkExpressionAgainstType( prop.initializer, propType, checker, diagnostics, anchorNode, depth + 1, propJsDoc, childPath );
         }
         else if( ts.isShorthandPropertyAssignment( prop ))
         {
@@ -888,6 +1398,7 @@ function checkObjectLiteral(
             if(( decl.parent.flags & ts.NodeFlags.Const ) === 0 ){ continue }
 
             const propJsDoc = extractPropertyJsDocInfo( symbol, checker ).constraints;
+            const childPath = propPath ? `${propPath}.${propName}` : propName;
             checkExpressionAgainstType(
                 decl.initializer,
                 propType,
@@ -895,7 +1406,8 @@ function checkObjectLiteral(
                 diagnostics,
                 anchorNode ?? prop,
                 depth + 1,
-                propJsDoc
+                propJsDoc,
+                childPath
             );
         }
     }
@@ -940,7 +1452,8 @@ function resolveReturnCheckType( fn: ts.FunctionLikeDeclaration, checker: ts.Typ
 }
 
 /**
- * Walk a source file and emit diagnostics for constant values that violate tag constraints.
+ * Walk a source file and emit diagnostics for constant values that violate tag constraints
+ * as well as contradictory or invalid constraint definitions.
  */
 export function collectStaticConstraintDiagnostics(
     sourceFile: ts.SourceFile,
@@ -969,7 +1482,7 @@ export function collectStaticConstraintDiagnostics(
             {
                 const importedName = element.propertyName?.text || element.name.text;
 
-                if( STATIC_MACRO_FUNCTIONS.has( importedName ))
+                if( ALL_MACRO_FUNCTIONS.has( importedName ))
                 {
                     helperBindings.set( element.name.text, { importedName, decl : element });
                 }
@@ -983,17 +1496,47 @@ export function collectStaticConstraintDiagnostics(
 
     const visit = ( node: ts.Node ) =>
     {
-        if(
+        if( ts.isTypeAliasDeclaration( node ))
+        {
+            const sym = checker.getSymbolAtLocation( node.name );
+            const extraJsDoc = sym ? extractPropertyJsDocInfo( sym, checker ).constraints : undefined;
+            checkTypeNodeContradictions( node.type, checker, rawDiagnostics, sourceFile, extraJsDoc );
+        }
+        else if( ts.isInterfaceDeclaration( node ))
+        {
+            const ifaceType = checker.getTypeAtLocation( node );
+            const parsedConstraints = collectAllParsedConstraints( ifaceType, checker );
+
+            for( const msg of evaluateConstraintContradictions( parsedConstraints ))
+            {
+                rawDiagnostics.push( createDiagnostic( node.name, msg, CONTRADICTORY_CONSTRAINT_DIAGNOSTIC_CODE ));
+            }
+        }
+        else if( ts.isPropertySignature( node ) && node.type )
+        {
+            const sym = checker.getSymbolAtLocation( node.name );
+            const extraJsDoc = sym ? extractPropertyJsDocInfo( sym, checker ).constraints : undefined;
+            checkTypeNodeContradictions( node.type, checker, rawDiagnostics, sourceFile, extraJsDoc );
+        }
+        else if(
             ( ts.isVariableDeclaration( node ) || ts.isPropertyDeclaration( node ) || ts.isParameter( node )) &&
-            node.type &&
-            node.initializer
+            node.type
         )
         {
-            const type = wrapTypeNodeWithJsDoc( node.type, checker.getTypeFromTypeNode( node.type ), checker );
-            checkExpressionAgainstType( node.initializer, type, checker, rawDiagnostics );
+            const sym = checker.getSymbolAtLocation( node.name );
+            const extraJsDoc = sym ? extractPropertyJsDocInfo( sym, checker ).constraints : undefined;
+            checkTypeNodeContradictions( node.type, checker, rawDiagnostics, sourceFile, extraJsDoc );
+
+            if( node.initializer )
+            {
+                const declPath = ts.isIdentifier( node.name ) ? node.name.text : '';
+                const type = wrapTypeNodeWithJsDoc( node.type, checker.getTypeFromTypeNode( node.type ), checker );
+                checkExpressionAgainstType( node.initializer, type, checker, rawDiagnostics, undefined, 0, extraJsDoc, declPath );
+            }
         }
         else if( ts.isAsExpression( node ) || ts.isSatisfiesExpression( node ))
         {
+            checkTypeNodeContradictions( node.type, checker, rawDiagnostics, sourceFile );
             const type = wrapTypeNodeWithJsDoc( node.type, checker.getTypeFromTypeNode( node.type ), checker );
             checkExpressionAgainstType( node.expression, type, checker, rawDiagnostics );
         }
@@ -1012,7 +1555,7 @@ export function collectStaticConstraintDiagnostics(
             const returnType = resolveReturnCheckType( node, checker );
             checkExpressionAgainstType( node.body, returnType, checker, rawDiagnostics );
         }
-        else if( ts.isCallExpression( node ) && node.typeArguments?.[0] && node.arguments[0])
+        else if( ts.isCallExpression( node ) && node.typeArguments?.[0])
         {
             let fnName: string | undefined;
 
@@ -1048,44 +1591,58 @@ export function collectStaticConstraintDiagnostics(
                 }
             }
 
-            if( fnName && STATIC_MACRO_FUNCTIONS.has( fnName ))
+            if( fnName && ALL_MACRO_FUNCTIONS.has( fnName ))
             {
                 const typeNode = node.typeArguments[0];
-                const type = wrapTypeNodeWithJsDoc( typeNode, checker.getTypeFromTypeNode( typeNode ), checker );
+                checkTypeNodeContradictions( typeNode, checker, rawDiagnostics, sourceFile );
 
-                if( fnName === 'parse' || fnName === 'safeParse' )
+                if( STATIC_MACRO_FUNCTIONS.has( fnName ) && node.arguments[0])
                 {
-                    const src = resolveStaticParseSource( node.arguments[1], checker );
+                    const type = wrapTypeNodeWithJsDoc( typeNode, checker.getTypeFromTypeNode( typeNode ), checker );
 
-                    if( src === 'string' )
+                    if( fnName === 'parse' || fnName === 'safeParse' )
                     {
-                        checkExpressionAgainstType( node.arguments[0], type, checker, rawDiagnostics );
-                    }
-                    else if( src === 'json' )
-                    {
-                        const rawConst = tryGetConstantValue( node.arguments[0]);
+                        const src = resolveStaticParseSource( node.arguments[1], checker );
 
-                        if( rawConst?.kind === 'string' )
+                        if( src === 'string' )
                         {
-                            const targetNode = unwrapExpression( node.arguments[0]);
+                            checkExpressionAgainstType( node.arguments[0], type, checker, rawDiagnostics );
+                        }
+                        else if( src === 'json' )
+                        {
+                            const rawConst = tryGetConstantValue( node.arguments[0]);
 
-                            try
+                            if( rawConst?.kind === 'string' )
                             {
-                                const parsed = JSON.parse( rawConst.value );
-                                checkRuntimeConstantAgainstType( parsed, type, checker, rawDiagnostics, targetNode, 0 );
-                            }
-                            catch
-                            {
-                                rawDiagnostics.push( createDiagnostic( targetNode, `Invalid JSON literal passed to ${fnName}` ));
+                                const targetNode = unwrapExpression( node.arguments[0]);
+
+                                try
+                                {
+                                    const parsed = JSON.parse( rawConst.value );
+                                    checkRuntimeConstantAgainstType( parsed, type, checker, rawDiagnostics, targetNode, 0 );
+                                }
+                                catch
+                                {
+                                    rawDiagnostics.push( createDiagnostic( targetNode, `Invalid JSON literal passed to ${fnName}` ));
+                                }
                             }
                         }
                     }
-                }
-                else
-                {
-                    checkExpressionAgainstType( node.arguments[0], type, checker, rawDiagnostics );
+                    else
+                    {
+                        checkExpressionAgainstType( node.arguments[0], type, checker, rawDiagnostics );
+                    }
                 }
             }
+        }
+
+        if( ts.isFunctionLike( node ) && node.type )
+        {
+            const targetTypeNode = ts.isTypeReferenceNode( node.type ) && node.type.typeArguments?.[0] &&
+                ts.canHaveModifiers( node ) && ( ts.getModifiers( node )?.some( m => m.kind === ts.SyntaxKind.AsyncKeyword ) ?? false )
+                ? node.type.typeArguments[0]
+                : node.type;
+            checkTypeNodeContradictions( targetTypeNode, checker, rawDiagnostics, sourceFile );
         }
 
         ts.forEachChild( node, visit );
@@ -1107,6 +1664,243 @@ export function collectStaticConstraintDiagnostics(
     }
 
     return diagnostics;
+}
+
+const COMPOSITE_RANGE_TAG_NAMES: ReadonlySet<string> = new Set([
+    'Range', 'Length', 'PropertiesRange'
+]);
+
+const PAIRED_BOUND_TAG_NAMES: ReadonlyArray<readonly [ string, string ]> = [
+    [ 'Minimum', 'Maximum' ],
+    [ 'ExclusiveMinimum', 'ExclusiveMaximum' ],
+    [ 'MinLength', 'MaxLength' ],
+    [ 'MinItems', 'MaxItems' ],
+    [ 'MinContains', 'MaxContains' ],
+    [ 'MinProperties', 'MaxProperties' ],
+    [ 'MinDate', 'MaxDate' ]
+];
+
+function getEntityRightmostName( name: ts.EntityName ): string
+{
+    return ts.isIdentifier( name ) ? name.text : name.right.text;
+}
+
+function buildSwapFix(
+    sourceFile : ts.SourceFile,
+    firstNode  : ts.Node,
+    secondNode : ts.Node
+): ts.CodeFixAction
+{
+    const firstStart = firstNode.getStart( sourceFile );
+    const secondStart = secondNode.getStart( sourceFile );
+    const firstText = firstNode.getText( sourceFile );
+    const secondText = secondNode.getText( sourceFile );
+
+    return {
+        fixName     : 'swapConstraintBounds',
+        description : 'Swap contradictory minimum and maximum bounds',
+        changes     : [
+            {
+                fileName    : sourceFile.fileName,
+                textChanges : [
+                    { span : { start : firstStart, length : firstNode.getWidth( sourceFile ) }, newText : secondText },
+                    { span : { start : secondStart, length : secondNode.getWidth( sourceFile ) }, newText : firstText }
+                ]
+            }
+        ]
+    };
+}
+
+function resolveLiteralTargetType( expr: ts.Expression, checker: ts.TypeChecker ): ts.Type | undefined
+{
+    const ctxType = checker.getContextualType( expr );
+
+    if( ctxType ){ return ctxType }
+
+    let curr: ts.Node = expr;
+
+    while( curr.parent && ts.isParenthesizedExpression( curr.parent ))
+    {
+        curr = curr.parent;
+    }
+
+    const parent = curr.parent;
+
+    if( parent && ( ts.isAsExpression( parent ) || ts.isSatisfiesExpression( parent )))
+    {
+        return wrapTypeNodeWithJsDoc( parent.type, checker.getTypeFromTypeNode( parent.type ), checker );
+    }
+
+    if( parent && ( ts.isVariableDeclaration( parent ) || ts.isPropertyDeclaration( parent ) || ts.isParameter( parent )) && parent.type )
+    {
+        return wrapTypeNodeWithJsDoc( parent.type, checker.getTypeFromTypeNode( parent.type ), checker );
+    }
+
+    if( parent && ts.isCallExpression( parent ) && parent.typeArguments?.[0])
+    {
+        const typeNode = parent.typeArguments[0];
+
+        return wrapTypeNodeWithJsDoc( typeNode, checker.getTypeFromTypeNode( typeNode ), checker );
+    }
+
+    return undefined;
+}
+
+/**
+ * Compute IDE quick fixes for `@webergency-utils/typechecker` static diagnostics (`90001` & `90002`).
+ */
+export function collectCodeFixesAtPosition(
+    sourceFile : ts.SourceFile,
+    start      : number,
+    end        : number,
+    errorCodes : readonly number[],
+    checker    : ts.TypeChecker
+): ts.CodeFixAction[]
+{
+    const fixes: ts.CodeFixAction[] = [];
+    const wantsContradictionFix = errorCodes.includes( CONTRADICTORY_CONSTRAINT_DIAGNOSTIC_CODE );
+    const wantsLiteralClamp = errorCodes.includes( LITERAL_CONSTRAINT_DIAGNOSTIC_CODE );
+
+    if( !wantsContradictionFix && !wantsLiteralClamp ){ return fixes }
+
+    const visit = ( node: ts.Node ): void =>
+    {
+        const nodeStart = node.getStart( sourceFile );
+        const nodeEnd = node.getEnd();
+
+        if( nodeEnd < start || nodeStart > end ){ return }
+
+        if( wantsContradictionFix )
+        {
+            if( ts.isTypeReferenceNode( node ) && node.typeArguments && node.typeArguments.length >= 2 )
+            {
+                const tagName = getEntityRightmostName( node.typeName );
+
+                if(
+                    COMPOSITE_RANGE_TAG_NAMES.has( tagName ) &&
+                    evaluateConstraintContradictions( collectAllParsedConstraints( checker.getTypeFromTypeNode( node ), checker )).length > 0
+                )
+                {
+                    fixes.push( buildSwapFix( sourceFile, node.typeArguments[0], node.typeArguments[1]));
+
+                    return;
+                }
+            }
+
+            if( ts.isIntersectionTypeNode( node ))
+            {
+                const refsByName = new Map<string, ts.TypeNode>();
+
+                for( const member of node.types )
+                {
+                    if( ts.isTypeReferenceNode( member ) && member.typeArguments && member.typeArguments.length >= 1 )
+                    {
+                        refsByName.set( getEntityRightmostName( member.typeName ), member.typeArguments[0]);
+                    }
+                }
+
+                for( const [ minName, maxName ] of PAIRED_BOUND_TAG_NAMES )
+                {
+                    const minArg = refsByName.get( minName );
+                    const maxArg = refsByName.get( maxName );
+
+                    if(
+                        minArg &&
+                        maxArg &&
+                        evaluateConstraintContradictions( collectAllParsedConstraints( checker.getTypeFromTypeNode( node ), checker )).length > 0
+                    )
+                    {
+                        fixes.push( buildSwapFix( sourceFile, minArg, maxArg ));
+
+                        return;
+                    }
+                }
+            }
+        }
+
+        if( wantsLiteralClamp && ts.isExpression( node ))
+        {
+            const c = tryGetConstantValue( node );
+
+            if( c?.kind === 'number' && typeof c.value === 'number' )
+            {
+                const targetType = resolveLiteralTargetType( node, checker );
+
+                if( targetType )
+                {
+                    const parsed = collectAllParsedConstraints( targetType, checker );
+                    let replacement: string | undefined;
+
+                    for( const p of parsed )
+                    {
+                        if( p.type === 'minimum' && typeof p.value === 'number' && c.value < p.value )
+                        {
+                            replacement = String( p.value );
+                            break;
+                        }
+
+                        if( p.type === 'maximum' && typeof p.value === 'number' && c.value > p.value )
+                        {
+                            replacement = String( p.value );
+                            break;
+                        }
+
+                        if( p.type === 'nonNegative' && c.value < 0 )
+                        {
+                            replacement = '0';
+                            break;
+                        }
+
+                        if( p.type === 'positive' && c.value <= 0 )
+                        {
+                            replacement = '1';
+                            break;
+                        }
+
+                        if( p.type === 'negative' && c.value >= 0 )
+                        {
+                            replacement = '-1';
+                            break;
+                        }
+
+                        if( p.type === 'exclusiveMinimum' && typeof p.value === 'number' && c.value <= p.value )
+                        {
+                            replacement = String( p.value + 1 );
+                            break;
+                        }
+
+                        if( p.type === 'exclusiveMaximum' && typeof p.value === 'number' && c.value >= p.value )
+                        {
+                            replacement = String( p.value - 1 );
+                            break;
+                        }
+                    }
+
+                    if( replacement !== undefined )
+                    {
+                        fixes.push({
+                            fixName     : 'clampLiteralToBound',
+                            description : `Clamp literal to ${replacement}`,
+                            changes     : [
+                                {
+                                    fileName    : sourceFile.fileName,
+                                    textChanges : [{ span : { start : nodeStart, length : nodeEnd - nodeStart }, newText : replacement }]
+                                }
+                            ]
+                        });
+
+                        return;
+                    }
+                }
+            }
+        }
+
+        ts.forEachChild( node, visit );
+    };
+
+    visit( sourceFile );
+
+    return fixes;
 }
 
 const STATIC_DIAGNOSTICS_INSTALLED = Symbol.for( '@webergency-utils/typechecker:static-diagnostics-installed' );

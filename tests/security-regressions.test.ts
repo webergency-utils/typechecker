@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { validators, type ValidationContext, getOrCompileSchema, validate } from '../src/runtime/validators.js';
+import { validators, type ValidationContext, validate } from '../src/runtime/validators.js';
+import { getOrCompileSchema } from '../src/runtime/schema-compiler.js';
 
 function context( root?: any ): ValidationContext
 {

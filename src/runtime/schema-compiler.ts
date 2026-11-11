@@ -507,7 +507,8 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
                     from           : ctx.from,
                     mutate         : false,
                     root           : ctx.root,
-                    dynamicAnchors : ctx.dynamicAnchors
+                    dynamicAnchors : ctx.dynamicAnchors,
+                    secretDepth    : ctx.secretDepth
                 };
                 inner( v, path, probe );
 
@@ -542,7 +543,8 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
                     mutate         : false,
                     root           : ctx.root,
                     annotations    : newProbeAnnotations( ctx ),
-                    dynamicAnchors : ctx.dynamicAnchors
+                    dynamicAnchors : ctx.dynamicAnchors,
+                    secretDepth    : ctx.secretDepth
                 };
                 ifCheck( v, path, probe );
 
@@ -845,7 +847,22 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
 
         if( subSchema['x-typescript-type'] === 'Date' )
         {
-            return finalize(( v, path, ctx ) => validators.date( v, path, ctx ), subSchema );
+            const minDate = subSchema['x-min-date'];
+            const maxDate = subSchema['x-max-date'];
+
+            return finalize(( v, path, ctx ) =>
+            {
+                v = validators.date( v, path, ctx );
+
+                if( v instanceof Date && !Number.isNaN( v.getTime()))
+                {
+                    if( minDate !== undefined ){ validators.minDate( v, path, ctx, minDate ) }
+
+                    if( maxDate !== undefined ){ validators.maxDate( v, path, ctx, maxDate ) }
+                }
+
+                return v;
+            }, subSchema );
         }
 
         if( subSchema['x-typescript-type'] === 'URL' )
@@ -982,7 +999,8 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
                     mutate         : false,
                     root           : ctx.root,
                     annotations    : undefined,
-                    dynamicAnchors : ctx.dynamicAnchors
+                    dynamicAnchors : ctx.dynamicAnchors,
+                    secretDepth    : ctx.secretDepth
                 };
 
                 for( let i = 0; i < checks.length; i++ )
@@ -1089,7 +1107,8 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
                     mutate         : false,
                     root           : ctx.root,
                     annotations    : undefined,
-                    dynamicAnchors : ctx.dynamicAnchors
+                    dynamicAnchors : ctx.dynamicAnchors,
+                    secretDepth    : ctx.secretDepth
                 };
 
                 const runPass = ( from: ValidationContext['from']) =>
@@ -1157,6 +1176,8 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
             const pattern = subSchema.pattern ? createSafeRegex( subSchema.pattern ) : undefined;
             const patternStr = subSchema.pattern;
             const format = subSchema.format;
+            const minDate = subSchema['x-min-date'];
+            const maxDate = subSchema['x-max-date'];
             const contentEncoding = subSchema.contentEncoding;
             const contentMediaType = subSchema.contentMediaType;
             const contentSchemaCheck = subSchema.contentSchema !== undefined
@@ -1179,6 +1200,10 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
                 }
 
                 if( format !== undefined ){ v = validators.format( v, path, ctx, format ) }
+
+                if( minDate !== undefined ){ validators.minDate( v, path, ctx, minDate ) }
+
+                if( maxDate !== undefined ){ validators.maxDate( v, path, ctx, maxDate ) }
 
                 if( typeof v === 'string' &&
                     ( contentEncoding !== undefined || contentMediaType !== undefined || contentSchemaCheck ))
@@ -1232,6 +1257,7 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
         if( subSchema.type === 'number' || subSchema.type === 'integer' )
         {
             const isInt = subSchema.type === 'integer';
+            const isFiniteFlag = subSchema['x-finite'] === true;
             const minimum = subSchema.minimum;
             const maximum = subSchema.maximum;
             const exclusiveMinimum = subSchema.exclusiveMinimum;
@@ -1243,6 +1269,8 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
                 v = validators.number( v, path, ctx );
 
                 if( v === undefined || v === null ){ return v }
+
+                if( isFiniteFlag ){ validators.finite( v, path, ctx ) }
 
                 if( isInt && typeof v === 'number' && !Number.isInteger( v ))
                 {
@@ -1331,7 +1359,8 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
                     mutate         : false,
                     root           : ctx.root,
                     annotations    : undefined,
-                    dynamicAnchors : ctx.dynamicAnchors
+                    dynamicAnchors : ctx.dynamicAnchors,
+                    secretDepth    : ctx.secretDepth
                 };
 
                 const runPass = ( from: ValidationContext['from']) =>
@@ -1569,7 +1598,8 @@ export function compileSchema<T = unknown>( schema: JsonSchema | boolean ): Comp
                             from           : ctx.from,
                             mutate         : false,
                             root           : ctx.root,
-                            dynamicAnchors : ctx.dynamicAnchors
+                            dynamicAnchors : ctx.dynamicAnchors,
+                            secretDepth    : ctx.secretDepth
                         };
                         containsCheck( v[i], indexPath( path, i ), probe );
 

@@ -33,6 +33,11 @@ export type ToDate =
         readonly __transform_todate? : true
     };
 
+export type Split<Delim extends string = ','> =
+    {
+        readonly __transform_split? : Delim
+    };
+
 export type Custom<Fn extends ( val: any ) => any> =
     {
         readonly __transform_custom? : Fn

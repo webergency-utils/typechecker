@@ -1,5 +1,20 @@
 import ts from 'typescript';
-import { collectStaticConstraintDiagnostics } from './transformer.js';
+import { collectStaticConstraintDiagnostics, collectCodeFixesAtPosition } from './transformer.js';
+
+function resolvePluginContext( ls: ts.LanguageService, fileName: string )
+{
+    if( fileName.includes( 'node_modules' )){ return undefined }
+
+    const program = ls.getProgram();
+
+    if( !program ){ return undefined }
+
+    const sourceFile = program.getSourceFile( fileName );
+
+    if( !sourceFile || sourceFile.isDeclarationFile ){ return undefined }
+
+    return { sourceFile, checker : program.getTypeChecker() };
+}
 
 function init( modules: { typescript : typeof ts })
 {
@@ -17,20 +32,34 @@ function init( modules: { typescript : typeof ts })
         proxy.getSemanticDiagnostics = ( fileName: string ): ts.Diagnostic[] =>
         {
             const base = ls.getSemanticDiagnostics( fileName );
-            const program = ls.getProgram();
+            const ctx = resolvePluginContext( ls, fileName );
 
-            if( !program ){ return base }
+            if( !ctx ){ return base }
 
-            const sourceFile = program.getSourceFile( fileName );
-
-            if( !sourceFile || sourceFile.isDeclarationFile ){ return base }
-
-            if( fileName.includes( 'node_modules' )){ return base }
-
-            const checker = program.getTypeChecker();
-            const extra = collectStaticConstraintDiagnostics( sourceFile, checker );
+            const extra = collectStaticConstraintDiagnostics( ctx.sourceFile, ctx.checker );
 
             return [ ...base, ...extra ];
+        };
+
+        proxy.getCodeFixesAtPosition = (
+            fileName      : string,
+            start         : number,
+            end           : number,
+            errorCodes    : readonly number[],
+            formatOptions : ts.FormatCodeSettings,
+            preferences   : ts.UserPreferences
+        ): readonly ts.CodeFixAction[] =>
+        {
+            const base = typeof ls.getCodeFixesAtPosition === 'function'
+                ? ls.getCodeFixesAtPosition( fileName, start, end, errorCodes, formatOptions, preferences )
+                : [];
+            const ctx = resolvePluginContext( ls, fileName );
+
+            if( !ctx ){ return base }
+
+            const extra = collectCodeFixesAtPosition( ctx.sourceFile, start, end, errorCodes, ctx.checker );
+
+            return extra.length > 0 ? [ ...base, ...extra ] : base;
         };
 
         return proxy;

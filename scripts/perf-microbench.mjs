@@ -1,4 +1,5 @@
-import { validators, getOrCompileSchema, is, validate } from '../dist/runtime/validators.js';
+import { validators, is, validate } from '../dist/runtime/validators.js';
+import { getOrCompileSchema } from '../dist/runtime/schema-compiler.js';
 import { parseUnion, expectNumber, expectObject, ParseError } from '../dist/runtime/parse-runtime.js';
 import { serializeUnion, checkPlainObject, SerializationError } from '../dist/runtime/serializer-runtime.js';
 import { convertPropertyCasing } from '../dist/runtime/casing.js';

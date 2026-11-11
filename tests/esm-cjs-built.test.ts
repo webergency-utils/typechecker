@@ -38,7 +38,11 @@ describe( 'Built ESM and CJS Dual Artifact Testing', () =>
             'dist/runtime/parse-runtime.js',
             'dist/runtime/parse-runtime.cjs',
             'dist/runtime/serializer-runtime.js',
-            'dist/runtime/serializer-runtime.cjs'
+            'dist/runtime/serializer-runtime.cjs',
+            'dist/runtime/clone-runtime.js',
+            'dist/runtime/clone-runtime.cjs',
+            'dist/runtime/random-runtime.js',
+            'dist/runtime/random-runtime.cjs'
         ];
 
         for( const file of files )
@@ -55,7 +59,9 @@ describe( 'Built ESM and CJS Dual Artifact Testing', () =>
         expect( typeof indexCjs.validate ).toBe( 'function' );
         expect( typeof indexCjs.is ).toBe( 'function' );
         expect( typeof indexCjs.assert ).toBe( 'function' );
-        expect( typeof indexCjs.validators ).toBe( 'object' );
+        expect( typeof indexCjs.compileSchema ).toBe( 'function' );
+        expect( indexCjs.validators ).toBeUndefined();
+        expect( indexCjs.extractFormDataObject ).toBeUndefined();
     });
 
     it( 'should require CommonJS dist/transformer.cjs successfully', () =>
@@ -81,7 +87,9 @@ describe( 'Built ESM and CJS Dual Artifact Testing', () =>
         expect( typeof indexEsm.validate ).toBe( 'function' );
         expect( typeof indexEsm.is ).toBe( 'function' );
         expect( typeof indexEsm.assert ).toBe( 'function' );
-        expect( typeof indexEsm.validators ).toBe( 'object' );
+        expect( typeof indexEsm.compileSchema ).toBe( 'function' );
+        expect( indexEsm.validators ).toBeUndefined();
+        expect( indexEsm.extractFormDataObject ).toBeUndefined();
     });
 
     it( 'should transform and execute validation identically in ESM and CJS modes', async () =>
@@ -172,10 +180,11 @@ describe( 'Built ESM and CJS Dual Artifact Testing', () =>
         expect( runtimeEsm.SerializationError ).toBe( serEsm.SerializationError );
         expect( indexEsm.ZodLikeError ).toBe( runtimeEsm.ZodLikeError );
         expect( runtimeEsm.ZodLikeError ).toBe( valEsm.ZodLikeError );
-        expect( indexEsm.validators ).toBe( runtimeEsm.validators );
+        expect( indexEsm.validators ).toBeUndefined();
         expect( runtimeEsm.validators ).toBe( valEsm.validators );
         expect( indexEsm.compileSchema ).toBe( scEsm.compileSchema );
-        expect( valEsm.compileSchema ).toBe( scEsm.compileSchema );
+        expect( runtimeEsm.compileSchema ).toBe( scEsm.compileSchema );
+        expect( valEsm.compileSchema ).toBeUndefined();
         expect( typeof unpluginEsm.typecheckerVite ).toBe( 'function' );
         expect( typeof pluginEsm.default ).toBe( 'function' );
 
@@ -195,10 +204,11 @@ describe( 'Built ESM and CJS Dual Artifact Testing', () =>
         expect( runtimeCjs.SerializationError ).toBe( serCjs.SerializationError );
         expect( indexCjs.ZodLikeError ).toBe( runtimeCjs.ZodLikeError );
         expect( runtimeCjs.ZodLikeError ).toBe( valCjs.ZodLikeError );
-        expect( indexCjs.validators ).toBe( runtimeCjs.validators );
+        expect( indexCjs.validators ).toBeUndefined();
         expect( runtimeCjs.validators ).toBe( valCjs.validators );
         expect( indexCjs.compileSchema ).toBe( scCjs.compileSchema );
-        expect( valCjs.compileSchema ).toBe( scCjs.compileSchema );
+        expect( runtimeCjs.compileSchema ).toBe( scCjs.compileSchema );
+        expect( valCjs.compileSchema ).toBeUndefined();
         expect( typeof unpluginCjs.typecheckerVite ).toBe( 'function' );
     });
 

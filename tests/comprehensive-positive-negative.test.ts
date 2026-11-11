@@ -23,16 +23,10 @@ import
     isSchema,
     assertSchema,
     assertGuardSchema,
-    createStandardSchema,
-    createValidator,
     groupErrorsByPath,
     toZodIssues,
     ZodLikeError,
     toStandardSchemaIssues,
-    coerceQueryNumber,
-    coerceQueryBoolean,
-    coerceQueryDate,
-    coerceJsonDate,
     convertPropertyCasing
 }
     from '../src/index.js';
@@ -43,6 +37,12 @@ import
     assert,
     assertGuard,
     validators,
+    createStandardSchema,
+    createValidator,
+    coerceQueryNumber,
+    coerceQueryBoolean,
+    coerceQueryDate,
+    coerceJsonDate,
     parseQueryString,
     hasUniqueItems,
     deepEqual,
@@ -1835,11 +1835,12 @@ describe( 'Comprehensive Positive & Negative Verification Suite', () =>
                 export const checkStr = ( x: unknown ) => is<string>( x );
             `;
 
-            // Positive bundler transform: expands is<string>(x) into __tcRuntime.is(__val_..., x, undefined)
+            // Positive bundler transform: expands is<string>(x) into zero-allocation __is_<hash>(x)
             const transformed = bundler.transform( validMacroSource, virtualFile );
             expect( transformed ).not.toBeNull();
-            expect( transformed!.code ).toContain( '__tcRuntime.is(' );
-            expect( transformed!.code ).toContain( 'validators.string(' );
+            expect( transformed!.code ).toMatch( /__is_[a-z0-9]+\(/ );
+            expect( transformed!.code ).toContain( 'typeof v === "string"' );
+            expect( transformed!.map ).not.toBeNull();
             bundler.invalidate( virtualFile );
 
             // Negative bundler transform: returns null for non-typechecker files

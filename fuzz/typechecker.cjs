@@ -141,14 +141,54 @@ module.exports.fuzz = function( data )
             coerceDate,
             coerceBigInt,
             applyParseConstraints,
-            ParseError,
-            SerializationError
+            extractFormDataObject,
+            extractHeadersObject,
+            cloneAny,
+            createRng,
+            randFromPattern
         } = runtime;
 
         coerceQueryNumber( input );
         coerceQueryBoolean( input );
         coerceQueryDate( input );
         coerceJsonDate( input );
+        cloneAny( input );
+
+        // Tier 2/3 parsers (FormData & Headers extraction) and regex sampler
+        try
+        {
+            const pairCount = provider.consumeIntegralInRange( 0, 5 );
+            const fd = new FormData();
+            const hdrPairs = [];
+
+            for( let i = 0; i < pairCount; i++ )
+            {
+                const k = provider.consumeString( 16 );
+                const v = provider.consumeString( 24 );
+
+                if( k )
+                {
+                    try { fd.append( k, v ) } catch { /* invalid FormData name */ }
+
+                    hdrPairs.push([ k, v ]);
+                }
+            }
+
+            extractFormDataObject( fd );
+            extractHeadersObject( hdrPairs );
+
+            if( input && typeof input === 'object' && !Array.isArray( input ))
+            {
+                extractHeadersObject( input );
+            }
+
+            const rng = createRng( provider.consumeIntegralInRange( 0, 0x7fffffff ));
+            randFromPattern( rng, provider.consumeString( 32 ));
+        }
+        catch( e )
+        {
+            if( !isExpectedFuzzError( e )){ throw e }
+        }
 
         // Serialize / parse runtime helpers (expected errors swallowed)
         try

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { validators, type ValidationContext, getOrCompileSchema, is, assert, assertGuard, validate } from '../src/runtime/validators.js';
+import { validators, type ValidationContext, is, assert, assertGuard, validate } from '../src/runtime/validators.js';
+import { getOrCompileSchema } from '../src/runtime/schema-compiler.js';
 
 describe( 'validators uniqueItems / commit / regex coverage', () =>
 {

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { type ValidationContext, getOrCompileSchema } from '../src/runtime/validators.js';
+import { type ValidationContext } from '../src/runtime/validators.js';
+import { getOrCompileSchema } from '../src/runtime/schema-compiler.js';
 
 describe( 'compileSchema', () => 
 {

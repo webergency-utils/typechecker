@@ -4,22 +4,28 @@
  */
 export {
     validators,
-    getOrCompileSchema,
     is,
     assert,
     assertGuard,
     validate,
-    compileSchema,
     coerceQueryNumber,
     coerceQueryBoolean,
     coerceQueryDate,
     coerceJsonDate,
+    extractFormDataObject,
+    extractHeadersObject,
     groupErrorsByPath,
     toZodIssues,
     ZodLikeError
 } from '../src/runtime/validators.js';
 
+export { getOrCompileSchema, compileSchema } from '../src/runtime/schema-compiler.js';
+
 export { convertPropertyCasing } from '../src/runtime/casing.js';
+
+export { cloneAny } from '../src/runtime/clone-runtime.js';
+
+export { createRng, randFromPattern } from '../src/runtime/random-runtime.js';
 
 export {
     SerializationError,

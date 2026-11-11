@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { emitAndImport } from './helpers/compile.js';
-import { compileSchema, createStandardSchema, type StandardSchemaV1 } from '../src/index.js';
+import { compileSchema, type StandardSchemaV1 } from '../src/index.js';
+import { createStandardSchema } from '../src/runtime/validators.js';
 
 describe( 'Standard Schema v1 (~standard)', () =>
 {

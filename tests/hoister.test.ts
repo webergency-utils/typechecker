@@ -147,7 +147,7 @@ describe( 'hoister', () =>
 
         // Assert
         expect( names.runtimeNs ).toBe( '__tcRuntime' );
-        expect( printed ).toContain( 'import * as __tcRuntime from "@webergency-utils/typechecker/runtime"' );
+        expect( printed ).toContain( 'import * as __tcRuntime from "@webergency-utils/typechecker/runtime/validators"' );
         expect( printed ).toContain( 'const validators = __tcRuntime.validators' );
     });
 
@@ -186,7 +186,8 @@ describe( 'hoister', () =>
 
         const printed = printSource( hoistEmitLocals( source, new Map(), undefined, undefined, undefined, serializers, parsers ));
 
-        expect( printed ).toContain( 'import * as __tcRuntime from "@webergency-utils/typechecker/runtime"' );
+        expect( printed ).toContain( 'import * as __tcRuntime from "@webergency-utils/typechecker/runtime/serialize"' );
+        expect( printed ).toContain( 'import * as __tcParse from "@webergency-utils/typechecker/runtime/parse"' );
         expect( printed ).not.toContain( 'const validators' );
         expect( printed ).toContain( 'const __ser_s1 =' );
         expect( printed ).toContain( 'const __parse_p1 =' );
@@ -206,7 +207,7 @@ describe( 'hoister', () =>
         const printed = printSource( hoistEmitLocals( source, new Map(), undefined, names, undefined, serializers ));
 
         expect( names.runtimeNs ).toBe( '__tcRuntime_1' );
-        expect( printed ).toContain( 'import * as __tcRuntime_1 from "@webergency-utils/typechecker/runtime"' );
+        expect( printed ).toContain( 'import * as __tcRuntime_1 from "@webergency-utils/typechecker/runtime/serialize"' );
         expect( printed ).toContain( '__tcRuntime_1.serializeString' );
         expect( printed ).not.toMatch( /[^_]__tcRuntime\.serializeString/ );
     });

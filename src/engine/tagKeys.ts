@@ -10,6 +10,8 @@ const VALUE_TAG_NAMES =
 [
     'minLength', 'maxLength', 'pattern', 'format',
     'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf',
+    'integer', 'safeInteger', 'positive', 'nonNegative', 'negative', 'finite',
+    'minDate', 'maxDate',
     'minItems', 'maxItems', 'uniqueItems',
     'minProperties', 'maxProperties',
     'contains', 'minContains', 'maxContains',
@@ -28,6 +30,7 @@ const TRANSFORM_TAG_KEYS =
     '__transform_tonumber',
     '__transform_toboolean',
     '__transform_todate',
+    '__transform_split',
     '__transform_custom'
 ];
 

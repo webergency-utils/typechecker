@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
-    getOrCompileSchema,
     validate,
     type ValidationContext
 } from '../src/runtime/validators.js';
+import { getOrCompileSchema } from '../src/runtime/schema-compiler.js';
 import { validateSchema } from '../src/index.js';
 
 describe( 'JSON Schema AJV-complete coverage', () =>

@@ -1,5 +1,6 @@
 import { hasUniqueItems } from './validators.js';
 import { setSafeProp } from './clone-runtime.js';
+export { setSafeProp };
 
 export type Rng = () => number;
 
@@ -32,6 +33,8 @@ export interface StringRandomOpts
     pattern?    : string
     mapping?    : string
     transforms? : readonly string[]
+    minDateMs?  : number
+    maxDateMs?  : number
 }
 
 export interface ArrayRandomOpts<T>
@@ -105,6 +108,8 @@ export function randNumber( rng: Rng, opts?: NumberRandomOpts ): number
     const step = opts?.step && opts.step > 0
         ? opts.step
         : ( opts?.integer ? 1 : undefined );
+    const hasLower = opts?.min !== undefined || opts?.exclMin !== undefined;
+    const hasUpper = opts?.max !== undefined || opts?.exclMax !== undefined;
 
     if( step !== undefined )
     {
@@ -132,6 +137,11 @@ export function randNumber( rng: Rng, opts?: NumberRandomOpts ): number
         {
             const m = Math.floor( opts.max / step );
             kMax = opts.exclMax !== undefined ? Math.min( kMax, m ) : m;
+        }
+
+        if( !hasLower && hasUpper )
+        {
+            kMin = kMax - 100;
         }
 
         const k = randInt( rng, kMin, Math.min( Math.max( kMin, kMax ), kMin + 10000 ));
@@ -169,6 +179,11 @@ export function randNumber( rng: Rng, opts?: NumberRandomOpts ): number
         hi = opts.max;
     }
 
+    if( !hasLower && hasUpper )
+    {
+        lo = hi - 100;
+    }
+
     if( hi <= lo )
     {
         return lo;
@@ -181,6 +196,8 @@ export function randNumber( rng: Rng, opts?: NumberRandomOpts ): number
 
 export function randBigInt( rng: Rng, opts?: BigIntRandomOpts ): bigint
 {
+    const hasLower = opts?.min !== undefined || opts?.exclMin !== undefined;
+    const hasUpper = opts?.max !== undefined || opts?.exclMax !== undefined;
     let lo = 0n;
 
     if( opts?.exclMin !== undefined )
@@ -203,6 +220,11 @@ export function randBigInt( rng: Rng, opts?: BigIntRandomOpts ): bigint
     if( opts?.max !== undefined )
     {
         hi = opts.exclMax !== undefined && hi < opts.max ? hi : opts.max;
+    }
+
+    if( !hasLower && hasUpper )
+    {
+        lo = hi - 100n;
     }
 
     const step = opts?.step && opts.step > 0n ? opts.step : undefined;
@@ -230,6 +252,10 @@ function pad2( n: number ): string
     return n < 10 ? `0${n}` : String( n );
 }
 
+const CROCKFORD32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+const LOWER_ALPHANUM = '0123456789abcdefghijklmnopqrstuvwxyz';
+const JWT_HEADER_B64 = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9';
+
 export function randFormat( rng: Rng, fmt: string ): string
 {
     const n = randInt( rng, 100, 9999 );
@@ -238,6 +264,21 @@ export function randFormat( rng: Rng, fmt: string ): string
     {
         case 'uuid':
             return `${randChars( rng, HEX, 8 )}-${randChars( rng, HEX, 4 )}-4${randChars( rng, HEX, 3 )}-${'89ab'.charAt( randInt( rng, 0, 3 ))}${randChars( rng, HEX, 3 )}-${randChars( rng, HEX, 12 )}`;
+        case 'ulid':
+            return `01H${randChars( rng, CROCKFORD32, 23 )}`;
+        case 'cuid2':
+            return `${randChars( rng, LOWER_ALPHA, 1 )}${randChars( rng, LOWER_ALPHANUM, 23 )}`;
+        case 'jwt':
+        {
+            const payload = Buffer.from( `{"sub":"${n}"}` ).toString( 'base64url' );
+            const sig = Buffer.from( randChars( rng, ALPHANUM, 12 )).toString( 'base64url' );
+
+            return `${JWT_HEADER_B64}.${payload}.${sig}`;
+        }
+        case 'semver':
+            return `${randInt( rng, 0, 9 )}.${randInt( rng, 0, 20 )}.${randInt( rng, 0, 50 )}`;
+        case 'base64url':
+            return Buffer.from( randChars( rng, ALPHANUM, 9 )).toString( 'base64url' );
         case 'email':
         case 'idn-email':
             return `${randChars( rng, LOWER_ALPHA, 5 )}${n}@example.com`;
@@ -591,8 +632,18 @@ function applyStringMapping( val: string, kind: string ): string
 export function randString( rng: Rng, opts?: StringRandomOpts ): string
 {
     let out: string;
+    const hasDateBounds = opts?.minDateMs !== undefined || opts?.maxDateMs !== undefined;
 
-    if( opts?.format )
+    if( hasDateBounds && ( !opts?.format || opts.format === 'date' || opts.format === 'date-time' ))
+    {
+        const dayMs = 86400000;
+        const effMin = opts?.format === 'date' && opts.minDateMs !== undefined
+            ? Math.ceil( opts.minDateMs / dayMs ) * dayMs
+            : opts?.minDateMs;
+        const iso = randDate( rng, effMin, opts?.maxDateMs ).toISOString();
+        out = opts?.format === 'date' ? iso.slice( 0, 10 ) : iso;
+    }
+    else if( opts?.format )
     {
         out = randFormat( rng, opts.format );
     }
@@ -759,9 +810,15 @@ export function randRecord<V>(
     return existing;
 }
 
-export function randDate( rng: Rng ): Date
+export function randDate( rng: Rng, minMs?: number, maxMs?: number ): Date
 {
-    return new Date( 1700000000000 + randInt( rng, 0, 100000000 ) * 1000 );
+    const lo = minMs !== undefined
+        ? minMs
+        : ( maxMs !== undefined ? maxMs - 86400000 * 365 : 1700000000000 );
+    const hi = maxMs !== undefined ? maxMs : lo + 100000000 * 1000;
+    const spanSec = hi > lo ? Math.min( Math.floor(( hi - lo ) / 1000 ), 100000000 ) : 0;
+
+    return new Date( lo + randInt( rng, 0, spanSec ) * 1000 );
 }
 
 export function randUrl( rng: Rng ): URL

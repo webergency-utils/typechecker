@@ -335,6 +335,23 @@ function parseJsDocLiteral( text: string ): unknown
     }
 }
 
+function unquoteJsDocString( text: string ): string
+{
+    if( text.length >= 2 && text.startsWith( '"' ) && text.endsWith( '"' ))
+    {
+        const parsed = parseJsDocLiteral( text );
+
+        return typeof parsed === 'string' ? parsed : text.slice( 1, -1 );
+    }
+
+    if( text.length >= 2 && text.startsWith( '\'' ) && text.endsWith( '\'' ))
+    {
+        return text.slice( 1, -1 );
+    }
+
+    return text;
+}
+
 export function hasJsDocMetadata( meta: JsDocMetadata | undefined ): boolean
 {
     if( !meta ){ return false }
@@ -551,6 +568,42 @@ export function extractSymbolJsDocInfo( symbol: ts.Symbol | undefined, checker: 
             else if( tagName === 'uniqueItems' && text !== 'false' )
             {
                 constraints.push({ type : 'uniqueItems', value : true });
+            }
+            else if( tagName === 'integer' && text !== 'false' )
+            {
+                constraints.push({ type : 'integer', value : true });
+            }
+            else if(( tagName === 'safeInteger' || tagName === 'safeinteger' ) && text !== 'false' )
+            {
+                constraints.push({ type : 'safeInteger', value : true });
+            }
+            else if( tagName === 'positive' && text !== 'false' )
+            {
+                constraints.push({ type : 'positive', value : true });
+            }
+            else if(( tagName === 'nonNegative' || tagName === 'nonnegative' ) && text !== 'false' )
+            {
+                constraints.push({ type : 'nonNegative', value : true });
+            }
+            else if( tagName === 'negative' && text !== 'false' )
+            {
+                constraints.push({ type : 'negative', value : true });
+            }
+            else if( tagName === 'finite' && text !== 'false' )
+            {
+                constraints.push({ type : 'finite', value : true });
+            }
+            else if(( tagName === 'minDate' || tagName === 'mindate' ) && text.length > 0 )
+            {
+                constraints.push({ type : 'minDate', value : unquoteJsDocString( text ) });
+            }
+            else if(( tagName === 'maxDate' || tagName === 'maxdate' ) && text.length > 0 )
+            {
+                constraints.push({ type : 'maxDate', value : unquoteJsDocString( text ) });
+            }
+            else if( tagName === 'split' && text !== 'false' )
+            {
+                constraints.push({ type : 'transform_split', value : text.length === 0 ? ',' : unquoteJsDocString( text ) });
             }
         }
     }
@@ -1214,6 +1267,12 @@ export function collectConstraintsFromProps(
 
         if( pName === '__transform_todate' ){ constraints.push({ type : 'transform', value : 'todate' }); continue }
 
+        if( pName === '__transform_split' )
+        {
+            constraints.push({ type : 'transform_split', value : typeof val === 'string' ? val : ',' });
+            continue;
+        }
+
         if( pName === '__transform_custom' )
         {
             const identity = resolveFunctionIdentity( actualType, checker, pType );
@@ -1241,6 +1300,18 @@ export function collectConstraintsFromProps(
         }
 
         if( pName === '__uniqueItems' ){ constraints.push({ type : 'uniqueItems', value : true, message : constraintMsg }); continue }
+
+        if( pName === '__integer' ){ constraints.push({ type : 'integer', value : true, message : constraintMsg }); continue }
+
+        if( pName === '__safeInteger' ){ constraints.push({ type : 'safeInteger', value : true, message : constraintMsg }); continue }
+
+        if( pName === '__positive' ){ constraints.push({ type : 'positive', value : true, message : constraintMsg }); continue }
+
+        if( pName === '__nonNegative' ){ constraints.push({ type : 'nonNegative', value : true, message : constraintMsg }); continue }
+
+        if( pName === '__negative' ){ constraints.push({ type : 'negative', value : true, message : constraintMsg }); continue }
+
+        if( pName === '__finite' ){ constraints.push({ type : 'finite', value : true, message : constraintMsg }); continue }
 
         if( pName === '__contains' )
         {
@@ -1294,7 +1365,9 @@ export function collectConstraintsFromProps(
             __minProperties    : 'minProperties',
             __maxProperties    : 'maxProperties',
             __minContains      : 'minContains',
-            __maxContains      : 'maxContains'
+            __maxContains      : 'maxContains',
+            __minDate          : 'minDate',
+            __maxDate          : 'maxDate'
         };
 
         const mapped = map[pName];

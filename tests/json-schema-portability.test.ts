@@ -5,7 +5,8 @@ import {
     assertGuardSchema,
     isSchema
 } from '../src/index.js';
-import { getOrCompileSchema, validate } from '../src/runtime/validators.js';
+import { validate } from '../src/runtime/validators.js';
+import { getOrCompileSchema } from '../src/runtime/schema-compiler.js';
 
 describe( 'JSON Schema portability coverage', () =>
 {

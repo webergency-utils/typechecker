@@ -25,6 +25,14 @@ export interface ITypeConstraints
     exclusiveMinimum? : number | bigint
     exclusiveMaximum? : number | bigint
     multipleOf?       : number | bigint
+    integer?          : boolean
+    safeInteger?      : boolean
+    positive?         : boolean
+    nonNegative?      : boolean
+    negative?         : boolean
+    finite?           : boolean
+    minDate?          : string
+    maxDate?          : string
     minItems?         : number
     maxItems?         : number
     uniqueItems?      : boolean

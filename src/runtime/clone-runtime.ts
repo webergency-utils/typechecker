@@ -1,4 +1,6 @@
 import { isPlainObject } from './validators.js';
+import { getCachedPattern, testRegex } from './regex.js';
+export { isPlainObject, getCachedPattern, testRegex };
 
 export type CompiledCloner<T> = ( input: T ) => T;
 

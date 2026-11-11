@@ -5,10 +5,8 @@ import { emitAndImport } from './helpers/compile.js';
 import {
     compileSchema,
     getOrCompileSchema,
-    createValidator,
     validator as rawValidatorMacro,
     safeSerialize as rawSafeSerializeMacro,
-    validators,
     SerializationError,
     convertPropertyCasing,
     validateSchema,
@@ -21,7 +19,7 @@ import {
     appendQueryAny
 } from '../src/runtime/serializer-runtime.js';
 import { coerceUrl, parseMap } from '../src/runtime/parse-runtime.js';
-import { deepEqual, type ValidationContext } from '../src/runtime/validators.js';
+import { createValidator, deepEqual, validators, type ValidationContext } from '../src/runtime/validators.js';
 import { compileSchema as subCompileSchema, getOrCompileSchema as subGetOrCompileSchema } from '../src/runtime/schema-compiler.js';
 import { resolveTypeIr } from '../src/engine/type-ir.js';
 import {

@@ -12,6 +12,8 @@ import {
     type ValidationMode,
     type UnionResolution
 } from './validators.js';
+import { getCachedPattern, testRegex } from './regex.js';
+export { isPlainObject, getCachedPattern, testRegex };
 import type { CasingFormat } from './casing.js';
 
 export class SerializationError extends Error
@@ -379,6 +381,26 @@ export function recordSerializerObjectStats( stripped: number, matched: number, 
     }
 }
 
+let serUnionProbeDepth = 0;
+let savedSerStackTraceLimit = 10;
+
+function enterSerUnionProbe(): void
+{
+    if( serUnionProbeDepth++ === 0 )
+    {
+        savedSerStackTraceLimit = Error.stackTraceLimit;
+        Error.stackTraceLimit = 0;
+    }
+}
+
+function exitSerUnionProbe(): void
+{
+    if( --serUnionProbeDepth === 0 )
+    {
+        Error.stackTraceLimit = savedSerStackTraceLimit;
+    }
+}
+
 export function serializeUnion(
     val           : any,
     path          : string,
@@ -401,35 +423,46 @@ export function serializeUnion(
     if( !probeBestFit )
     {
         const top = probeStack.length > 0 ? probeStack[probeStack.length - 1] : undefined;
+        enterSerUnionProbe();
 
-        for( const arm of arms )
+        try
         {
-            const savedStripped = top ? top.stripped : 0;
-            const savedMatched = top ? top.matched : 0;
-
-            try
+            for( const arm of arms )
             {
-                return arm( val );
-            }
-            catch( e )
-            {
-                if( top )
-                {
-                    top.stripped = savedStripped;
-                    top.matched = savedMatched;
-                }
+                const savedStripped = top ? top.stripped : 0;
+                const savedMatched = top ? top.matched : 0;
 
-                if( e instanceof SerializationError )
+                try
                 {
-                    last = e;
-                    continue;
+                    return arm( val );
                 }
+                catch( e )
+                {
+                    if( top )
+                    {
+                        top.stripped = savedStripped;
+                        top.matched = savedMatched;
+                    }
 
-                throw e;
+                    if( e instanceof SerializationError )
+                    {
+                        last = e;
+                        continue;
+                    }
+
+                    throw e;
+                }
             }
         }
+        finally
+        {
+            exitSerUnionProbe();
+        }
 
-        if( last && serializationErrorCode( last ) === expected ){ throw last }
+        if( last && serializationErrorCode( last ) === expected )
+        {
+            throw new SerializationError( last.path, expected );
+        }
 
         throw new SerializationError( path, expected );
     }
@@ -440,59 +473,67 @@ export function serializeUnion(
     let bestMatched = -1;
     let fallbackResult: string | undefined;
     let hasFallback = false;
+    enterSerUnionProbe();
 
-    for( let i = 0; i < arms.length; i++ )
+    try
     {
-        const isFallback = Boolean( fallbackFlags && fallbackFlags[i]);
-
-        if( isFallback && ( hasBest || hasFallback )){ continue }
-
-        const frame: SerializerProbeFrame = { stripped : 0, matched : 0 };
-        probeStack.push( frame );
-
-        try
+        for( let i = 0; i < arms.length; i++ )
         {
-            const res = arms[i]( val );
-            probeStack.pop();
+            const isFallback = Boolean( fallbackFlags && fallbackFlags[i]);
 
-            if( isFallback )
+            if( isFallback && ( hasBest || hasFallback )){ continue }
+
+            const frame: SerializerProbeFrame = { stripped : 0, matched : 0 };
+            probeStack.push( frame );
+
+            try
             {
-                fallbackResult = res;
-                hasFallback = true;
-                continue;
+                const res = arms[i]( val );
+                probeStack.pop();
+
+                if( isFallback )
+                {
+                    fallbackResult = res;
+                    hasFallback = true;
+                    continue;
+                }
+
+                if( frame.stripped === 0 )
+                {
+                    recordSerializerObjectStats( 0, frame.matched );
+
+                    return res;
+                }
+
+                if(
+                    !hasBest ||
+                    frame.stripped < bestStripped ||
+                    ( frame.stripped === bestStripped && frame.matched > bestMatched )
+                )
+                {
+                    bestResult = res;
+                    hasBest = true;
+                    bestStripped = frame.stripped;
+                    bestMatched = frame.matched;
+                }
             }
-
-            if( frame.stripped === 0 )
+            catch( e )
             {
-                recordSerializerObjectStats( 0, frame.matched );
+                probeStack.pop();
 
-                return res;
-            }
+                if( e instanceof SerializationError )
+                {
+                    last = e;
+                    continue;
+                }
 
-            if(
-                !hasBest ||
-                frame.stripped < bestStripped ||
-                ( frame.stripped === bestStripped && frame.matched > bestMatched )
-            )
-            {
-                bestResult = res;
-                hasBest = true;
-                bestStripped = frame.stripped;
-                bestMatched = frame.matched;
+                throw e;
             }
         }
-        catch( e )
-        {
-            probeStack.pop();
-
-            if( e instanceof SerializationError )
-            {
-                last = e;
-                continue;
-            }
-
-            throw e;
-        }
+    }
+    finally
+    {
+        exitSerUnionProbe();
     }
 
     if( hasBest )
@@ -507,7 +548,10 @@ export function serializeUnion(
         return fallbackResult as string;
     }
 
-    if( last && serializationErrorCode( last ) === expected ){ throw last }
+    if( last && serializationErrorCode( last ) === expected )
+    {
+        throw new SerializationError( last.path, expected );
+    }
 
     throw new SerializationError( path, expected );
 }
@@ -527,28 +571,109 @@ export function serializeQueryUnion(
     if( !probeBestFit )
     {
         const top = probeStack.length > 0 ? probeStack[probeStack.length - 1] : undefined;
+        enterSerUnionProbe();
 
-        for( const arm of arms )
+        try
+        {
+            for( const arm of arms )
+            {
+                params.length = baseSnap;
+                const savedStripped = top ? top.stripped : 0;
+                const savedMatched = top ? top.matched : 0;
+
+                try
+                {
+                    arm();
+
+                    return;
+                }
+                catch( e )
+                {
+                    params.length = baseSnap;
+
+                    if( top )
+                    {
+                        top.stripped = savedStripped;
+                        top.matched = savedMatched;
+                    }
+
+                    if( e instanceof SerializationError )
+                    {
+                        last = e;
+                        continue;
+                    }
+
+                    throw e;
+                }
+            }
+        }
+        finally
+        {
+            exitSerUnionProbe();
+        }
+
+        if( last && serializationErrorCode( last ) === expected )
+        {
+            throw new SerializationError( last.path, expected );
+        }
+
+        throw new SerializationError( path, expected );
+    }
+
+    let bestParams: string[] | undefined;
+    let bestStripped = Infinity;
+    let bestMatched = -1;
+    let fallbackParams: string[] | undefined;
+    enterSerUnionProbe();
+
+    try
+    {
+        for( let i = 0; i < arms.length; i++ )
         {
             params.length = baseSnap;
-            const savedStripped = top ? top.stripped : 0;
-            const savedMatched = top ? top.matched : 0;
+            const isFallback = Boolean( fallbackFlags && fallbackFlags[i]);
+
+            if( isFallback && ( bestParams !== undefined || fallbackParams !== undefined )){ continue }
+
+            const frame: SerializerProbeFrame = { stripped : 0, matched : 0 };
+            probeStack.push( frame );
 
             try
             {
-                arm();
+                arms[i]();
+                probeStack.pop();
 
-                return;
+                if( isFallback )
+                {
+                    fallbackParams = params.slice( baseSnap );
+                    params.length = baseSnap;
+                    continue;
+                }
+
+                if( frame.stripped === 0 )
+                {
+                    recordSerializerObjectStats( 0, frame.matched );
+
+                    return;
+                }
+
+                if(
+                    !bestParams ||
+                    frame.stripped < bestStripped ||
+                    ( frame.stripped === bestStripped && frame.matched > bestMatched )
+                )
+                {
+                    bestParams = params.slice( baseSnap );
+                    bestStripped = frame.stripped;
+                    bestMatched = frame.matched;
+                }
+
+                params.length = baseSnap;
             }
             catch( e )
             {
+                probeStack.pop();
                 params.length = baseSnap;
-
-                if( top )
-                {
-                    top.stripped = savedStripped;
-                    top.matched = savedMatched;
-                }
 
                 if( e instanceof SerializationError )
                 {
@@ -559,72 +684,10 @@ export function serializeQueryUnion(
                 throw e;
             }
         }
-
-        if( last && serializationErrorCode( last ) === expected ){ throw last }
-
-        throw new SerializationError( path, expected );
     }
-
-    let bestParams: string[] | undefined;
-    let bestStripped = Infinity;
-    let bestMatched = -1;
-    let fallbackParams: string[] | undefined;
-
-    for( let i = 0; i < arms.length; i++ )
+    finally
     {
-        params.length = baseSnap;
-        const isFallback = Boolean( fallbackFlags && fallbackFlags[i]);
-
-        if( isFallback && ( bestParams !== undefined || fallbackParams !== undefined )){ continue }
-
-        const frame: SerializerProbeFrame = { stripped : 0, matched : 0 };
-        probeStack.push( frame );
-
-        try
-        {
-            arms[i]();
-            probeStack.pop();
-
-            if( isFallback )
-            {
-                fallbackParams = params.slice( baseSnap );
-                params.length = baseSnap;
-                continue;
-            }
-
-            if( frame.stripped === 0 )
-            {
-                recordSerializerObjectStats( 0, frame.matched );
-
-                return;
-            }
-
-            if(
-                !bestParams ||
-                frame.stripped < bestStripped ||
-                ( frame.stripped === bestStripped && frame.matched > bestMatched )
-            )
-            {
-                bestParams = params.slice( baseSnap );
-                bestStripped = frame.stripped;
-                bestMatched = frame.matched;
-            }
-
-            params.length = baseSnap;
-        }
-        catch( e )
-        {
-            probeStack.pop();
-            params.length = baseSnap;
-
-            if( e instanceof SerializationError )
-            {
-                last = e;
-                continue;
-            }
-
-            throw e;
-        }
+        exitSerUnionProbe();
     }
 
     if( bestParams )
@@ -642,7 +705,10 @@ export function serializeQueryUnion(
         return;
     }
 
-    if( last && serializationErrorCode( last ) === expected ){ throw last }
+    if( last && serializationErrorCode( last ) === expected )
+    {
+        throw new SerializationError( last.path, expected );
+    }
 
     throw new SerializationError( path, expected );
 }

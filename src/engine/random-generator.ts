@@ -148,19 +148,56 @@ function buildNumberOptsExpr( constraints: ParsedConstraint[]): string | undefin
     const exclMax = constraints.find( c => c.type === 'exclusiveMaximum' )?.value;
     const step = constraints.find( c => c.type === 'multipleOf' )?.value;
     const fmt = constraints.find( c => c.type === 'format' )?.value;
+    const isInt = constraints.some( c => c.type === 'integer' || c.type === 'safeInteger' );
+    const isSafeInt = constraints.some( c => c.type === 'safeInteger' );
+    const isPositive = constraints.some( c => c.type === 'positive' );
+    const isNonNeg = constraints.some( c => c.type === 'nonNegative' );
+    const isNeg = constraints.some( c => c.type === 'negative' );
 
-    if( typeof min === 'number' ){ parts.push( `min: ${min}` ) }
-    else if( fmt === 'uint32' || fmt === 'uint64' ){ parts.push( 'min: 0' ) }
+    let effMin: number | undefined = typeof min === 'number' ? min : undefined;
 
-    if( typeof max === 'number' ){ parts.push( `max: ${max}` ) }
+    if( isNonNeg || fmt === 'uint32' || fmt === 'uint64' )
+    {
+        effMin = effMin !== undefined ? Math.max( effMin, 0 ) : 0;
+    }
 
-    if( typeof exclMin === 'number' ){ parts.push( `exclMin: ${exclMin}` ) }
+    if( isSafeInt && effMin !== undefined && effMin < -9007199254740991 )
+    {
+        effMin = -9007199254740991;
+    }
 
-    if( typeof exclMax === 'number' ){ parts.push( `exclMax: ${exclMax}` ) }
+    let effMax: number | undefined = typeof max === 'number' ? max : undefined;
+
+    if( isSafeInt && effMax !== undefined && effMax > 9007199254740991 )
+    {
+        effMax = 9007199254740991;
+    }
+
+    let effExclMin: number | undefined = typeof exclMin === 'number' ? exclMin : undefined;
+
+    if( isPositive )
+    {
+        effExclMin = effExclMin !== undefined ? Math.max( effExclMin, 0 ) : 0;
+    }
+
+    let effExclMax: number | undefined = typeof exclMax === 'number' ? exclMax : undefined;
+
+    if( isNeg )
+    {
+        effExclMax = effExclMax !== undefined ? Math.min( effExclMax, 0 ) : 0;
+    }
+
+    if( effMin !== undefined ){ parts.push( `min: ${effMin}` ) }
+
+    if( effMax !== undefined ){ parts.push( `max: ${effMax}` ) }
+
+    if( effExclMin !== undefined ){ parts.push( `exclMin: ${effExclMin}` ) }
+
+    if( effExclMax !== undefined ){ parts.push( `exclMax: ${effExclMax}` ) }
 
     if( typeof step === 'number' ){ parts.push( `step: ${step}` ) }
 
-    if( fmt === 'int32' || fmt === 'int64' || fmt === 'uint32' || fmt === 'uint64' )
+    if( isInt || fmt === 'int32' || fmt === 'int64' || fmt === 'uint32' || fmt === 'uint64' )
     {
         parts.push( 'integer: true' );
     }
@@ -171,23 +208,42 @@ function buildNumberOptsExpr( constraints: ParsedConstraint[]): string | undefin
 function buildBigIntOptsExpr( constraints: ParsedConstraint[]): string | undefined
 {
     const parts: string[] = [];
+    const isSafeInt = constraints.some( c => c.type === 'safeInteger' );
+    const isPositive = constraints.some( c => c.type === 'positive' );
+    const isNonNeg = constraints.some( c => c.type === 'nonNegative' );
+    const isNeg = constraints.some( c => c.type === 'negative' );
 
-    for( const [ cType, key ] of [
-        [ 'minimum', 'min' ],
-        [ 'maximum', 'max' ],
-        [ 'exclusiveMinimum', 'exclMin' ],
-        [ 'exclusiveMaximum', 'exclMax' ],
-        [ 'multipleOf', 'step' ]
-    ] as const )
+    const toBig = ( raw: unknown ): bigint | undefined =>
+        raw === undefined ? undefined : ( typeof raw === 'bigint' ? raw : BigInt( Math.trunc( Number( raw ))));
+
+    let min = toBig( constraints.find( c => c.type === 'minimum' )?.value );
+    let max = toBig( constraints.find( c => c.type === 'maximum' )?.value );
+    let exclMin = toBig( constraints.find( c => c.type === 'exclusiveMinimum' )?.value );
+    let exclMax = toBig( constraints.find( c => c.type === 'exclusiveMaximum' )?.value );
+    const step = toBig( constraints.find( c => c.type === 'multipleOf' )?.value );
+
+    if( isNonNeg ){ min = min !== undefined && min > 0n ? min : 0n }
+
+    if( isPositive ){ exclMin = exclMin !== undefined && exclMin > 0n ? exclMin : 0n }
+
+    if( isNeg ){ exclMax = exclMax !== undefined && exclMax < 0n ? exclMax : 0n }
+
+    if( isSafeInt )
     {
-        const raw = constraints.find( c => c.type === cType )?.value;
+        if( min !== undefined && min < -9007199254740991n ){ min = -9007199254740991n }
 
-        if( raw !== undefined )
-        {
-            const asBig = typeof raw === 'bigint' ? raw : BigInt( Math.trunc( Number( raw )));
-            parts.push( `${key}: ${serializeBigIntOrNum( asBig )}` );
-        }
+        if( max !== undefined && max > 9007199254740991n ){ max = 9007199254740991n }
     }
+
+    if( min !== undefined ){ parts.push( `min: ${serializeBigIntOrNum( min )}` ) }
+
+    if( max !== undefined ){ parts.push( `max: ${serializeBigIntOrNum( max )}` ) }
+
+    if( exclMin !== undefined ){ parts.push( `exclMin: ${serializeBigIntOrNum( exclMin )}` ) }
+
+    if( exclMax !== undefined ){ parts.push( `exclMax: ${serializeBigIntOrNum( exclMax )}` ) }
+
+    if( step !== undefined ){ parts.push( `step: ${serializeBigIntOrNum( step )}` ) }
 
     return parts.length > 0 ? `{ ${parts.join( ', ' )} }` : undefined;
 }
@@ -203,6 +259,8 @@ function buildStringExpr(
     const maxLen = constraints.find( c => c.type === 'maxLength' )?.value;
     const fmt = constraints.find( c => c.type === 'format' )?.value;
     const pat = constraints.find( c => c.type === 'pattern' )?.value;
+    const minDateRaw = constraints.find( c => c.type === 'minDate' )?.value;
+    const maxDateRaw = constraints.find( c => c.type === 'maxDate' )?.value;
     const transforms = constraints
         .filter( c => c.type === 'transform' && typeof c.value === 'string' )
         .map( c => c.value as string );
@@ -215,6 +273,20 @@ function buildStringExpr(
     if( typeof fmt === 'string' ){ parts.push( `format: ${JSON.stringify( fmt )}` ) }
 
     if( typeof pat === 'string' ){ parts.push( `pattern: ${JSON.stringify( pat )}` ) }
+
+    if( typeof minDateRaw === 'string' )
+    {
+        const ms = Date.parse( minDateRaw );
+
+        if( Number.isFinite( ms )){ parts.push( `minDateMs: ${ms}` ) }
+    }
+
+    if( typeof maxDateRaw === 'string' )
+    {
+        const ms = Date.parse( maxDateRaw );
+
+        if( Number.isFinite( ms )){ parts.push( `maxDateMs: ${ms}` ) }
+    }
 
     if( mappingName ){ parts.push( `mapping: ${JSON.stringify( mappingName )}` ) }
 
@@ -437,7 +509,20 @@ function buildRandomExpr(
 
         const symName = typeSymbolName( walkType );
 
-        if( symName === 'Date' ){ return `__tcRuntime.randDate( ${rngExpr} )` }
+        if( symName === 'Date' )
+        {
+            const minDateRaw = constraints.find( c => c.type === 'minDate' )?.value;
+            const maxDateRaw = constraints.find( c => c.type === 'maxDate' )?.value;
+            const minMs = typeof minDateRaw === 'string' && Number.isFinite( Date.parse( minDateRaw )) ? Date.parse( minDateRaw ) : undefined;
+            const maxMs = typeof maxDateRaw === 'string' && Number.isFinite( Date.parse( maxDateRaw )) ? Date.parse( maxDateRaw ) : undefined;
+
+            if( minMs !== undefined || maxMs !== undefined )
+            {
+                return `__tcRuntime.randDate( ${rngExpr}, ${minMs !== undefined ? minMs : 'undefined'}, ${maxMs !== undefined ? maxMs : 'undefined'} )`;
+            }
+
+            return `__tcRuntime.randDate( ${rngExpr} )`;
+        }
 
         if( symName === 'URL' ){ return `__tcRuntime.randUrl( ${rngExpr} )` }
 

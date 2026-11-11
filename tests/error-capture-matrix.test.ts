@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { validators, toZodIssues, groupErrorsByPath, type ValidationContext, type IValidationError, getOrCompileSchema, is, assert, assertGuard, validate } from '../src/runtime/validators.js';
+import { validators, toZodIssues, groupErrorsByPath, type ValidationContext, type IValidationError, is, assert, assertGuard, validate } from '../src/runtime/validators.js';
+import { getOrCompileSchema } from '../src/runtime/schema-compiler.js';
 
 function ctx( mode: ValidationContext['mode'] = 'strict', from?: ValidationContext['from']): ValidationContext
 {

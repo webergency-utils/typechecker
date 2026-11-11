@@ -117,7 +117,7 @@ import {
 } from '@webergency-utils/typechecker/unplugin';
 ```
 
-The plugin runs with `enforce: 'pre'` so AOT macros are transformed before downstream TypeScript/SWC/esbuild transpilers strip type arguments.
+The plugin runs with `enforce: 'pre'` so AOT macros are transformed before downstream TypeScript/SWC/esbuild transpilers strip type arguments, and emits V3 source maps for both `transpile: false` and `transpile: true`.
 ---
 
 ## Architecture & Internals
@@ -131,16 +131,16 @@ graph TD
     A[TypeScript Source Code] --> B[ts-patch / Bundler Plugin]
     B --> C[TypeScript compiler plugin / Transformer]
     C --> D[Extract types via compiler TypeChecker]
-    D --> E[Generate optimized JS validator function]
-    E --> F[Hoist file-local __val_hash / __schema_hash constants]
-    F --> G[Replace typed calls with __tcRuntime.validate / is / assert]
-    G --> H[Emit optimized JavaScript files]
+    D --> E[Generate optimized JS validator / inline guard]
+    E --> F[Hoist file-local __is_hash / __val_hash / __schema_hash constants]
+    F --> G[Emit domain-scoped /runtime/* subpath imports]
+    G --> H[Emit optimized JavaScript files + V3 source maps]
 ```
 
 1. **Build-Time Transformation**: The compiler transformer intercepts typed helper calls (`validate`, `is`, `assert`, `assertGuard`, `validator`, `jsonSchema`, `standardSchema`, `parse`, `parser`, `safeParse`, `stringify`, `serializer`, `safeSerialize`, `clone`, `cloner`, `prune`, `pruner`, `random`, `randomGenerator`). Schema helpers (`validateSchema`, `isSchema`, `assertSchema`, `assertGuardSchema`, `compileSchema`, `getOrCompileSchema`) are plain runtime APIs and do not require transformation.
 2. **Type Extraction & Analysis**: It parses the target TS type structure via a cached `TypeNode` IR, extracting intersection constraints, formats, transforms, access modifiers (`ReadOnly`, `WriteOnly`, `Secret`), and defaults recursively.
-3. **File-local validators**: The transformer generates highly optimized JavaScript validator, parser, serializer, cloner, pruner, and arbitrary generator functions for each resolved type shape, names them with a structural hash (`__val_<hash>` / `__schema_<hash>` / `__parse_<hash>` / `__ser_<hash>` / `__clone_<hash>` / `__prune_<hash>` / `__rand_<hash>`), and hoists them in the same file.
-4. **Call Replacement & Tree-Shaking**: Typed calls are rewritten to `@webergency-utils/typechecker/runtime` helpers (`validators.js`, `parse-runtime.js`, `serializer-runtime.js`, `clone-runtime.js`, `random-runtime.js`) with no global registry lookup and zero duplicate runtime bundling across entrypoints. The runtime JSON Schema compiler lives in a dedicated subpath (`@webergency-utils/typechecker/runtime/schema-compiler`) so applications using only AOT macros tree-shake `compileSchema` automatically.
+3. **File-local validators & Zero-Allocation Fast-Path Guards**: The transformer generates highly optimized JavaScript validator, parser, serializer, cloner, pruner, and arbitrary generator functions for each resolved type shape, names them with a structural hash (`__is_<hash>` / `__val_<hash>` / `__schema_<hash>` / `__parse_<hash>` / `__ser_<hash>` / `__clone_<hash>` / `__prune_<hash>` / `__rand_<hash>`), and hoists them in the same file. Optionless `is<T>(x)` and default/strict `validator<T>().is(x)` calls compile to zero-allocation boolean `__is_<hash>` guards whenever `T` has no in-place mutations (`tag.Default` or `transform.*`).
+4. **Domain-Scoped Subpath Imports & Tree-Shaking**: Hoisted code imports only the exact runtime subpath domains actually referenced in the file (`@webergency-utils/typechecker/runtime/validators`, `/runtime/parse`, `/runtime/serialize`, `/runtime/clone`, `/runtime/random`), and emits **zero** runtime imports when pure inline guards (`is<string[]>(x)`, `clone<{ id: number }>(x)`) need no runtime helpers. The runtime JSON Schema compiler lives in a dedicated subpath (`@webergency-utils/typechecker/runtime/schema-compiler`), keeping the root entrypoint ~3.2 KB.
 
 ### External dependencies
 
@@ -148,16 +148,22 @@ graph TD
 - **Build tooling:** `ts-patch` (for `tsc` builds) or `@webergency-utils/typechecker/unplugin` / `@webergency-utils/typechecker/vite` (for Vite, Rollup, Webpack, and esbuild).
 - **Runtime dependencies:** none.
 
-### Static Constraint Diagnostics
+### Static Constraint Diagnostics & IDE Quick Fixes
 
-The package includes an IDE / Language Service plugin that statically checks literal values against type constraints during editing or compilation:
+The package includes an IDE / Language Service plugin (`@webergency-utils/typechecker/plugin`) and build-time static analyzer that surface two compile-time diagnostic codes:
+
+- **`90001` — Constant Literal Violation**: Flags literal assignments, arguments, defaults, and `as` / `satisfies` expressions that violate type constraints (supporting `{path}` and `{value}` message placeholders, with `{value}` masked as `[REDACTED]` on `tag.Secret` fields).
+- **`90002` — Contradictory / Invalid Constraint**: Flags impossible or unsafe constraint combinations on type aliases, interfaces, and annotations (e.g. `Minimum<20> & Maximum<5>`, `Positive & Negative`, `MultipleOf<0>`, `MinLength<8> & MaxLength<3>`, `MinDate<'2026-01-01'> & MaxDate<'2025-01-01'>`, invalid ISO dates, or ReDoS-vulnerable `Pattern` regexes).
+- **LSP Quick Fixes (`getCodeFixesAtPosition`)**: Offers one-click editor quick fixes to swap contradictory `min`/`max` bounds (`90002`) or clamp out-of-range numeric literals to the nearest valid bound (`90001`).
 
 ```typescript
 import { constraint } from '@webergency-utils/typechecker';
 
-// This yields a compilation error directly in the IDE:
-// Type '5' is not assignable to type 'number & Minimum<18>'.
+// Diagnostic 90001 (with quick-fix to clamp 5 → 18):
 const age: number & constraint.Minimum<18> = 5;
+
+// Diagnostic 90002 (with quick-fix to swap 20 ↔ 5):
+type BadRange = number & constraint.Minimum<20> & constraint.Maximum<5>;
 ```
 
 ---
@@ -529,10 +535,6 @@ Special keys such as `__proto__` are preserved as own data properties without ch
   const apiResponse = convertPropertyCasing(user, 'camelCase');
   ```
 
-#### `createValidator<T>(validator: SchemaValidator, options?: ValidationMode | ValidationOptions): CompiledValidator<T>` / `createStandardSchema<T>(validator: SchemaValidator, options?: ValidationMode | ValidationOptions): StandardSchemaV1<T, T>`
-
-Runtime helpers used by the `validator<T>()` and `standardSchema<T>()` AOT macros to wrap a compiled `SchemaValidator` function into a reusable `CompiledValidator<T>` or [Standard Schema v1](https://standardschema.dev) (`~standard`) object.
-
 #### `toZodIssues(errors: IValidationError[]): any[]` / `toStandardSchemaIssues(errors: IValidationError[]): StandardSchemaV1.Issue[]`
 
 Converts internal validation errors into Zod-compatible issues or Standard Schema v1 issues. Flattens nested union `issues` into a flat list.
@@ -549,10 +551,6 @@ Groups validation errors by path, including nested `issues` from failed unions.
   - `errors`: Array of `IValidationError`.
 - **Returns**: A map of path → `{ value, errors }`.
 
-#### `coerceQueryNumber(v: any): any` / `coerceQueryBoolean(v: any): any` / `coerceQueryDate(v: any): any` / `coerceJsonDate(v: any): any`
-
-Shared coercion helpers used by `from: 'query'` / `from: 'string'` / `from: 'json'` and by `transform.ToNumber` / `ToBoolean` / `ToDate`.
-
 #### `class ZodLikeError extends Error`
 
 An error class wrapper that transforms internal validation errors into a Zod-like error structure.
@@ -561,6 +559,9 @@ An error class wrapper that transforms internal validation errors into a Zod-lik
 - **Properties**:
   - `name`: `'ZodError'`
   - `issues`: Zod-like issue array.
+
+> [!NOTE]
+> Low-level AOT codegen runtime helpers (`createValidator`, `createStandardSchema`, `coerceQueryNumber`, `coerceQueryBoolean`, `coerceQueryDate`, `coerceJsonDate`, `validators`, etc.) are intentionally kept off the root `@webergency-utils/typechecker` barrel and live under `@webergency-utils/typechecker/runtime` (and its domain subpaths `/runtime/validators`, `/runtime/parse`, `/runtime/serialize`, `/runtime/clone`, `/runtime/random`).
 
 ---
 
@@ -760,6 +761,14 @@ Used to apply value constraints to types.
 | `constraint.ExclusiveMinimum<N, Msg?>` | Exclusive minimum value restriction for `number | bigint`. |
 | `constraint.ExclusiveMaximum<N, Msg?>` | Exclusive maximum value restriction for `number | bigint`. |
 | `constraint.MultipleOf<N, Msg?>` | Restricts `number | bigint` to multiples of `N`. |
+| `constraint.Integer<Msg?>` | Restricts `number | bigint` to whole integers (`Number.isInteger`). |
+| `constraint.SafeInteger<Msg?>` | Restricts `number | bigint` to IEEE-754 safe integers ($\pm 9007199254740991$). |
+| `constraint.Positive<Msg?>` | Restricts `number | bigint` to $> 0$. |
+| `constraint.NonNegative<Msg?>` | Restricts `number | bigint` to $\ge 0$. |
+| `constraint.Negative<Msg?>` | Restricts `number | bigint` to $< 0$. |
+| `constraint.Finite<Msg?>` | Restricts `number` to finite values (`Number.isFinite`; rejects `±Infinity`). |
+| `constraint.MinDate<Iso, Msg?>` | Restricts `Date` or ISO date/date-time string to timestamps $\ge$ `Date.parse(Iso)`. |
+| `constraint.MaxDate<Iso, Msg?>` | Restricts `Date` or ISO date/date-time string to timestamps $\le$ `Date.parse(Iso)`. |
 | `constraint.MinItems<N, Msg?>` | Restricts array length to $\ge N$. |
 | `constraint.MaxItems<N, Msg?>` | Restricts array length to $\le N$. |
 | `constraint.UniqueItems<Msg?>` | Restricts arrays to deeply unique items. |
@@ -772,7 +781,7 @@ Used to apply value constraints to types.
 | `constraint.PropertyNames<T, Msg?>` | Every own key must satisfy nested type `T` (JSON Schema `propertyNames`). |
 | `constraint.Custom<Fn, Msg?>` | Runs a custom validation function: `(val, PathContext) => boolean` (`key`, `path`, `parent`, `root`, optional `index`). |
 | `constraint.Requires<Path | [Paths], Msg?>` | Enforces that other object property paths exist. |
-| `constraint.Message<Msg>` | Fallback custom error message. |
+| `constraint.Message<Msg>` / `tag.Message<Msg>` | Fallback custom error message. All `Msg` strings (both per-constraint and fallback `Message<Msg>`) support `{path}` and `{value}` placeholders (`{value}` is automatically masked as `[REDACTED]` on `tag.Secret` fields). |
 
 **Object / array cardinality cookbook**
 
@@ -820,6 +829,10 @@ type NeedTwo = Record<string, unknown> &
 | `Minimum` / `Maximum` / `Range` | `minimum` / `maximum` |
 | `ExclusiveMinimum` / `ExclusiveMaximum` | `exclusiveMinimum` / `exclusiveMaximum` |
 | `MultipleOf` | `multipleOf` |
+| `Integer` / `SafeInteger` | `type: 'integer'` (plus `±9007199254740991` bounds for `SafeInteger`) |
+| `Positive` / `NonNegative` / `Negative` | `exclusiveMinimum: 0` / `minimum: 0` / `exclusiveMaximum: 0` |
+| `Finite` | `x-finite: true` |
+| `MinDate` / `MaxDate` | `x-min-date` / `x-max-date` |
 | `Pattern` | `pattern` |
 | `Format` | `format` |
 | `MinItems` / `MaxItems` | `minItems` / `maxItems` |
@@ -830,6 +843,7 @@ type NeedTwo = Record<string, unknown> &
 | `PropertyNames<T>` | `propertyNames` ← nested `jsonSchema` of `T` |
 | `Requires` | `requires` (library extension) |
 | `tag.Default` | `default` |
+| `tag.ReadOnly` / `tag.WriteOnly` / `tag.Secret` | `readOnly: true` / `writeOnly: true` / `writeOnly: true` + `'x-secret': true` |
 | `tag<'html'>` / `tag<'html' \| 'basic'>` | `x-tags` (sorted unique names) |
 
 ```typescript
@@ -851,6 +865,11 @@ Standard formats for string primitives.
 - `format.Date`: Strict `YYYY-MM-DD` calendar date (rejects calendar overflow like `2024-02-31`) while preserving `typeof === 'string'` across `from: 'json' | 'query' | 'string'`. Use `Date` when you want a `Date` instance.
 - `format.DateTime`: Strict ISO-8601 date-time with timezone offset (`Z` or `±HH:MM`) while preserving `typeof === 'string'` across `from: 'json' | 'query' | 'string'`. Use `Date` when you want a `Date` instance.
 - `format.ObjectId`: MongoDB 24-character hex ObjectId.
+- `format.ULID`: 26-character Crockford Base32 ULID (`0-7` timestamp prefix + 25 Crockford chars).
+- `format.CUID2`: Lowercase alphanumeric CUID2 identifier (`[a-z][0-9a-z]{23,31}`).
+- `format.JWT`: Compact 3-segment Base64Url JSON Web Token (`header.payload.signature`).
+- `format.SemVer`: Strict Semantic Versioning 2.0.0 string (`MAJOR.MINOR.PATCH` with optional pre-release and build metadata).
+- `format.Base64Url`: URL-safe Base64 string (`[A-Za-z0-9_-]`, optional `=` padding, valid mod-4 length).
 - `format.Duration`: ISO-8601 duration.
 - `format.Time`: Time string `HH:MM:SS` in real ranges (`00-23`, `00-59`, `00-59`) with an optional fraction and a required timezone (`Z` or `±HH:MM`), e.g. `19:55:00Z`.
 - `format.Byte`: Base64 string.
@@ -878,6 +897,7 @@ Sanitizes and converts input values during validation.
 - `transform.ToNumber`: Same coercion as `from: 'query'` for numbers. The entire trimmed string must be a finite decimal/scientific number; partial strings, hexadecimal syntax, `NaN`, and infinities are rejected.
 - `transform.ToBoolean`: Same coercion as `from: 'query'` for booleans (`true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`); unknown values are left unchanged and fail the boolean check.
 - `transform.ToDate`: Same coercion as `from: 'query'` for dates (parseable strings and finite timestamps).
+- `transform.Split<Delim = ','>`: Splits an incoming string by `Delim` into an array or `Set` before element validation/coercion (an empty string `""` splits to `[]` / empty `Set`).
 - `transform.Custom<Fn>`: Custom mapping function: `(val) => any`.
 
 #### `tag` Namespace
@@ -908,8 +928,8 @@ parse<Article>(json, {
 
 Properties, interfaces, and type aliases can declare validation constraints and OpenAPI documentation directly in standard JSDoc comments — enforced across `validate`/`is`/`assert`, `parse`, `jsonSchema`, and IDE static diagnostics. Explicit `constraint.*` / `format.*` / `tag.Default` intersection tags take precedence when both are present.
 
-- **Metadata**: summary comment → `description`, `@title`, `@example` (JSON or raw string; collected into `examples`), `@deprecated`, `@default`.
-- **Constraints**: `@minimum`, `@maximum`, `@exclusiveMinimum`, `@exclusiveMaximum`, `@multipleOf`, `@minLength`, `@maxLength`, `@pattern`, `@format`, `@minItems`, `@maxItems`, `@uniqueItems`, `@minProperties`, `@maxProperties`, `@minContains`, `@maxContains`.
+- **Metadata**: summary comment → `description`, `@title`, `@example` (JSON or raw string; collected into `examples`), `@deprecated`, `@default`, `@readonly` / `@readOnly`, `@writeonly` / `@writeOnly`, `@secret`.
+- **Constraints & Transforms**: `@minimum`, `@maximum`, `@exclusiveMinimum`, `@exclusiveMaximum`, `@multipleOf`, `@integer`, `@safeInteger`, `@positive`, `@nonNegative`, `@negative`, `@finite`, `@minDate`, `@maxDate`, `@minLength`, `@maxLength`, `@pattern`, `@format`, `@minItems`, `@maxItems`, `@uniqueItems`, `@minProperties`, `@maxProperties`, `@minContains`, `@maxContains`, `@split`.
 
 ```typescript
 /**
